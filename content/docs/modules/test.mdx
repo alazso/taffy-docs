@@ -546,7 +546,7 @@ Behaviour of `hiding`:
 `ApiRules` holds the checks every Taffy module runs over itself in its `PublicApiRulesTest`: what a public signature may name, which static fields are forbidden, and that the jar ships no resource files. It serves Taffy modules only.
 
 <Callout type="warn" title="Taffy modules only">
-An anchor whose package is not `so.alaz.taffy` or one of its subpackages fails every check with an `IllegalArgumentException`, so a scan of a plugin's own classes cannot pass by finding nothing. A plugin's classes are not checked with `ApiRules`.
+An anchor whose package is not a subpackage of `so.alaz.taffy`, such as `so.alaz.taffy.platform`, fails every check with an `IllegalArgumentException`, so a scan of a plugin's own classes cannot pass by finding nothing. A class in `so.alaz.taffy` itself fails too, and an anchor with no code source, such as any JDK class, fails with a `NullPointerException`. A plugin's classes are not checked with `ApiRules`.
 </Callout>
 
 | Method | Returns |
