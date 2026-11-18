@@ -1,6 +1,6 @@
 ---
 title: taffy-hooks
-description: Custom items, a Vault economy, LuckPerms, WorldGuard and placeholders behind Taffy interfaces, detected safely at enable.
+description: Custom items, a Vault economy, LuckPerms, WorldGuard, placeholders and holograms behind Taffy interfaces, detected safely at enable.
 ---
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
@@ -10,6 +10,7 @@ description: Custom items, a Vault economy, LuckPerms, WorldGuard and placeholde
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
 - `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
+- `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
 
 No public signature names an integration type. Each integration sits behind an interface of `so.alaz.taffy.hooks`, and the class that calls it loads only after its API classes are found visible to the plugin (and, for every integration but Vault, after its plugin is found installed and enabled). A server without an integration never loads a class that names it.
@@ -44,6 +45,10 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
 | MiniPlaceholders | `io.github.miniplaceholders:miniplaceholders-api` | `alaz.miniplaceholders.api` |
+| DecentHolograms | `com.github.decentsoftware-eu:decentholograms` | `alaz.decentholograms` |
+| FancyHolograms | `de.oliver:FancyHolograms` | `alaz.fancyholograms` |
+| Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
+| HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -81,9 +86,21 @@ dependencies:
     MiniPlaceholders:
       load: BEFORE
       required: false
+    DecentHolograms:
+      load: BEFORE
+      required: false
+    FancyHolograms:
+      load: BEFORE
+      required: false
+    Holograms:
+      load: BEFORE
+      required: false
+    HologramLib:
+      load: BEFORE
+      required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI` and `MiniPlaceholders`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
 
 <Callout type="warn" title="An installed integration that is not listed stays off">
 An integration that is installed but missing from `dependencies.server` is `HookState.NOT_VISIBLE`. Detection logs one warning naming the missing entry, and the status's reason tells the server owner the same.
@@ -459,6 +476,60 @@ boolean inMarket = wg != null
     && wg.regionsAt(player.getLocation()).stream().anyMatch(id -> id.equalsIgnoreCase("market"));
 ```
 
+## Holograms
+
+`HologramProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn, HologramPlugin plugin)` detects one hologram plugin the same way, reporting a detection failure under `hook.<plugin key>`. Call it once, on the server thread in `onEnable`: the provider registers a listener for the plugin that removes a hologram when its world unloads. `HologramPlugin.byKey` reads the plugin from a config value such as `fancyholograms`.
+
+| `HologramPlugin` | Installed as | What to know |
+|---|---|---|
+| `DECENTHOLOGRAMS` | `DecentHolograms` | 2.10 or newer; Folia from 2.10.2. Lines are converted to `&` colour codes with `&#RRGGBB` hex, so MiniMessage that colour codes cannot hold, such as hover and click, is dropped. |
+| `FANCYHOLOGRAMS` | `FancyHolograms` | FancyHolograms 2. FancyHolograms 3 has another API and reads as `API_MISSING`. A hologram with a placeholder in a line is drawn again every second. Each removal rewrites `plugins/FancyHolograms/holograms.yml`, except while the server stops, and drops any saved hologram of the same name from it. |
+| `HOLOGRAMS` | `Holograms` | Holograms by TheNextLvl. A move runs on the location's region thread a little later. |
+| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text and shows PlaceholderAPI placeholders as written. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
+
+| Method | Behaviour |
+|---|---|
+| `boolean create(String id, Location location, List<String> lines)` | Places a hologram. `false` when any hologram holds the prefixed name, the location has no world or its world unloaded, or the call failed. |
+| `boolean update(String id, List<String> lines)` | Replaces every line. |
+| `boolean move(String id, Location location)` | Moves the hologram. |
+| `boolean remove(String id)` | Removes the hologram. `false` when it was refused, and it stays in `ids()`. |
+| `boolean exists(String id)` | A hologram with this id stands. |
+| `Set<String> ids()` | The ids this provider placed that still stand, for an orphan check. |
+| `int removeAll()` | Removes every hologram this provider placed, such as from `onDisable`. |
+| `boolean available()` | The hologram plugin is enabled. |
+
+Every call answers `false` (or an empty set) while the hologram plugin is disabled or the call fails; a failure is logged at most once a minute and reported under `hook.<plugin key>`.
+
+Behaviour to know:
+
+- An id is 1 to 48 of `a-z`, `0-9`, `_` and `-`; any other id throws `IllegalArgumentException`. The hologram plugin stores it after the owner's name in lower case, with every character outside `a-z`, `0-9` and `-` written as `-`, and a `_`, as in `slate_crate-1`. Two plugins share a prefix only when their names differ in nothing but characters written as `-`.
+- Every call but `create` reaches only a hologram this provider placed, and `create` refuses a name another hologram holds, such as one a server owner made with the hologram plugin's commands or another plugin placed under the same prefix.
+- Holograms are temporary: the hologram plugin never saves them, so place them again after a restart. A hologram is also removed when its world unloads.
+- Lines are MiniMessage. A PlaceholderAPI placeholder such as `%player_name%` is filled in for each viewer when `plugin.placeholdersPerViewer()` is `true`, which is every plugin but HologramLib.
+- Call every method on the server's global thread: the main thread on Paper, the global region thread on Folia.
+
+```java
+private Detected<HologramProvider> holograms;
+
+public void onEnable() {
+    HologramPlugin chosen = HologramPlugin.byKey(getConfig().getString("holograms.plugin"));
+    holograms = chosen == null ? null : HologramProvider.detect(this, errors, true, chosen);
+}
+
+boolean showDailyCrate(Location block) {
+    HologramProvider provider = holograms == null ? null : holograms.provider();
+    return provider != null && provider.create("daily-crate", block.clone().add(0.5, 1.6, 0.5),
+        List.of("<gold>Daily crate", "<gray>%slate_keys_daily% keys"));
+}
+
+public void onDisable() {
+    HologramProvider provider = holograms == null ? null : holograms.provider();
+    if (provider != null) {
+        provider.removeAll();
+    }
+}
+```
+
 ## Placeholders
 
 `PlaceholderExpansionBuilder` collects the plugin's placeholders and registers them with PlaceholderAPI and MiniPlaceholders, each when it is installed, enabled and its API classes are visible. With the identifier `shop`, the name `balance` is `%shop_balance%` in PlaceholderAPI and `<shop_balance>` in MiniPlaceholders.
@@ -515,6 +586,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.vault` | A lookup that failed, once per lookup. |
 | `hook.luckperms` | A failed detection, and every failed call. |
 | `hook.worldguard` | A failed detection, and every failed lookup. |
+| `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
 Reading an item's id and resolving a placeholder log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
@@ -523,12 +595,13 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 
 | Type | Thread |
 |---|---|
-| `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
+| `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `HologramProvider.detect`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
 | `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
 | `EconomyProvider` calls | The thread `thread(UUID)` names. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. |
 | `RegionProvider.regionsAt` | Any thread. |
+| `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |
