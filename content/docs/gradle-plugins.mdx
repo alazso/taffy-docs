@@ -1,0 +1,444 @@
+---
+title: Gradle plugins
+description: The seven Taffy Gradle plugins, what each applies and configures, and the alaz version catalog they expose.
+---
+
+Taffy ships Gradle plugins, published together as `so.alaz.taffy:taffy-gradle`, and a version catalog, published as `so.alaz.taffy:taffy-catalog`. Together they give a plugin build the repositories it resolves from, the Java 25 toolchain, test defaults that catch locale and time zone bugs, a coverage gate on `check`, one relocated shadow jar for the server, and the `RuntimeLibraries` class a `PluginLoader` reads its downloads from.
+
+| Plugin id | Applied in | Applies | Adds |
+|---|---|---|---|
+| `so.alaz.taffy.settings` | `settings.gradle.kts` | `so.alaz.taffy.repositories` | The `alaz` version catalog, at the plugin's own version |
+| `so.alaz.taffy.repositories` | `settings.gradle.kts` | the foojay toolchain resolver | Maven Central, Paper, repo.alaz.so and the integration repositories |
+| `so.alaz.taffy.java` | any Java module | `java-library` | Java 25 toolchain, compiler and javadoc flags, JUnit Platform, test defaults, `LICENSE` in `META-INF` |
+| `so.alaz.taffy.coverage` | any Java module | `so.alaz.taffy.java`, `jacoco` | The `coverage` extension and an instruction coverage gate on `check` |
+| `so.alaz.taffy.paper-plugin` | the plugin module | `so.alaz.taffy.coverage`, `com.gradleup.shadow` | The `paperPlugin` extension, the relocated shadow jar, `${version}` expansion in `paper-plugin.yml` |
+| `so.alaz.taffy.paper-api` | a published API module | `so.alaz.taffy.java`, `maven-publish` | Sources and javadoc jars, the `library` publication and the `alazso` repository |
+| `so.alaz.taffy.library` | a published, tested library module | `so.alaz.taffy.paper-api`, `so.alaz.taffy.coverage` | A per-class coverage floor of 0.50 |
+
+A Paper plugin usually needs only two of them: `so.alaz.taffy.settings` in `settings.gradle.kts` and `so.alaz.taffy.paper-plugin` in `build.gradle.kts`.
+
+## Applying the plugins
+
+The settings plugin is the one applied with a version. It puts every Taffy plugin on the build's classpath, so project build scripts apply the others by id alone.
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0"
+}
+
+rootProject.name = "myplugin"
+```
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.platform)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+```
+
+```properties title="gradle.properties"
+group=com.example.myplugin
+version=1.0.0
+```
+
+The plugins are Java 25 class files loaded into Gradle's own JVM, so Gradle itself runs on Java 25. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to. Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`; a build that uses a snapshot adds that repository to `pluginManagement.repositories`. [Getting started](/docs/getting-started) covers building against a local publish.
+
+## so.alaz.taffy.settings
+
+Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.1.0` gives catalog `0.1.0`, which in turn pins every Taffy module to `0.1.0`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
+
+## so.alaz.taffy.repositories
+
+Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads a Java 25 toolchain when the machine has none, and declares these repositories in `dependencyResolutionManagement`, in this order:
+
+| Name | URL | Content |
+|---|---|---|
+| `MavenRepo` | Maven Central | everything |
+| `papermc` | `https://repo.papermc.io/repository/maven-public/` | everything |
+| `alazso` | `https://repo.alaz.so/releases` | releases of the `so.alaz` group and its subgroups only |
+| `alazsoSnapshots` | `https://repo.alaz.so/snapshots` | snapshots of the `so.alaz` group and its subgroups only |
+| `placeholderapi` | `https://repo.extendedclip.com/releases/` | everything |
+| `faststats` | `https://repo.faststats.dev/releases` | everything |
+| `jitpack` | `https://jitpack.io` | everything |
+| `vaultunlocked` | `https://repo.codemc.io/repository/creatorfromhell/` | everything |
+| `playerpoints` | `https://repo.rosewooddev.io/repository/public/` | everything |
+| `oraxen` | `https://repo.oraxen.com/releases` | everything |
+| `nexo` | `https://repo.nexomc.com/releases` | everything |
+| `enginehub` | `https://maven.enginehub.org/repo/` | everything |
+
+The plugin sets `RepositoriesMode.PREFER_SETTINGS`: Gradle ignores a repository declared in a project build script. A build that needs another repository declares it in `settings.gradle.kts`:
+
+```kotlin title="settings.gradle.kts"
+dependencyResolutionManagement {
+    repositories {
+        maven("https://repo.example.org/releases") { name = "example" }
+    }
+}
+```
+
+`so.alaz.taffy.repositories` creates no version catalog. A build that wants the repositories without the `alaz` catalog applies it instead of `so.alaz.taffy.settings`.
+
+## so.alaz.taffy.java
+
+Applies `java-library` and sets the conventions every Taffy module and plugin build compiles and tests under.
+
+| Area | Setting |
+|---|---|
+| Toolchain | `java.toolchain.languageVersion` 25 |
+| `JavaCompile` | `options.encoding = "UTF-8"`, compiler argument `-Xlint:all,-processing,-serial` (warnings, the build does not fail on them) |
+| `Javadoc` | `-Xdoclint:all,-missing`, `-quiet`, `--no-fonts`, UTF-8 encoding |
+| `Test` | `useJUnitPlatform()`, logs `passed`, `skipped` and `failed` events, Mockito agent, test locale and time zone |
+| `Jar` | The root project's `LICENSE` file in `META-INF` |
+
+### Javadoc
+
+Doclint runs with every group except `missing`. A public member without a comment passes, and a broken comment fails the `javadoc` task, for example an `@param` that names no parameter of the method. `--no-fonts` keeps the web fonts out of the generated javadoc.
+
+### Test locale and time zone
+
+Every `Test` task runs with these system properties:
+
+| Property | Value |
+|---|---|
+| `user.language` | `tr` |
+| `user.country` | `TR` |
+| `user.timezone` | `Pacific/Auckland` |
+
+Under the Turkish locale, `"TITLE".toLowerCase()` gives a dotless `ı`, so code that reads the default locale instead of passing `Locale.ROOT` fails in a test instead of on a server. Auckland is ahead of UTC, so code that reads an instant late in the UTC day in the default zone gets the next day. A test task replaces a default with `systemProperty`:
+
+```kotlin title="build.gradle.kts"
+tasks.test {
+    systemProperty("user.language", "en")
+}
+```
+
+### Mockito agent
+
+Each test task passes every `mockito-core-*.jar` on its own classpath to the test JVM as `-javaagent`, so Mockito's inline mock maker is loaded at JVM start and does not attach itself to the running JVM. The classpath is read when the task runs, so a test task or source set the build adds later gets the agent from its own classpath. A test task without Mockito on its classpath gets no agent argument. The agent sits beside the JaCoCo agent that `so.alaz.taffy.coverage` adds. `taffy-test` declares `mockito-core` as an `implementation` dependency, so it is on the test runtime classpath of a plugin that declares `testImplementation(alaz.taffy.test)`, and that test task gets the agent. Test code that calls Mockito itself declares `testImplementation(alaz.mockito.core)`, because a runtime dependency of `taffy-test` is not on the test compile classpath.
+
+### LICENSE
+
+Every `Jar` task (the plain jar, the sources and javadoc jars, and the shadow jar) copies the file `LICENSE` from the root project directory into `META-INF`. When the root project has no `LICENSE`, the jars build without one.
+
+## so.alaz.taffy.coverage
+
+Applies `so.alaz.taffy.java` and `jacoco`, and adds the `coverage` extension (`so.alaz.taffy.gradle.CoverageExtension`).
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| `minimum` | `Property<BigDecimal>` | `0.80` | Instruction coverage the whole module must reach |
+| `classMinimum` | `Property<BigDecimal>` | `0`, and `0.50` under `so.alaz.taffy.library` | Instruction coverage each class must reach. `0` turns the per-class rule off |
+| `exclusions` | `ListProperty<String>` | empty | Ant patterns of class files left out of the gate, relative to the classes directory |
+| `conventionExclusions` | `ListProperty<String>` | empty, `**/RuntimeLibraries.class` under `so.alaz.taffy.paper-plugin` | Patterns other conventions add, applied in addition to `exclusions` |
+
+```kotlin title="build.gradle.kts"
+coverage {
+    minimum.set("0.70".toBigDecimal())
+    classMinimum.set("0.40".toBigDecimal())
+    exclusions.addAll("**/command/**", "**/hook/**", "com/example/myplugin/MyPluginLoader.class")
+}
+```
+
+What the plugin wires:
+
+- Every `Test` task is finalized by `jacocoTestReport`, which writes XML and HTML reports.
+- `jacocoTestCoverageVerification` depends on `test` and checks the module's main classes, minus both exclusion lists, against a `BUNDLE` rule (`INSTRUCTION`, `COVEREDRATIO`, `minimum`) and, when `classMinimum` is above zero, a `CLASS` rule with `classMinimum`.
+- `verifyCoverageData` depends on `test` and fails when the module has classes under the gate, at least one of `minimum` and `classMinimum` is above zero, and no coverage data exists (`build/jacoco/test.exec`), which is the case when no test ran.
+- `check`, and so `build`, depends on `jacocoTestCoverageVerification` and `verifyCoverageData`.
+
+The gate covers the module's own compiled classes only. Libraries that a shadow jar carries are not part of it.
+
+A module with classes and no tests fails `check` in `verifyCoverageData` with the message `No coverage data for <project path>: it has classes under the coverage gate but no test ran. Add tests, exclude the classes with coverage.exclusions, or set coverage.minimum and coverage.classMinimum to 0.` The project path of a root project is `:`. A module without tests passes `check` once its classes are all excluded, or once both `minimum` and `classMinimum` are `0`.
+
+<Callout type="warn" title="Set the minimums in the build script">
+`minimum` and `classMinimum` become JaCoCo rule limits in an `afterEvaluate` block, so the value a build script sets while it is evaluated is the one used. A value set in a later `afterEvaluate` or in a task action does not reach the rules. `exclusions` and `conventionExclusions` are read lazily, so a value set in a later `afterEvaluate` still applies.
+</Callout>
+
+An exclusion pattern matches class file names. A nested or anonymous class compiles to its own file such as `Menu$Page.class` or `Menu$1.class`, which the pattern `**/Menu.class` does not match; `**/Menu*.class` matches all three, and also any other class whose name starts with `Menu`.
+
+## so.alaz.taffy.paper-plugin
+
+Applies `so.alaz.taffy.coverage` and Shadow (`com.gradleup.shadow`), and builds the one jar a server owner installs. It adds no dependency on Paper: the plugin declares `compileOnly(alaz.paper.api)` itself, and anything on `compileOnly` stays out of the shadow jar.
+
+### The shadow jar
+
+| Task | Setting |
+|---|---|
+| `shadowJar` | `archiveClassifier` is empty, `duplicatesStrategy = DuplicatesStrategy.EXCLUDE`, relocations below |
+| `jar` | disabled |
+| `assemble` | depends on `shadowJar` |
+
+`./gradlew build` therefore leaves one file, `build/libs/<project name>-<version>.jar`, with no classifier. With `DuplicatesStrategy.EXCLUDE`, the first copy of a path wins, which keeps one `META-INF/faststats.properties` when several dependencies carry it.
+
+Three packages are relocated under `<group>.libs`, where `<group>` is the project group:
+
+| Package | Relocated to |
+|---|---|
+| `org.bstats` | `<group>.libs.bstats` |
+| `dev.faststats` | `<group>.libs.faststats` |
+| `so.alaz.taffy` | `<group>.libs.taffy` |
+
+With `group=com.example.myplugin`, Taffy's `so.alaz.taffy.platform.Scheduler` ships as `com.example.myplugin.libs.taffy.platform.Scheduler`. Each plugin carries its own copy of Taffy, so plugins built on different Taffy versions share no Taffy classes on one server. bStats refuses to start from classes that were not relocated, so a build that shades `taffy-metrics` without this plugin relocates the same three packages itself and keeps `META-INF/faststats.properties` in its shadow jar ([metrics](/docs/modules/metrics) has the details).
+
+`com.comficonf` is never relocated: the ComfiConf API comes from the installed bridge, and a plugin declares it `compileOnly(alaz.comficonf.api)` ([ComfiConf](/docs/modules/comficonf)). Any other library a plugin adds with `implementation` is shaded unrelocated unless the build adds its own `relocate` call:
+
+```kotlin title="build.gradle.kts"
+tasks.shadowJar {
+    relocate("com.example.lib", "com.example.myplugin.libs.lib")
+}
+```
+
+### paper-plugin.yml
+
+`processResources` expands `${version}` in `src/main/resources/paper-plugin.yml` to the project version, and declares the version as a task input. No other descriptor key is written: `name`, `main`, `api-version`, `loader`, `folia-supported` and the dependencies come from the plugin's own file.
+
+```yaml title="src/main/resources/paper-plugin.yml"
+name: MyPlugin
+version: "${version}"
+main: com.example.myplugin.MyPlugin
+```
+
+The file goes through Gradle's `expand`, and `version` is the only property defined. Another `${...}` expression in it fails `processResources`.
+
+### Compiler flag
+
+The plugin adds `-Xlint:-classfile` to every `JavaCompile` task. Some integration APIs are Kotlin-compiled and declared without their transitive dependencies, so the `kotlin.*` annotation types their class files name are absent; the flag keeps javac from warning about each of them.
+
+### Runtime libraries
+
+The `paperPlugin` extension (`so.alaz.taffy.gradle.PaperPluginExtension`) lists the Maven coordinates Paper downloads before the plugin loads, in resolution order. `taffy-storage` needs it: it ships neither HikariCP nor any JDBC driver ([storage](/docs/modules/storage)).
+
+| Member | Type | Meaning |
+|---|---|---|
+| `runtimeLibraries` | `ListProperty<String>` | Coordinates as `group:name:version` |
+| `runtimeLibrary(library)` | takes `Provider<MinimalExternalModuleDependency>` | Adds a version catalog entry as `group:name:version` |
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.storage)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+    testRuntimeOnly(alaz.hikari)
+    testRuntimeOnly(alaz.sqlite.jdbc)
+}
+
+paperPlugin {
+    runtimeLibrary(alaz.hikari)
+    runtimeLibrary(alaz.sqlite.jdbc)
+    runtimeLibrary(alaz.mysql.connector)
+    runtimeLibraries.add("org.example:extra:1.2.3")
+}
+```
+
+The runtime libraries are not on any Gradle classpath. Tests that start storage declare HikariCP and each driver they use on `testRuntimeOnly`, as above.
+
+When the list is not empty, the `generateRuntimeLibraries` task writes `RuntimeLibraries.java` to `build/generated/sources/runtimeLibraries/java/main`, a source directory of the `main` source set, in the package named by the project group. With `group=com.example.myplugin` and the block above it generates:
+
+```java title="build/generated/sources/runtimeLibraries/java/main/com/example/myplugin/RuntimeLibraries.java"
+package com.example.myplugin;
+
+import java.util.List;
+
+/** Generated from the version catalog at build time. Do not edit. */
+final class RuntimeLibraries {
+
+    /** Maven coordinates of the libraries Paper downloads before the plugin loads. */
+    static final List<String> COORDINATES = List.of(
+        "com.zaxxer:HikariCP:7.1.0",
+        "org.xerial:sqlite-jdbc:3.54.1.0",
+        "com.mysql:mysql-connector-j:26.10.0",
+        "org.example:extra:1.2.3");
+
+    private RuntimeLibraries() {
+    }
+}
+```
+
+The class and its field are package-private, so the code that reads them lives in that same package. The project group becomes the `package` declaration as it is, so it must be a valid Java package name. With an empty list, no class is generated. `**/RuntimeLibraries.class` is in `coverage.conventionExclusions`, outside the gate.
+
+The build does not register a loader. The plugin writes a Paper `PluginLoader` in the group package that hands the coordinates to Paper's `MavenLibraryResolver`:
+
+```java title="src/main/java/com/example/myplugin/MyPluginLoader.java"
+package com.example.myplugin;
+
+import io.papermc.paper.plugin.loader.PluginClasspathBuilder;
+import io.papermc.paper.plugin.loader.PluginLoader;
+import io.papermc.paper.plugin.loader.library.impl.MavenLibraryResolver;
+import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.graph.Dependency;
+import org.eclipse.aether.repository.RemoteRepository;
+
+public final class MyPluginLoader implements PluginLoader {
+
+    @Override
+    public void classloader(PluginClasspathBuilder classpathBuilder) {
+        MavenLibraryResolver resolver = new MavenLibraryResolver();
+        resolver.addRepository(new RemoteRepository.Builder(
+                "central", "default", MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR).build());
+        for (String coordinates : RuntimeLibraries.COORDINATES) {
+            resolver.addDependency(new Dependency(new DefaultArtifact(coordinates), null));
+        }
+        classpathBuilder.addLibrary(resolver);
+    }
+}
+```
+
+```yaml title="src/main/resources/paper-plugin.yml"
+loader: com.example.myplugin.MyPluginLoader
+```
+
+HikariCP and the drivers in the catalog are published on Maven Central, and `MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR` is the Maven Central address Paper's API provides for a loader. The loader class is plugin code under the coverage gate like any other class; the `coverage` example above excludes it. Paper's documentation on [plugin loaders](https://docs.papermc.io/paper/dev/getting-started/paper-plugins/) covers the loader itself.
+
+<Callout type="error" title="Never list the metrics SDKs">
+bStats and FastStats come as runtime dependencies of `taffy-metrics` and are shaded and relocated. Listing `alaz.bstats.bukkit` or `alaz.faststats.bukkit` as a runtime library makes Paper load an unrelocated copy.
+</Callout>
+
+## so.alaz.taffy.paper-api
+
+Applies `so.alaz.taffy.java` and `maven-publish`, for a module other plugins compile against, such as a plugin's public API.
+
+```kotlin title="myplugin-api/build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-api")
+}
+
+description = "MyPlugin public API"
+```
+
+It adds no Paper dependency and no coverage gate. It configures:
+
+- `java.withSourcesJar()` and `java.withJavadocJar()`.
+- A `MavenPublication` named `library` from the `java` component, published as `<group>:<project name>:<version>`. The POM `name` is the project name, the POM `description` is the project `description`, and the license is the MIT License.
+- The POM `url` from the Gradle property `alaz.repositoryUrl`, or `https://github.com/alazso/<root project name>` when the property is unset.
+- A Maven repository named `alazso`: `https://repo.alaz.so/snapshots` when the version ends with `-SNAPSHOT`, `https://repo.alaz.so/releases` otherwise.
+
+```properties title="gradle.properties"
+alaz.repositoryUrl=https://github.com/example/myplugin
+```
+
+The `alazso` repository takes its credentials from the environment variables `ALAZSO_REPO_USER` and `ALAZSO_REPO_TOKEN`. They are read with `System.getenv`, not as Gradle properties, so a `-P` flag or an entry in `gradle.properties` does not set them.
+
+```bash
+export ALAZSO_REPO_USER=...
+export ALAZSO_REPO_TOKEN=...
+./gradlew publishLibraryPublicationToAlazsoRepository
+```
+
+A build that publishes elsewhere adds its own repository next to `alazso`; Gradle then creates one publish task per repository, such as `publishLibraryPublicationToExampleRepository`:
+
+```kotlin title="myplugin-api/build.gradle.kts"
+publishing {
+    repositories {
+        maven("https://repo.example.org/releases") { name = "example" }
+    }
+}
+```
+
+`publishToMavenLocal` publishes the `library` publication to the local Maven repository with no credentials.
+
+## so.alaz.taffy.library
+
+Applies `so.alaz.taffy.paper-api` and `so.alaz.taffy.coverage`, and sets the convention of `coverage.classMinimum` to `0.50`. It is the plugin for a published library module with tests: every class under the gate holds at least half its instructions covered, and the module as a whole holds `coverage.minimum` (default `0.80`). Every Taffy runtime module is built with it.
+
+A class below the floor fails `jacocoTestCoverageVerification` with a message of the form `Rule violated for class com.example.Demo: instructions covered ratio is 0.00, but expected minimum is 0.50`. `coverage.classMinimum.set("0".toBigDecimal())` turns the per-class rule off.
+
+## The alaz version catalog
+
+`so.alaz.taffy.settings` exposes `so.alaz.taffy:taffy-catalog` as `alaz`. A dash in an alias becomes a dot in the accessor: alias `paper-api` is `alaz.paper.api`. Versions are read with `alaz.versions.<key>`, for example `alaz.versions.paper` (a `Provider<String>`).
+
+### Taffy modules
+
+Each module has an entry at the catalog's own version, the version key `taffy`.
+
+| Accessor | Coordinates | Page |
+|---|---|---|
+| `alaz.taffy.platform` | `so.alaz.taffy:taffy-platform` | [platform](/docs/modules/platform) |
+| `alaz.taffy.config` | `so.alaz.taffy:taffy-config` | [config](/docs/modules/config) |
+| `alaz.taffy.storage` | `so.alaz.taffy:taffy-storage` | [storage](/docs/modules/storage) |
+| `alaz.taffy.hooks` | `so.alaz.taffy:taffy-hooks` | [hooks](/docs/modules/hooks) |
+| `alaz.taffy.gui` | `so.alaz.taffy:taffy-gui` | [gui](/docs/modules/gui) |
+| `alaz.taffy.metrics` | `so.alaz.taffy:taffy-metrics` | [metrics](/docs/modules/metrics) |
+| `alaz.taffy.comficonf` | `so.alaz.taffy:taffy-comficonf` | [comficonf](/docs/modules/comficonf) |
+| `alaz.taffy.test` | `so.alaz.taffy:taffy-test` | [test](/docs/modules/test) |
+
+### Paper, storage and metrics
+
+| Accessor | Coordinates | Version key | Used as |
+|---|---|---|---|
+| `alaz.paper.api` | `io.papermc.paper:paper-api` | `paper` | `compileOnly` |
+| `alaz.jetbrains.annotations` | `org.jetbrains:annotations` | `annotations` | `compileOnly` |
+| `alaz.hikari` | `com.zaxxer:HikariCP` | `hikari` | `runtimeLibrary`, `testRuntimeOnly` |
+| `alaz.sqlite.jdbc` | `org.xerial:sqlite-jdbc` | `sqlite` | `runtimeLibrary`, `testRuntimeOnly` |
+| `alaz.mysql.connector` | `com.mysql:mysql-connector-j` | `mysql` | `runtimeLibrary`, `testRuntimeOnly` |
+| `alaz.mariadb.jdbc` | `org.mariadb.jdbc:mariadb-java-client` | `mariadb` | `runtimeLibrary`, `testRuntimeOnly` |
+| `alaz.postgresql.jdbc` | `org.postgresql:postgresql` | `postgresql` | `runtimeLibrary`, `testRuntimeOnly` |
+| `alaz.bstats.bukkit` | `org.bstats:bstats-bukkit` | `bstats` | arrives through `alaz.taffy.metrics` |
+| `alaz.faststats.bukkit` | `dev.faststats.metrics:bukkit` | `faststats` | arrives through `alaz.taffy.metrics` |
+| `alaz.comficonf.api` | `com.comficonf:comficonf-api` | `comficonf` | `compileOnly`, `testImplementation` |
+
+### Integration APIs
+
+No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, Vault, LuckPerms, `worldguard-core`, `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI and MiniPlaceholders, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. `alaz.vaultunlocked.api`, `alaz.playerpoints` and `alaz.worldguard.bukkit` are in the catalog for a plugin's own code. A plugin declares one `compileOnly` only when its own code calls that API directly.
+
+| Accessor | Coordinates | Version key |
+|---|---|---|
+| `alaz.placeholderapi` | `me.clip:placeholderapi` | `placeholderapi` |
+| `alaz.miniplaceholders.api` | `io.github.miniplaceholders:miniplaceholders-api` | `miniplaceholders` |
+| `alaz.luckperms.api` | `net.luckperms:api` | `luckperms` |
+| `alaz.vault.api` | `com.github.MilkBowl:VaultAPI` | `vault` |
+| `alaz.vaultunlocked.api` | `net.milkbowl.vault:VaultUnlockedAPI` | `vaultunlocked` |
+| `alaz.playerpoints` | `org.black_ixx:playerpoints` | `playerpoints` |
+| `alaz.itemsadder.api` | `beer.devs:itemsadder-api` | `itemsadder` |
+| `alaz.oraxen` | `io.th0rgal:oraxen` | `oraxen` |
+| `alaz.nexo` | `com.nexomc:nexo` | `nexo` |
+| `alaz.headdatabase.api` | `com.github.Arcaniax-Development:HeadDatabase-API` | `headdatabase` |
+| `alaz.worldguard.bukkit` | `com.sk89q.worldguard:worldguard-bukkit` | `worldguard` |
+| `alaz.worldguard.core` | `com.sk89q.worldguard:worldguard-core` | `worldguard` |
+| `alaz.worldedit.bukkit` | `com.sk89q.worldedit:worldedit-bukkit` | `worldedit` |
+| `alaz.worldedit.core` | `com.sk89q.worldedit:worldedit-core` | `worldedit` |
+
+`taffy-hooks` and `taffy-platform` declare each API they compile against with `{ isTransitive = false }`, which keeps that API's own dependencies off the compile classpath. A plugin can do the same:
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    compileOnly(alaz.luckperms.api) { isTransitive = false }
+}
+```
+
+### Testing
+
+| Accessor | Coordinates | Version key |
+|---|---|---|
+| `alaz.junit.jupiter` | `org.junit.jupiter:junit-jupiter` | `junit` |
+| `alaz.junit.platform.launcher` | `org.junit.platform:junit-platform-launcher` | none |
+| `alaz.assertj.core` | `org.assertj:assertj-core` | `assertj` |
+| `alaz.mockito.core` | `org.mockito:mockito-core` | `mockito` |
+| `alaz.testcontainers.junit` | `org.testcontainers:junit-jupiter` | `testcontainers` |
+| `alaz.testcontainers.mysql` | `org.testcontainers:mysql` | `testcontainers` |
+| `alaz.testcontainers.mariadb` | `org.testcontainers:mariadb` | `testcontainers` |
+| `alaz.testcontainers.postgresql` | `org.testcontainers:postgresql` | `testcontainers` |
+
+`alaz.junit.platform.launcher` carries no version: it takes the one the JUnit BOM sets, which `alaz.junit.jupiter` brings, so the two are declared together.
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started">
+    A first plugin build on these plugins, and building against a local publish.
+  </Card>
+  <Card title="Versioning" href="/docs/versioning">
+    How the plugins, the catalog and the modules share one version.
+  </Card>
+</Cards>

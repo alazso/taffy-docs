@@ -1,0 +1,506 @@
+---
+title: Getting started
+description: Set up a new Paper plugin on the Taffy Gradle plugins and catalog, use a few modules from its main class, and build the shaded jar.
+---
+
+This page builds a small Paper plugin on Taffy from an empty directory. At the end the plugin loads a strict `config.yml`, runs a repeating task through the Folia-safe `Scheduler`, defines one chart for bStats and FastStats, and builds into one jar that carries its own relocated copy of Taffy.
+
+The layout used throughout:
+
+```bash
+myplugin/
+  gradle/
+    gradle-daemon-jvm.properties
+  gradle.properties
+  settings.gradle.kts
+  build.gradle.kts
+  src/main/java/com/example/myplugin/MyPlugin.java
+  src/main/java/com/example/myplugin/Settings.java
+  src/main/resources/paper-plugin.yml
+  src/main/resources/config.yml
+  src/test/java/com/example/myplugin/SettingsTest.java
+```
+
+The examples use the Gradle wrapper at 9.9.1, the version Taffy itself builds with.
+
+## Set up the plugin
+
+<Steps>
+<Step>
+
+### Apply the settings plugin
+
+`so.alaz.taffy.settings` applies `so.alaz.taffy.repositories` and adds the `alaz` version catalog, pinned to the same version as the plugin. The Taffy Gradle plugins resolve from `https://repo.alaz.so/releases`, and their own dependencies (the Shadow plugin and the foojay toolchain resolver) from the Gradle Plugin Portal.
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0"
+}
+
+rootProject.name = "myplugin"
+```
+
+<Callout type="info" title="Taffy 0.1.0 is not published yet">
+Until it is, apply the settings plugin at a local publish or a snapshot, as the last section of this page describes. Every other step stays the same.
+</Callout>
+
+`so.alaz.taffy.repositories` declares every repository the build needs in `dependencyResolutionManagement`: Maven Central, Paper, `repo.alaz.so` releases and snapshots (for the `so.alaz` group and its subgroups only), FastStats, and the repositories of the integration APIs in the catalog, such as PlaceholderAPI, Oraxen, Nexo, EngineHub and JitPack. It also applies the foojay toolchain resolver, so Gradle downloads a Java 25 JDK for compiling when none is installed. It sets `RepositoriesMode.PREFER_SETTINGS`, so a `repositories` block in `build.gradle.kts` is ignored: add any extra repository to `dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
+
+</Step>
+<Step>
+
+### Run Gradle on Java 25
+
+The Taffy Gradle plugins are Java 25 class files, and Gradle loads them into its own JVM. Gradle therefore has to run on Java 25, which is separate from the Java 25 toolchain the plugins compile with. Pin the daemon JVM:
+
+```properties title="gradle/gradle-daemon-jvm.properties"
+toolchainVersion=25
+```
+
+With this file, Gradle starts its daemon on a Java 25 JVM it finds on the machine, whatever `JAVA_HOME` points at. A daemon on an older Java fails while it loads the settings plugin.
+
+</Step>
+<Step>
+
+### Set the group and version
+
+```properties title="gradle.properties"
+group=com.example.myplugin
+version=1.0.0
+```
+
+The group is more than a Maven coordinate here. `so.alaz.taffy.paper-plugin` relocates Taffy and the metrics SDKs under `<group>.libs`, and writes the generated `RuntimeLibraries` class, when `paperPlugin.runtimeLibraries` is not empty, into the package named by the group. Use the plugin's own base package.
+
+</Step>
+<Step>
+
+### Apply the paper-plugin conventions
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.config)
+    implementation(alaz.taffy.metrics)
+
+    testImplementation(alaz.paper.api)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+
+coverage {
+    exclusions.add("**/MyPlugin.class")
+}
+```
+
+The plugin id needs no version: the settings plugin already put the Taffy Gradle plugins on the build's classpath.
+
+Each Taffy module has a catalog alias named after it: `alaz.taffy.platform`, `alaz.taffy.config`, `alaz.taffy.storage`, `alaz.taffy.hooks`, `alaz.taffy.gui`, `alaz.taffy.metrics`, `alaz.taffy.comficonf` and `alaz.taffy.test`. `taffy-config` and `taffy-metrics` bring `taffy-platform` with them. Declare a module with `implementation` so the shadow jar carries it. Paper is `compileOnly`, because the server provides it, and `testImplementation` too when tests touch Paper types such as `YamlConfiguration`.
+
+`so.alaz.taffy.paper-plugin` gives the module:
+
+| What | Detail |
+|---|---|
+| Java | The Java 25 toolchain, UTF-8, `-Xlint:all,-processing,-serial` plus `-Xlint:-classfile`, and JUnit Platform for tests. |
+| Shaded jar | One shadow jar with no classifier. The plain `jar` task is disabled, and `assemble` builds the shadow jar. |
+| Relocation | `org.bstats`, `dev.faststats` and `so.alaz.taffy` move to `<group>.libs.bstats`, `<group>.libs.faststats` and `<group>.libs.taffy`. |
+| Descriptor | `${version}` in `paper-plugin.yml` is replaced with the project version. |
+| Runtime libraries | `paperPlugin.runtimeLibraries` generates `RuntimeLibraries.COORDINATES`. |
+| Coverage gate | A JaCoCo report and an instruction coverage gate on `check`. |
+| Test defaults | Tests run under the `tr-TR` locale and the `Pacific/Auckland` time zone, with the Mockito jar passed as a Java agent when it is on the test classpath. |
+
+The `coverage` block configures the gate. `coverage.minimum` defaults to 0.80 and `coverage.classMinimum` to 0 (off). `coverage.exclusions` takes Ant patterns of class files, relative to the classes directory, that the gate leaves out. The generated `RuntimeLibraries` class is always left out. While either minimum is above 0, `check` fails when the module has classes under the gate and no test ran, so a plugin tests what it gates, excludes it, or sets both minimums to 0. Here the main class is excluded, and the settings record is tested in a later step.
+
+```kotlin title="build.gradle.kts"
+coverage {
+    minimum.set("0.60".toBigDecimal())
+    classMinimum.set("0.30".toBigDecimal())
+    exclusions.addAll("**/command/**", "**/hook/**")
+}
+```
+
+The `paperPlugin` block lists the libraries Paper downloads before the plugin loads, such as HikariCP and the JDBC drivers `taffy-storage` needs:
+
+```kotlin title="build.gradle.kts"
+paperPlugin {
+    runtimeLibrary(alaz.hikari)
+    runtimeLibrary(alaz.sqlite.jdbc)
+}
+```
+
+A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. [Storage](/docs/modules/storage) covers this setup. bStats and FastStats are never runtime libraries: they are shaded and relocated.
+
+</Step>
+<Step>
+
+### Write paper-plugin.yml and config.yml
+
+```yaml title="src/main/resources/paper-plugin.yml"
+name: MyPlugin
+version: "${version}"
+main: com.example.myplugin.MyPlugin
+api-version: "26.1"
+folia-supported: true
+```
+
+`processResources` expands `paper-plugin.yml` with the project version, so `version: "${version}"` becomes `version: "1.0.0"` in the jar. Only this file is expanded. Gradle reads every `$` in it as the start of a template expression, so write a literal dollar sign as `\$`. `folia-supported: true` lets Folia load the plugin; Taffy's `Scheduler` runs the same on Paper and Folia.
+
+A plugin described by `paper-plugin.yml` sees another plugin's classes only when it lists that plugin under `dependencies.server`. Each integration a plugin uses through [`taffy-hooks`](/docs/modules/hooks) is listed with `load: BEFORE`, so it enables first, and `required: false`, so the plugin still starts without it. The names are `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI` and `MiniPlaceholders`. The ComfiConf bridge for [`taffy-comficonf`](/docs/modules/comficonf) also needs `join-classpath: true`. The plugin on this page uses neither module and needs no such entry; a plugin that does adds a block like this one:
+
+```yaml title="src/main/resources/paper-plugin.yml"
+dependencies:
+  server:
+    Vault:
+      load: BEFORE
+      required: false
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+    ComfiConf:
+      load: BEFORE
+      required: false
+      join-classpath: true
+```
+
+An integration that is installed but not listed reads as `HookState.NOT_VISIBLE`, and its warning names the missing entry.
+
+`ConfigLoader` writes the shipped `config.yml` on first start and upgrades an older file, which it tells apart by the whole number under `config-version` (`ConfigLoader.VERSION_KEY`):
+
+```yaml title="src/main/resources/config.yml"
+config-version: 1
+
+# Send usage metrics to bStats and FastStats.
+metrics: true
+
+# How often the join count is written to the log, from 1m to 1d.
+report-interval: 10m
+```
+
+</Step>
+<Step>
+
+### Read the settings into a record
+
+`taffy-config` has no base type for settings. A plugin writes an immutable record with a static `read(ConfigReader)` factory, one reader call per component, with each default kept as a constant of the record:
+
+```java title="src/main/java/com/example/myplugin/Settings.java"
+package com.example.myplugin;
+
+import java.time.Duration;
+import so.alaz.taffy.config.ConfigReader;
+
+record Settings(boolean metrics, Duration reportInterval) {
+
+    static final boolean METRICS = true;
+    static final Duration REPORT_INTERVAL = Duration.ofMinutes(10);
+
+    static Settings read(ConfigReader reader) {
+        return new Settings(
+            reader.bool("metrics", METRICS),
+            reader.duration("report-interval", REPORT_INTERVAL, Duration.ofMinutes(1), Duration.ofDays(1)));
+    }
+}
+```
+
+A value the reader cannot use gives the fallback and a warning such as `report-interval is "5 minutes"; expected a whole number followed by ms, s, m, h or d (for example 30s), so 10m is used.` A duration outside the range gives `report-interval is 10s; expected 1m to 1d, so 10m is used.` An error, added with `ConfigReader.error`, is collected in `errors()` for the caller to act on.
+
+</Step>
+<Step>
+
+### Write the main class
+
+```java title="src/main/java/com/example/myplugin/MyPlugin.java"
+package com.example.myplugin;
+
+import java.time.Duration;
+import java.util.concurrent.atomic.LongAdder;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.plugin.java.JavaPlugin;
+import so.alaz.taffy.config.ConfigHolder;
+import so.alaz.taffy.config.ConfigLoadException;
+import so.alaz.taffy.config.ConfigLoader;
+import so.alaz.taffy.config.ConfigReader;
+import so.alaz.taffy.metrics.MetricChart;
+import so.alaz.taffy.metrics.Metrics;
+import so.alaz.taffy.metrics.MetricsBuilder;
+import so.alaz.taffy.platform.ErrorReports;
+import so.alaz.taffy.platform.Scheduler;
+import so.alaz.taffy.platform.Shutdown;
+
+public final class MyPlugin extends JavaPlugin implements Listener {
+
+    // 0 and a blank token leave bStats and FastStats off.
+    private static final int BSTATS_SERVICE_ID = 0;
+    private static final String FASTSTATS_TOKEN = "";
+
+    private final ErrorReports errors = new ErrorReports();
+    private final LongAdder joins = new LongAdder();
+    private Scheduler scheduler;
+    private ConfigHolder<Settings> settings;
+    private Metrics metrics;
+
+    @Override
+    public void onEnable() {
+        scheduler = new Scheduler(this, errors);
+        ConfigLoader loader = new ConfigLoader(
+            getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger());
+        try {
+            settings = ConfigHolder.load(() -> readSettings(loader), getLogger()::warning);
+        } catch (ConfigLoadException e) {
+            getLogger().severe("The settings could not be loaded: " + e.getMessage());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        getServer().getPluginManager().registerEvents(this, this);
+        Duration interval = settings.get().reportInterval();
+        scheduler.repeatingAsync(
+            () -> getLogger().info(joins.sum() + " joins since the server started"), interval, interval);
+
+        metrics = new MetricsBuilder(this, errors, settings.get().metrics())
+            .bStats(BSTATS_SERVICE_ID)
+            .fastStats(FASTSTATS_TOKEN)
+            .addChart(MetricChart.counter("player_joins", joins::sum))
+            .start();
+    }
+
+    private Settings readSettings(ConfigLoader loader) throws ConfigLoadException {
+        YamlConfiguration yaml = loader.load();
+        ConfigReader reader = new ConfigReader(yaml, getLogger()::warning);
+        Settings read = Settings.read(reader);
+        if (!reader.errors().isEmpty()) {
+            reader.errors().forEach(getLogger()::severe);
+            throw new ConfigLoadException("config.yml has " + reader.errors().size() + " errors");
+        }
+        return read;
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        joins.increment();
+    }
+
+    @Override
+    public void onDisable() {
+        if (scheduler != null) {
+            Shutdown.closeQuietly("stop the scheduled tasks", scheduler::close, getLogger(), errors);
+        }
+        if (metrics != null) {
+            Shutdown.closeQuietly("shut down metrics", metrics::shutdown, getLogger(), errors);
+        }
+    }
+}
+```
+
+What each part does:
+
+- **`ErrorReports`** is the plugin's one error sink, created once and passed to every Taffy class that reports handled failures. Reports made before its first install or clear are held, the first of each source and at most 16. `MetricsBuilder.start()` installs the FastStats error route, which receives the held reports, or clears the sink when FastStats error tracking is not running. A plugin that uses `taffy-metrics` installs no target of its own before `start()`.
+- **`Scheduler`** runs tasks on Paper's region-threaded schedulers, the same on Paper and Folia, and never calls `Bukkit.getScheduler()`. `repeatingAsync` takes a `Duration` for the first delay and the period and returns `false` once the plugin is disabling. A task Paper runs for it that throws is reported to `ErrorReports` under `scheduler.async` (or `scheduler.global`, `scheduler.entity`) and rethrown. `close()` cancels every task `repeatingAsync` started through the instance and runs before `Metrics.shutdown()` in `onDisable`.
+- **`ConfigLoader`** takes the data folder, a supplier of the shipped file and a logger. `load()` blocks the calling thread while it reads and writes files, and throws `ConfigLoadException`, whose message is a clause for the server owner that reads after a lead-in.
+- **`ConfigHolder`** keeps the settings in effect. `settings.reload()` runs the same loader again and returns `true` when the new settings are in effect; a reload that fails keeps the old ones and passes one line to the failure consumer, here `getLogger()::warning`. Settings that only apply after a restart are read from `settings.startup()`. See [Config](/docs/modules/config).
+- **`MetricsBuilder`** takes the plugin, its `ErrorReports` and the owner's metrics switch. With the switch off, `start()` touches no metrics SDK and returns an inert `Metrics`. `start()` is the last step of enable, once the state the charts read exists. An enable that gives up after the switch is read, such as when storage fails to start, still calls `start()` before it returns, without the charts whose state never came up, so the reports raised during enable go out in the final send. A builder starts once; any call on it after `start()` throws `IllegalStateException`. A chart supplier reads in-memory state only, such as `LongAdder::sum`. See [Metrics](/docs/modules/metrics).
+- **`Shutdown.closeQuietly`** runs one disable step, logs a failure as one warning that begins `Failed to <what> during shutdown`, reports it under `shutdown`, and lets the next step run. `Metrics.shutdown()` comes last, so the reports raised by the steps before it are sent in the final send. [Platform](/docs/modules/platform) lists the full disable order.
+
+<Callout type="info" title="Unit tests and the metrics switch">
+In its own unit tests a plugin passes `false` as the switch of `MetricsBuilder`. bStats refuses to start from classes that were not relocated, which they are not in a test run, and FastStats would write `plugins/faststats/config.properties` under whatever folder a mocked server gives.
+</Callout>
+
+</Step>
+<Step>
+
+### Add a test
+
+The settings factory runs without a server, so it is tested with a plain `YamlConfiguration`:
+
+```java title="src/test/java/com/example/myplugin/SettingsTest.java"
+package com.example.myplugin;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.config.ConfigReader;
+
+class SettingsTest {
+
+    @Test
+    void anEmptyFileGivesTheDefaults() {
+        List<String> warnings = new ArrayList<>();
+        ConfigReader reader = new ConfigReader(new YamlConfiguration(), warnings::add);
+
+        Settings settings = Settings.read(reader);
+
+        assertEquals(Settings.METRICS, settings.metrics());
+        assertEquals(Settings.REPORT_INTERVAL, settings.reportInterval());
+        assertTrue(warnings.isEmpty());
+        assertTrue(reader.errors().isEmpty());
+    }
+
+    @Test
+    void anIntervalBelowTheMinimumGivesTheFallbackAndAWarning() {
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("report-interval", "10s");
+        List<String> warnings = new ArrayList<>();
+
+        Settings settings = Settings.read(new ConfigReader(yaml, warnings::add));
+
+        assertEquals(Duration.ofMinutes(10), settings.reportInterval());
+        assertEquals(1, warnings.size());
+    }
+}
+```
+
+Tests run under the `tr-TR` locale and the `Pacific/Auckland` time zone, so code that depends on the machine's default locale or zone fails here instead of on a server. A test task can override either with `systemProperty`. [Test helpers](/docs/modules/test) covers `taffy-test`, published as `alaz.taffy.test`.
+
+</Step>
+<Step>
+
+### Build the jar
+
+```bash
+./gradlew build
+```
+
+`build` compiles, runs the tests, checks the coverage gate and builds the shadow jar. The jar lands at `build/libs/myplugin-1.0.0.jar`, named after the project and its version, and it is the only jar there. Drop it into the server's `plugins` folder; it needs no other jar.
+
+Inside it, Taffy sits under `com/example/myplugin/libs/taffy/`, bStats under `com/example/myplugin/libs/bstats/` and FastStats under `com/example/myplugin/libs/faststats/`, with one `META-INF/faststats.properties`. Nothing is left under `so/alaz/taffy/`, `org/bstats/` or `dev/faststats/`, so several plugins built on different Taffy versions run on one server without sharing classes.
+
+`./gradlew shadowJar` builds the jar alone, without the tests and the coverage gate. The JaCoCo report is written to `build/reports/jacoco/test/html`.
+
+</Step>
+</Steps>
+
+## Add a published API module
+
+A plugin that offers an API to other plugins puts it in its own module on `so.alaz.taffy.paper-api`:
+
+```kotlin title="settings.gradle.kts"
+rootProject.name = "myplugin"
+
+include(":myplugin-api")
+```
+
+```kotlin title="myplugin-api/build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-api")
+}
+
+description = "MyPlugin public API"
+
+dependencies {
+    compileOnly(alaz.paper.api)
+}
+```
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    implementation(project(":myplugin-api"))
+}
+```
+
+`so.alaz.taffy.paper-api` applies `so.alaz.taffy.java` (the Java 25 toolchain, compiler flags and test defaults) and adds:
+
+- a sources jar and a javadoc jar, with javadoc run under `-Xdoclint:all,-missing`, so a broken comment fails the build,
+- the `library` Maven publication as `<group>:<module name>`, here `com.example.myplugin:myplugin-api:1.0.0`, with the module's `description` in the POM and the MIT License,
+- the `alazso` repository, `https://repo.alaz.so/releases`, or `https://repo.alaz.so/snapshots` for a `-SNAPSHOT` version, with credentials from the `ALAZSO_REPO_USER` and `ALAZSO_REPO_TOKEN` environment variables.
+
+The POM url is `https://github.com/alazso/<root project name>` unless the Gradle property `alaz.repositoryUrl` is set. The root project's `LICENSE` file, when there is one, goes into `META-INF` of every jar. `./gradlew :myplugin-api:publishToMavenLocal` publishes the API to the local Maven repository. The API module applies no coverage gate; `so.alaz.taffy.library` is the variant with one. [Gradle plugins](/docs/gradle-plugins) describes every plugin and its settings.
+
+The plugin module shades the API classes into its own jar. The shadow jar relocates only `org.bstats`, `dev.faststats` and `so.alaz.taffy`, so the API classes keep their package names, and other plugins compile against the published `myplugin-api` artifact with `compileOnly`.
+
+## Build against an unpublished Taffy
+
+Taffy 0.1.0 is not published yet. Until it is, a plugin builds against a local publish or a snapshot.
+
+<Tabs items={['Local publish', 'Snapshot']}>
+<Tab value="Local publish">
+
+In a checkout of Taffy, publish the Gradle plugins, the catalog and every module to the local Maven repository:
+
+```bash
+./gradlew publishToMavenLocal
+```
+
+They are published at the version in Taffy's `gradle.properties`, `0.1.0-SNAPSHOT` at the moment. In the plugin, add `mavenLocal()` to both `pluginManagement.repositories`, for the Gradle plugins, and `dependencyResolutionManagement.repositories`, for the catalog and the modules, and apply the settings plugin at that version:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        mavenLocal()
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+}
+
+dependencyResolutionManagement {
+    repositories {
+        mavenLocal()
+    }
+}
+
+rootProject.name = "myplugin"
+```
+
+The catalog follows the settings plugin's version, so every `alaz.taffy.*` alias points at that version. The `mavenLocal()` in `dependencyResolutionManagement` comes after the repositories `so.alaz.taffy.repositories` declares, and Gradle takes a module from the first repository that holds it, so when `https://repo.alaz.so/snapshots` holds the same snapshot version, the catalog and the modules resolve from there rather than from the local publish. Run `./gradlew publishToMavenLocal` in Taffy again after each change there.
+
+</Tab>
+<Tab value="Snapshot">
+
+Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`. Add that repository to `pluginManagement` and apply the settings plugin at the snapshot version:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        maven("https://repo.alaz.so/snapshots")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+}
+
+rootProject.name = "myplugin"
+```
+
+The catalog and the modules need no extra repository: `so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for snapshot versions of the `so.alaz` groups.
+
+</Tab>
+</Tabs>
+
+<Callout type="warn" title="Snapshots change">
+A `-SNAPSHOT` version is replaced by each new publish, so two builds of the same plugin source can pick up different Taffy code. Release a plugin only against a released Taffy version. [Versioning](/docs/versioning) covers how Taffy versions change.
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Gradle plugins" href="/docs/gradle-plugins" />
+  <Card title="Platform" href="/docs/modules/platform" />
+  <Card title="Config" href="/docs/modules/config" />
+  <Card title="Storage" href="/docs/modules/storage" />
+  <Card title="Hooks" href="/docs/modules/hooks" />
+  <Card title="Metrics" href="/docs/modules/metrics" />
+</Cards>

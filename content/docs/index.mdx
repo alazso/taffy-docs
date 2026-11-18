@@ -1,0 +1,135 @@
+---
+title: Overview
+description: Taffy is a Java 25 library for Paper plugins that each plugin shades and relocates into its own jar.
+---
+
+Taffy is a set of Java 25 modules for Paper plugins: Folia-safe scheduling, strict YAML config loading, database storage, integrations with other plugins, chest menus, metrics, ComfiConf support and test helpers. It comes with Gradle plugins and a version catalog that set up a plugin build around those modules.
+
+## How a plugin uses Taffy
+
+Taffy is not a server plugin. Nothing is installed on the server besides the plugins that use it.
+
+- A plugin depends on the Taffy modules it needs with `implementation`, for example `implementation(alaz.taffy.metrics)`.
+- The `so.alaz.taffy.paper-plugin` Gradle plugin builds one shadow jar that carries those modules, and relocates `so.alaz.taffy` to `<group>.libs.taffy`, `org.bstats` to `<group>.libs.bstats` and `dev.faststats` to `<group>.libs.faststats`, where `<group>` is the plugin project's Gradle `group`.
+- Each plugin therefore holds its own relocated copy of Taffy under its own package, so plugins built on different Taffy versions run side by side on one server.
+- The server owner installs one jar per plugin and nothing else.
+
+Some libraries are not bundled. `taffy-storage` ships neither HikariCP nor the JDBC drivers: the plugin lists them in `paperPlugin.runtimeLibraries`, the build generates a `RuntimeLibraries` class with their coordinates in `RuntimeLibraries.COORDINATES` (in the package named by the project group), and the plugin's `PluginLoader` reads it so Paper downloads them before the plugin loads. The bStats and FastStats SDKs behind `taffy-metrics` are the opposite: they are shaded and relocated into the plugin jar and are never listed as runtime libraries. `taffy-hooks` and `taffy-comficonf` compile against the APIs of the plugins they integrate with and ship none of them; those APIs come from the installed plugins at runtime. Each module page states what it needs from the plugin build.
+
+The library keeps no static plugin, logger, executor or thread and ships no resource files. Each class takes the narrowest thing it uses (a `Plugin`, a `Logger`, a `Path`, an `Executor`), and the plugin creates one `ErrorReports` and passes it to the classes that report handled errors. Two classes own threads: `Storage` (its database threads, drained at close) and `DiscordWebhook` (its HTTP client). At disable the plugin closes what it built in the order the [platform page](/docs/modules/platform) describes.
+
+## Requirements
+
+| Requirement | Value |
+|---|---|
+| Java | 25, for the plugin and for the JVM Gradle runs on |
+| Paper API | `io.papermc.paper:paper-api` `26.1.2.build.66-stable` (catalog alias `alaz.paper.api`) |
+| Plugin descriptor | `paper-plugin.yml` |
+| Folia | Supported |
+
+Gradle itself runs on Java 25, because the Taffy Gradle plugins are Java 25 class files loaded into Gradle's JVM. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to. The `so.alaz.taffy.java` convention sets the Java 25 toolchain for compilation and tests.
+
+The conventions write no `api-version` or other descriptor key: the plugin's own `paper-plugin.yml` sets them. The only change the build makes to that file is expanding `${version}` to the project version.
+
+### Folia
+
+`Scheduler` in `taffy-platform` schedules through Paper's global region, async and entity schedulers and behaves the same on Paper and Folia. It never calls `Bukkit.getScheduler()`, which Folia does not support. `Scheduler.mode()` returns `Scheduler.Mode.FOLIA` when Folia's server class was loadable when the scheduler was built, and `Scheduler.Mode.PAPER` otherwise. Folia loads only plugins whose `paper-plugin.yml` sets `folia-supported: true`, which the plugin declares itself.
+
+## Modules
+
+<Cards>
+  <Card title="taffy-platform" href="/docs/modules/platform">
+    The base of every module: the Folia-safe `Scheduler`, shutdown helpers, `Text` and `Messages`, item builders, durations, cooldowns, rate-limited logging and a Discord webhook.
+  </Card>
+  <Card title="taffy-config" href="/docs/modules/config">
+    Strict YAML loading: `ConfigLoader` writes and upgrades `config.yml`, `ConfigReader` reports every problem at once, `ConfigHolder` keeps the old settings when a reload fails.
+  </Card>
+  <Card title="taffy-storage" href="/docs/modules/storage">
+    SQLite, MySQL, MariaDB and PostgreSQL over HikariCP, with transactions on dedicated threads and migrations from the plugin's own scripts.
+  </Card>
+  <Card title="taffy-hooks" href="/docs/modules/hooks">
+    Custom items (ItemsAdder, Nexo, Oraxen, HeadDatabase), a Vault economy, LuckPerms, WorldGuard regions, and PlaceholderAPI and MiniPlaceholders expansions.
+  </Card>
+  <Card title="taffy-gui" href="/docs/modules/gui">
+    Chest menus from code or the plugin's files, with pagination, click safety that keeps shown items from leaking, and chat or anvil text prompts.
+  </Card>
+  <Card title="taffy-metrics" href="/docs/modules/metrics">
+    bStats and FastStats from one set of charts through `MetricsBuilder`, with handled errors sent to FastStats error tracking.
+  </Card>
+  <Card title="taffy-comficonf" href="/docs/modules/comficonf">
+    A plugin's YAML settings registered with the ComfiConf bridge, so the server owner edits them in the web config editor.
+  </Card>
+  <Card title="taffy-test" href="/docs/modules/test">
+    Test helpers for plugin code without a server: `CapturedLog`, `FakeItems`, `FakeFolders`, `FaultyDataSource`, `JvmDefaults`, `RaceRunner` and more.
+  </Card>
+</Cards>
+
+Every module is published under the group `so.alaz.taffy` with its module name as the artifact id, for example `so.alaz.taffy:taffy-config`, and appears in the `alaz` catalog as `alaz.taffy.<name>`, for example `alaz.taffy.config`. Every runtime module depends on `taffy-platform`; `taffy-comficonf` also depends on `taffy-config`. `taffy-test` depends on no Taffy module.
+
+## Gradle plugins
+
+Taffy publishes its build setup as `so.alaz.taffy:taffy-gradle`, a set of Gradle plugins, together with the `alaz` version catalog (`so.alaz.taffy:taffy-catalog`).
+
+| Plugin | Applied in | What it does |
+|---|---|---|
+| `so.alaz.taffy.settings` | `settings.gradle.kts` | Applies `so.alaz.taffy.repositories` and adds the `alaz` catalog at the plugin's version. |
+| `so.alaz.taffy.repositories` | `settings.gradle.kts` | The foojay toolchain resolver and the Maven Central, Paper, repo.alaz.so, FastStats and integration repositories. |
+| `so.alaz.taffy.paper-plugin` | a plugin module | `so.alaz.taffy.coverage` plus the shaded and relocated plugin jar, `${version}` expansion in `paper-plugin.yml` and `paperPlugin.runtimeLibraries`. |
+| `so.alaz.taffy.paper-api` | a published API module | `so.alaz.taffy.java` plus sources and javadoc jars and a `library` publication. |
+| `so.alaz.taffy.library` | a tested library module | `so.alaz.taffy.paper-api` plus `so.alaz.taffy.coverage`, with a per-class coverage floor of 0.50. |
+| `so.alaz.taffy.coverage` | any Java module | A JaCoCo report and an instruction coverage gate on `check`. |
+| `so.alaz.taffy.java` | any Java module | The Java 25 toolchain, UTF-8, compiler lint flags, JUnit Platform and a fixed test locale and time zone. |
+
+A minimal plugin build applies `so.alaz.taffy.settings` in `settings.gradle.kts` and `so.alaz.taffy.paper-plugin` in `build.gradle.kts`:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0"
+}
+
+rootProject.name = "myplugin"
+```
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+group = "com.example.myplugin"
+version = "1.0.0"
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.platform)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+```
+
+<Callout type="warn" title="Coverage gate">
+`so.alaz.taffy.paper-plugin` applies `so.alaz.taffy.coverage`, so `check` requires 80 percent instruction coverage (`coverage.minimum`, default 0.80) and fails when the module has classes under the gate and no test ran. Add tests, list classes in `coverage.exclusions`, or set `coverage.minimum` to 0.
+</Callout>
+
+[Gradle plugins](/docs/gradle-plugins) covers each plugin, its extension and its defaults.
+
+## Next steps
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started">
+    Set up a plugin build on Taffy, from `settings.gradle.kts` to the shaded jar.
+  </Card>
+  <Card title="Versioning" href="/docs/versioning">
+    How Taffy versions follow Semantic Versioning, and where releases and snapshots are published.
+  </Card>
+</Cards>
+
+## Help
+
+Questions, bug reports and ideas go to the [Discord](https://discord.gg/m3AKQfrMS5).

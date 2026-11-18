@@ -1,0 +1,619 @@
+---
+title: taffy-test
+description: Helpers for testing Paper plugin code without a server, from fake items and folders to fault-injecting JDBC connections and thread races.
+---
+
+`taffy-test` gives a plugin's test suite stand-ins for the parts of a Paper server that unit tests cannot reach: item stacks that stack and compare, a folder whose listing fails, a logger that keeps its records, a data source that fails statements and commits on demand, a gate that starts threads at the same moment, and class loaders on which an integration's API is present or absent. No server and no mock server library is involved: the item and folder stand-ins are Mockito mocks.
+
+| Helper | What it is for |
+|---|---|
+| `CapturedLog` | Assert on what code logged, levels and throwables included. |
+| `FakeItems` | `ItemStack` stand-ins whose amount, similarity and copies behave like Paper's. |
+| `FakeFolders` | A folder whose listing fails or returns a fixed stream. |
+| `FaultyDataSource` | A `javax.sql.DataSource` that fails statements, commits or the whole process on demand. |
+| `JvmDefaults` | Run a block under another default locale or time zone. |
+| `RaceRunner` | Release several virtual threads at once against the same code. |
+| `SimulatedClasspath` | Class loaders that add empty classes or hide whole packages. |
+| `ApiRules` | The design-rule checks of Taffy's own modules. |
+
+Every class is in the package `so.alaz.taffy.test`. The module depends on no other Taffy module.
+
+## Setup
+
+Add the module to the test classpath only. A `testImplementation` dependency is not on the runtime classpath, so the plugin's shadow jar does not contain it. The catalog alias is `alaz.taffy.test`, for the coordinates `so.alaz.taffy:taffy-test`. The [getting started](/docs/getting-started) page sets up the `alaz` catalog.
+
+<Tabs items={['Catalog', 'Coordinates']}>
+<Tab value="Catalog">
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+
+    testImplementation(alaz.taffy.test)
+    testImplementation(alaz.paper.api)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+```
+
+</Tab>
+<Tab value="Coordinates">
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    testImplementation("so.alaz.taffy:taffy-test:0.1.0")
+}
+```
+
+</Tab>
+</Tabs>
+
+What the module brings and what it does not:
+
+| Dependency | On the test classpath through `taffy-test` | Add it yourself when |
+|---|---|---|
+| Mockito (`org.mockito:mockito-core`) | Runtime only | A test calls Mockito itself (`mock`, `mockStatic`, `mockConstruction`): `testImplementation(alaz.mockito.core)`. |
+| paper-api | No | A test uses `FakeItems` or `ApiRules`, which name Paper types: `testImplementation(alaz.paper.api)`. `compileOnly` does not reach the test classpath. |
+| A JDBC driver | No | A test uses `FaultyDataSource`: for SQLite, `testRuntimeOnly(alaz.sqlite.jdbc)`. |
+| JUnit, AssertJ | No | Always for JUnit. No helper needs a test framework or an assertion library; `alaz.assertj.core` is in the catalog. |
+
+<Callout type="info" title="Mockito agent and test defaults">
+`so.alaz.taffy.paper-plugin` applies `so.alaz.taffy.java`, which passes each `mockito-core` jar on a test task's classpath to the test JVM as a Java agent, so Mockito's inline mock maker does not attach itself at run time. The same convention runs every test with `user.language=tr`, `user.country=TR` and `user.timezone=Pacific/Auckland`.
+</Callout>
+
+The examples below use JUnit's own assertions, so they need nothing beyond the setup above.
+
+## CapturedLog
+
+A `java.util.logging.Logger` that keeps every record it publishes. Pass its logger to the code under test and assert on the records afterwards.
+
+| Member | What it gives |
+|---|---|
+| `new CapturedLog()` | A logger with no records yet. |
+| `logger` (public final field) | The `Logger` to pass to the code under test. |
+| `records` (public final field) | Every `LogRecord` published, in order. Safe to read while other threads log. |
+| `lines()` | Each record as `"LEVEL message"`: the level name, a space, then the message as it was passed, with no parameter filled in. The list is a copy. |
+
+```java title="CapturedLogExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.CapturedLog;
+
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+
+class CapturedLogExampleTest {
+
+    static void save(Logger logger, Runnable write) {
+        try {
+            write.run();
+        } catch (IllegalStateException failure) {
+            logger.log(Level.SEVERE, "Could not save the data", failure);
+        }
+    }
+
+    @Test
+    void aFailedSaveIsLoggedWithItsCause() {
+        CapturedLog log = new CapturedLog();
+        IllegalStateException failure = new IllegalStateException("disk full");
+
+        save(log.logger, () -> {
+            throw failure;
+        });
+
+        assertEquals(List.of("SEVERE Could not save the data"), log.lines());
+        assertSame(failure, log.records.get(0).getThrown());
+    }
+}
+```
+
+Behaviour:
+
+- The logger is anonymous and does not pass records to its parent's handlers, so a captured record is not printed.
+- A record below the logger's level is not captured. The level is the root logger's, `INFO` unless changed; call `log.logger.setLevel(Level.ALL)` to capture `FINE` and below.
+- A line keeps the raw message: `logger.log(Level.INFO, "Loaded {0} files", 3)` gives `INFO Loaded {0} files`, and the parameter is on `records.get(0).getParameters()`.
+- The wording of Taffy's own log lines is not part of its API. Assert on the level, the throwable or the presence of a line rather than on the full text of a line Taffy writes.
+
+## FakeItems
+
+Static factories for `ItemStack` stand-ins. Each item is a Mockito mock of `ItemStack` whose amount changes like a real stack's and whose type decides `isSimilar`.
+
+| Member | What it gives |
+|---|---|
+| `item(String type, int amount)` | An item of that type and amount, maximum stack size 64. `getType()` is `null`. |
+| `item(String type, int amount, int maxStack)` | The same with its own maximum stack size. |
+| `item(Material material, int amount)` | An item whose `getType()` is the material, on its copies too. Its type is the material's name in lowercase. Maximum stack size 64. |
+| `item(Material material, int amount, int maxStack)` | The same with its own maximum stack size. |
+| `type(ItemStack item)` | The type the item was made with, or `null` for an item this class did not make. |
+| `STORAGE_SLOTS` | `36`: the storage slots of a player inventory, the hotbar and the three rows above it. |
+
+The stubbed methods are `getAmount`, `setAmount`, `isEmpty`, `getMaxStackSize`, `isSimilar`, `asQuantity`, `asOne`, `clone` and `toString`. `getType` is stubbed for items made from a `Material`.
+
+```java title="FakeItemsExampleTest.java"
+import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.FakeItems;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static so.alaz.taffy.test.FakeItems.item;
+
+class FakeItemsExampleTest {
+
+    /** Moves as much of {@code from} onto {@code onto} as fits, the way a merge in an inventory does. */
+    static void merge(ItemStack onto, ItemStack from) {
+        if (!onto.isSimilar(from)) {
+            return;
+        }
+        int moved = Math.min(onto.getMaxStackSize() - onto.getAmount(), from.getAmount());
+        onto.setAmount(onto.getAmount() + moved);
+        from.setAmount(from.getAmount() - moved);
+    }
+
+    @Test
+    void aMergeFillsTheStackAndLeavesTheRest() {
+        ItemStack gems = item("gem", 40);
+        ItemStack more = item("gem", 30);
+
+        merge(gems, more);
+
+        assertEquals(64, gems.getAmount());
+        assertEquals(6, more.getAmount());
+    }
+
+    @Test
+    void itemsOfAnotherTypeDoNotMerge() {
+        ItemStack pearls = item(Material.ENDER_PEARL, 10, 16);
+        ItemStack diamonds = item(Material.DIAMOND, 5);
+
+        merge(pearls, diamonds);
+
+        assertEquals(10, pearls.getAmount());
+        assertFalse(diamonds.isEmpty());
+        assertEquals("ender_pearl", FakeItems.type(pearls));
+        assertTrue(pearls.asOne().isSimilar(pearls));
+    }
+
+    @Test
+    void anInventorySizedArray() {
+        ItemStack[] contents = new ItemStack[FakeItems.STORAGE_SLOTS];
+        contents[0] = item("gem", 1);
+
+        assertEquals(36, contents.length);
+    }
+}
+```
+
+Behaviour:
+
+- Two items are similar when they were made with the same type, whatever their amounts. An item is not similar to `null` or to an `ItemStack` this class did not make. `item(Material.DIAMOND, 1)` is similar to `item("diamond", 1)`.
+- An item is equal only to itself. Two items of the same type and amount are not equal.
+- `asQuantity`, `asOne` and `clone` return a new item of the same type, material and maximum stack size, with its own amount. Changing the copy does not change the original.
+- `isEmpty()` is `true` once the amount is 0 or less.
+- `toString()` is the type, `" x "` and the current amount, such as `gem x 5`.
+- Every other method gives Mockito's default answer: `getItemMeta()` is `null`, `hasItemMeta()` is `false`. The item is an ordinary Mockito mock, so a test with `alaz.mockito.core` on its classpath can stub more on it, such as `when(item.getItemMeta()).thenReturn(meta)`.
+- Code that switches on `getType()` needs the `Material` overloads; an item made from a type name returns `null` there.
+- The type of a `Material` item is lowercased with `Locale.ROOT`, so it is the same under the Turkish test locale.
+
+## FakeFolders
+
+A `Path` stand-in for failures a real folder cannot be made to show on every operating system, such as a data folder that exists but cannot be listed.
+
+| Member | What it gives |
+|---|---|
+| `unlistable(@Nullable DirectoryStream<Path> stream)` | A folder that gives `stream` when it is listed, or, when `stream` is `null`, fails with an `IOException` whose message is `access denied`. |
+
+```java title="FakeFoldersExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.FakeFolders;
+
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class FakeFoldersExampleTest {
+
+    static List<Path> languageFiles(Path dataFolder) throws IOException {
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(dataFolder.resolve("lang"), "*.yml")) {
+            stream.forEach(files::add);
+        }
+        return files;
+    }
+
+    @Test
+    void anUnreadableFolderFailsTheListing() {
+        Path folder = FakeFolders.unlistable(null);
+
+        IOException failure = assertThrows(IOException.class, () -> languageFiles(folder));
+        assertEquals("access denied", failure.getMessage());
+    }
+
+    @Test
+    void aListedFolderGivesTheStreamAsItIs() throws IOException {
+        List<Path> entries = List.of(Path.of("en.yml"), Path.of("notes.txt"));
+        Path folder = FakeFolders.unlistable(new DirectoryStream<>() {
+            @Override
+            public Iterator<Path> iterator() {
+                return entries.iterator();
+            }
+
+            @Override
+            public void close() {
+            }
+        });
+
+        assertEquals(entries, languageFiles(folder));
+    }
+}
+```
+
+The folder is a Mockito mock of `Path` on a mocked file system, so nothing is read from disk:
+
+- `Files.isDirectory` is `true` and its `BasicFileAttributes` say it is a directory, while `Files.exists` and `Files.notExists` are both `false`. Code that checks `Files.exists` before listing skips the listing.
+- `resolve(String)` returns the folder itself, so `folder.resolve("lang")` is the same unlistable folder.
+- `Files.newDirectoryStream`, with or without a filter, gives `stream` as it is, and `Files.list` lists its entries. No filter is applied, which is why `notes.txt` is in the second result above.
+- `getFileName`, `toAbsolutePath`, `normalize` and `resolve(Path)` return `null`. Every other method of the path and of its file system gives Mockito's default answer.
+
+## FaultyDataSource
+
+A `DataSource` over connections that `DriverManager` opens, wrapped so that statements, commits and the whole process fail on demand. Use it with any code that takes a `javax.sql.DataSource` and must survive a failed write, a commit whose outcome is unknown, or a crash between two statements.
+
+| Member | What it gives |
+|---|---|
+| `new FaultyDataSource(String url, Properties properties)` | A data source on `url` with no fault armed. The properties, defaults included, are copied. Throws `NullPointerException` for a `null` argument. |
+| `getConnection()` | A new wrapped connection. Throws `SQLException` when the process is dead or the driver cannot connect. `unwrap(Connection.class)` on it returns the real connection. |
+| `getConnection(String user, String password)` | The same as `getConnection()`; the user and password are ignored. |
+| `faults()` | The `FaultyDataSource.Faults` of this data source and of every connection it opened. |
+
+`FaultyDataSource.Faults` arms the failures and counts what ran:
+
+| Method | Effect |
+|---|---|
+| `failStatement(int nth)` | The nth statement run from now, counted from 1, fails once with `injected statement failure`. 0 cancels. |
+| `failCommit(int nth, boolean written, boolean readFails)` | The nth commit from now fails once with `injected commit failure`. With `written` the transaction is committed first, so the failure hides a commit that happened; without it the transaction stays uncommitted on the connection. With `readFails` the next statement after the failed commit fails too, replacing a pending `failStatement` failure. 0 cancels. |
+| `failMatching(String fragment, int count)` | The next `count` statements whose SQL contains `fragment` fail with `injected failure of <fragment>`. An empty fragment matches nothing. |
+| `afterMatching(String fragment, int nth, Runnable action)` | Runs `action` once, on the thread that ran the statement, right after the nth statement whose SQL contains `fragment` returns, counted from 1. A statement that fails is not counted. An exception from `action` propagates from the run call, after the statement took effect. |
+| `kill()` | Every later connection, prepared or created statement, statement run and commit fails with `the process is dead`. Nothing undoes it. |
+| `killAfter(int n)` | The process dies once n more statements have run: the statement after them fails, then everything `kill()` names fails. |
+| `disarm()` | Cancels pending `failStatement`, `failCommit` and `failMatching` failures. A kill, a pending `killAfter` and an `afterMatching` action stay. |
+| `statements()` | Statements run so far, those failed by `failStatement`, `failCommit` or `killAfter` included. |
+| `commits()` | Commits attempted so far, failed ones included. A commit after death is not counted. |
+| `dead()` | Whether `kill()` was called or `killAfter` has fired. |
+
+A later call to a `fail...` or `afterMatching` method replaces a pending one of the same kind.
+
+```java title="FaultyDataSourceExampleTest.java"
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import so.alaz.taffy.test.FaultyDataSource;
+
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Properties;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class FaultyDataSourceExampleTest {
+
+    @TempDir
+    Path folder;
+
+    private String url;
+    private FaultyDataSource source;
+
+    @BeforeEach
+    void createTable() throws SQLException {
+        url = "jdbc:sqlite:" + folder.resolve("data.db").toAbsolutePath();
+        source = new FaultyDataSource(url, new Properties());
+        try (Connection connection = source.getConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE balance (id INTEGER PRIMARY KEY, amount INTEGER NOT NULL)");
+        }
+    }
+
+    @Test
+    void aCommitReportedFailedCanStillHaveBeenWritten() throws SQLException {
+        source.faults().failCommit(1, true, false);
+
+        SQLException failure = assertThrows(SQLException.class, () -> {
+            try (Connection connection = source.getConnection()) {
+                connection.setAutoCommit(false);
+                try (PreparedStatement insert =
+                         connection.prepareStatement("INSERT INTO balance (id, amount) VALUES (1, 50)")) {
+                    insert.executeUpdate();
+                }
+                connection.commit();
+            }
+        });
+
+        assertEquals("injected commit failure", failure.getMessage());
+        assertEquals(1, rows(source));
+    }
+
+    @Test
+    void aCrashAfterOneStatementLeavesOnlyThatStatement() throws SQLException {
+        source.faults().killAfter(1);
+
+        try (Connection connection = source.getConnection(); Statement statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO balance (id, amount) VALUES (1, 50)");
+            assertThrows(SQLException.class,
+                () -> statement.executeUpdate("INSERT INTO balance (id, amount) VALUES (2, 50)"));
+        }
+
+        assertTrue(source.faults().dead());
+        assertEquals(1, rows(new FaultyDataSource(url, new Properties())));
+    }
+
+    private static int rows(FaultyDataSource from) throws SQLException {
+        try (Connection connection = from.getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery("SELECT COUNT(*) FROM balance")) {
+            result.next();
+            return result.getInt(1);
+        }
+    }
+}
+```
+
+The second test reads the table through a new `FaultyDataSource` on the same database: a new data source stands for the next process after a crash.
+
+Behaviour:
+
+- The wrapper checks the faults on `prepareStatement` and `createStatement`, when a statement they return runs through `execute`, `executeUpdate`, `executeQuery`, `executeLargeUpdate`, `executeBatch` or `executeLargeBatch`, and on `commit`. A batch counts as one statement.
+- Every other call, `prepareCall`, `rollback` and `close` included, goes to the real connection or statement unchanged, so a test can still roll back and close after a kill.
+- A statement failure is thrown before the statement reaches the database. A commit failure is thrown after the commit was or was not written, as `written` says.
+- The SQL that `failMatching` and `afterMatching` match is the text a prepared statement was prepared with, or for a created statement the text passed to the run call. A statement failed by `failMatching` is not counted by `statements()`, and a run after death is not counted either.
+- After `kill()`, a statement run whose SQL a pending `failMatching` failure matches fails with that failure instead of `the process is dead`.
+- A statement's `getConnection()` returns the wrapper, so a kill still applies to connections reached that way. A wrapper is equal only to itself.
+- The faults are shared by every connection the data source opened, those opened before a fault was armed included.
+- The JDBC driver for the URL must be on the test runtime classpath. `taffy-test` brings none.
+- `getLogWriter()` is `null`, `getLoginTimeout()` is 0 and the setters do nothing. `unwrap` returns the data source itself for a type it implements and throws `SQLException` otherwise.
+
+## JvmDefaults
+
+Runs a block under another JVM default locale or time zone, then puts the previous one back, also when the block throws.
+
+| Member | What it gives |
+|---|---|
+| `withLocale(Locale locale, JvmDefaults.Block block)` | Runs `block` with `locale` as the default locale and as the default of both `Locale.Category.DISPLAY` and `Locale.Category.FORMAT`. |
+| `withTimeZone(String zoneId, JvmDefaults.Block block)` | Runs `block` with the zone as the default time zone. An unknown id gives GMT, as `TimeZone.getTimeZone` reads it. |
+| `TURKISH` | `tr-TR`, where the upper case of `i` and the lower case of `I` are not ASCII. |
+| `JvmDefaults.Block` | A functional interface whose `run()` may throw `Exception`. |
+
+Both methods throw whatever the block throws, so the test method declares `throws Exception`.
+
+```java title="JvmDefaultsExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.JvmDefaults;
+
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.util.Locale;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class JvmDefaultsExampleTest {
+
+    @Test
+    void lowercasingWithoutALocaleFollowsTheDefault() throws Exception {
+        JvmDefaults.withLocale(JvmDefaults.TURKISH, () -> {
+            assertEquals("tıtle", "TITLE".toLowerCase());
+            assertEquals("title", "TITLE".toLowerCase(Locale.ROOT));
+        });
+    }
+
+    @Test
+    void theDayOfAnInstantDependsOnTheZone() throws Exception {
+        Instant evening = Instant.parse("2026-01-01T20:00:00Z");
+
+        JvmDefaults.withTimeZone("Pacific/Auckland", () -> {
+            assertEquals(LocalDate.of(2026, 1, 2), LocalDate.ofInstant(evening, ZoneId.systemDefault()));
+            assertEquals(LocalDate.of(2026, 1, 1), LocalDate.ofInstant(evening, ZoneOffset.UTC));
+        });
+    }
+}
+```
+
+Behaviour:
+
+- The defaults are JVM-wide: every thread sees the change while the block runs. `JvmDefaults` is not safe under parallel test execution. With JUnit's parallel mode on, run such a test alone, for example with JUnit's `@Isolated`.
+- Calls nest: an inner block's locale or zone is replaced by the outer one when the inner block ends.
+- Tests built with `so.alaz.taffy.java` already run under `tr-TR` and `Pacific/Auckland`. `JvmDefaults` covers a block that needs another locale or zone, such as `Locale.ENGLISH` or `UTC`.
+
+## RaceRunner
+
+Starts several contenders at the same moment, to test code that must hold when calls race, such as a claim that only one player may win or a counter that must not lose updates.
+
+| Member | What it gives |
+|---|---|
+| `race(int contenders, IntFunction<T> contender)` | Starts one virtual thread per contender, holds them at a gate until all have started, releases them together and returns each result in contender order as a `List<T>`. Declares `throws Exception`. |
+
+```java title="RaceRunnerExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.RaceRunner;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+class RaceRunnerExampleTest {
+
+    @Test
+    void onlyOneContenderClaimsTheReward() throws Exception {
+        AtomicBoolean claimed = new AtomicBoolean();
+
+        List<Boolean> won = RaceRunner.race(8, id -> claimed.compareAndSet(false, true));
+
+        assertEquals(8, won.size());
+        assertEquals(1, won.stream().filter(Boolean::booleanValue).count());
+    }
+}
+```
+
+Behaviour:
+
+- The contender function receives its index, from 0 to `contenders - 1`. Results come back in index order, whatever order the contenders finish in.
+- A contender that throws fails the race with an `ExecutionException` whose cause is what it threw. `IntFunction` cannot throw a checked exception, so a contender wraps one in an unchecked exception.
+- The threads belong to the call: any that still run when it returns or throws are interrupted.
+- The race throws `IllegalStateException` when the contenders have not all started after 10 seconds, `TimeoutException` when a contender has no result 30 seconds after the ones before it gave theirs, and `InterruptedException` when the calling thread is interrupted while it waits.
+- Zero contenders give an empty list and never call the function. A negative number throws `IllegalArgumentException`.
+
+## SimulatedClasspath
+
+Class loaders on which chosen classes are present without their library, or absent although their library is on the classpath. Use them to test the code that detects an optional integration: the branch where the API is missing and the branch where it is present.
+
+| Member | What it gives |
+|---|---|
+| `with(String... classNames)` | A new loader on which every named class is found. A name the parent knows loads the real class; a listed name it does not know loads as a class with no fields, methods or constructors. Any other unknown name is not found. |
+| `hiding(String ownPrefix, String... hiddenPrefixes)` | A new loader that defines its own copy of the classes below `ownPrefix` and on which the classes below each hidden prefix are absent. |
+
+Names are binary class names, as `Class.forName(String)` takes them. The parent of both loaders is the class loader of `SimulatedClasspath`.
+
+```java title="SimulatedClasspathExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.test.SimulatedClasspath;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class SimulatedClasspathExampleTest {
+
+    private static final String API = "com.example.economy.EconomyApi";
+
+    @Test
+    void aNamedClassIsPresentWithoutItsLibrary() throws Exception {
+        ClassLoader loader = SimulatedClasspath.with(API);
+
+        Class<?> api = Class.forName(API, false, loader);
+
+        assertEquals(0, api.getDeclaredMethods().length);
+        assertThrows(ClassNotFoundException.class,
+            () -> Class.forName(API, false, SimulatedClasspath.with()));
+    }
+
+    @Test
+    void theHookReportsPlaceholderApiAbsent() throws Exception {
+        ClassLoader loader = SimulatedClasspath.hiding("com.example.myplugin.hook.", "me.clip.placeholderapi.");
+
+        Class<?> hooks = Class.forName("com.example.myplugin.hook.Hooks", true, loader);
+        boolean present = (boolean) hooks.getMethod("placeholderApiPresent").invoke(null);
+
+        assertFalse(present);
+    }
+}
+```
+
+In the second test, `com.example.myplugin.hook.Hooks` stands for a class of the plugin with a public static `placeholderApiPresent()` method. The copy runs with the PlaceholderAPI packages absent, whether or not the PlaceholderAPI jar is on the test classpath.
+
+Behaviour of `hiding`:
+
+- A name below a hidden prefix is not found, even when it is also below `ownPrefix`.
+- A name below `ownPrefix` is defined by the new loader from the class file its parent finds as a resource, so the copy resolves every class it names through the new loader. A class it names below a hidden prefix fails with a `NoClassDefFoundError` when it is resolved, which is the failure an optional dependency causes on a real server. A name below `ownPrefix` with no class file is not found.
+- Every other name loads through the parent, so the copy shares those classes (Paper, Taffy, the JDK) with the test.
+- The test reaches the copy through reflection: a class the test names directly is the parent's original, not the copy.
+- Each copy keeps the code source its class file was found in, so a coverage agent such as JaCoCo counts what a copy runs toward the original class.
+- A blank `ownPrefix` or hidden prefix throws `IllegalArgumentException`; a `null` one throws `NullPointerException`.
+
+## ApiRules
+
+`ApiRules` holds the checks every Taffy module runs over itself in its `PublicApiRulesTest`: what a public signature may name, which static fields are forbidden, and that the jar ships no resource files. It serves Taffy modules only.
+
+<Callout type="warn" title="Taffy modules only">
+An anchor whose package is not `so.alaz.taffy` or one of its subpackages fails every check with an `IllegalArgumentException`, so a scan of a plugin's own classes cannot pass by finding nothing. A plugin's classes are not checked with `ApiRules`.
+</Callout>
+
+| Method | Returns |
+|---|---|
+| `classes(Class<?> anchor)` | `List<Class<?>>`: the module's classes, nested and non-public ones included, in the order of their class file paths. Loaded with the anchor's class loader and not initialized. |
+| `signatureViolations(Class<?> anchor)` | `Set<String>`: one line per type from outside the allowed packages that a public or protected signature names. Empty means the rule holds. |
+| `staticHolderViolations(Class<?> anchor)` | `Set<String>`: one line per static field, of any visibility, whose type names a `Plugin`, `Logger`, `Executor` or `Thread`. |
+| `resourceFiles(Class<?> anchor)` | `List<String>`: the files of the output that are neither class files nor `META-INF/MANIFEST.MF` or `META-INF/LICENSE`. |
+
+`classes`, `signatureViolations` and `staticHolderViolations` declare `IOException` and `ClassNotFoundException` (a class of the output that the anchor's class loader does not find); `resourceFiles` declares `IOException`.
+
+A module's rules test has this shape. Here it is written with JUnit assertions, in the package of `taffy-test`, with `CapturedLog` as the anchor. The `scanFindsTheModuleClasses` test of each Taffy module also requires every scanned class to be in the test's own package, so an anchor taken from another module fails there.
+
+```java title="PublicApiRulesTest.java"
+package so.alaz.taffy.test;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class PublicApiRulesTest {
+
+    @Test
+    void scanFindsTheModuleClasses() throws Exception {
+        List<Class<?>> classes = ApiRules.classes(CapturedLog.class);
+
+        assertTrue(classes.contains(CapturedLog.class));
+        assertTrue(classes.stream().allMatch(type -> type.getPackageName().startsWith(getClass().getPackageName())));
+    }
+
+    @Test
+    void publicSignaturesNameOnlyAllowedTypes() throws Exception {
+        assertEquals(Set.of(), ApiRules.signatureViolations(CapturedLog.class));
+    }
+
+    @Test
+    void noStaticFieldHoldsAPluginLoggerExecutorOrThread() throws Exception {
+        assertEquals(Set.of(), ApiRules.staticHolderViolations(CapturedLog.class));
+    }
+
+    @Test
+    void mainOutputHoldsNoResourceFiles() throws Exception {
+        assertEquals(List.of(), ApiRules.resourceFiles(CapturedLog.class));
+    }
+}
+```
+
+What the checks read:
+
+- The anchor is any class of the module's main source set. The output is found through the anchor's code source: the jar it was loaded from, or its classes directory. Beside a classes directory `classes/java/main`, the directory `resources/main` belongs to the output when it exists. The module's classes are the class files below `so/alaz/taffy`.
+- The allowed packages are `java`, `javax`, `org.bukkit`, `io.papermc`, `com.destroystokyo.paper`, `net.kyori`, `org.jetbrains.annotations` and `so.alaz.taffy`, each with its subpackages. When the anchor and the checked class are both in `so.alaz.taffy.comficonf` itself, `com.comficonf.api` is allowed too.
+- A class is checked when it and its enclosing classes are public or protected, together with the module superclasses it inherits members from. Its signatures are its type parameters, supertypes, record components, public and protected fields, and the type parameters, parameters, exceptions and return types of its public and protected constructors and methods.
+- A field names a type when it is that type or a subtype, an array of it, or a generic type with it as a type argument or bound.
+- A class whose members cannot be read, because one names a type that is not on the test classpath, gives a line of its own. A module class whose supertype the anchor's loader does not find cannot be loaded, so each check that loads the classes (all but `resourceFiles`) fails with a `NoClassDefFoundError`.
+- An anchor with no code source, which is every JDK class, fails each check with a `NullPointerException`.
+- `ApiRules` names `org.bukkit.plugin.Plugin`, so its caller needs paper-api on the test runtime classpath.
+- The wording of a violation line is not part of the API; assert that the set is empty.
+
+## Related pages
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" />
+  <Card title="Gradle plugins" href="/docs/gradle-plugins" />
+  <Card title="taffy-storage" href="/docs/modules/storage" />
+  <Card title="taffy-platform" href="/docs/modules/platform" />
+</Cards>

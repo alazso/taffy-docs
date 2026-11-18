@@ -1,0 +1,525 @@
+---
+title: taffy-config
+description: Strict YAML loading, typed reading that reports every problem at once, and a reload that never replaces working settings with broken ones.
+---
+
+`taffy-config` turns a plugin's YAML files into an immutable settings object. It gives the plugin:
+
+- `ConfigLoader`, which writes the `config.yml` shipped in the jar on first start and upgrades an older file to the shipped layout, keeping the owner's values and comments.
+- `ConfigReader`, which reads typed values and reports every value it cannot use in one pass, with lines written for the server owner.
+- `ConfigHolder`, which holds the settings in effect and replaces them on a reload only when the new ones load.
+- `RestartKeys`, which names the settings a reload changed that take effect only after a restart.
+- `YamlFolder`, which reads a folder in which each `.yml` file is one entry (one kit, one menu) and reports a bad file without stopping the others.
+- `StrictYaml`, the one way a file becomes a `YamlConfiguration`: a file that is missing, not UTF-8 or not valid YAML fails instead of reading as empty.
+- `ConfigLoadException`, the one checked exception of the module, whose message is written for the server owner.
+
+All classes are in the package `so.alaz.taffy.config`. No class takes a `Plugin`, keeps a thread or calls `JavaPlugin.getConfig` or `reloadConfig`. A logger is used only where the plugin passes one in.
+
+## Setup
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.config)
+}
+```
+
+The module is published as `so.alaz.taffy:taffy-config` and is `alaz.taffy.config` in the catalog. It depends on `taffy-platform` as an `api` dependency, so `Durations`, `Colors` and the other parsers come with it. The Paper API (and the SnakeYAML inside it) is `compileOnly`: the server provides `YamlConfiguration`. `so.alaz.taffy.paper-plugin` shades the module and relocates it under `<group>.libs.taffy.config`. See [Getting started](/docs/getting-started) for the settings plugin and repositories.
+
+## The settings model
+
+The module has no base type for settings. A plugin writes its settings as an immutable record with a static `read` factory that takes a `ConfigReader`:
+
+- Each component is read with one reader call, and its default is a constant of the record passed as the fallback of that call.
+- A value that depends on the running server, such as a world name, is checked through a predicate passed to the factory, so the factory runs without a server and can be unit tested.
+- After the factory returns, `ConfigReader.errors()` says whether the settings can be used.
+- The record is held in a `ConfigHolder`, whose loader loads the file, reads the record and checks the errors. Settings that take effect only after a restart are read from `ConfigHolder.startup()`, and `RestartKeys.changed` names the ones the owner changed. The holder keeps only the record, so a record that needs this keeps the `ConfigurationSection` it was read from as a component, taken from `ConfigReader.root()`.
+- A value whose form a parser in `so.alaz.taffy.platform` checks, such as a duration, a colour or an expiry, is read with the `parsed` overload that takes a fallback text, with the parser's `EXPECTED` text as the expected form and the fallback written as the owner would write it. A date with a time has to be written in quotes.
+
+```yaml title="src/main/resources/config.yml"
+config-version: 1
+
+storage:
+  # The table the homes are kept in.
+  table: homes
+
+max-homes: 3
+teleport-delay: 3s
+particle-color: aqua
+mode: normal
+worlds:
+  - world
+```
+
+```java title="Settings.java"
+import org.bukkit.Color;
+import org.bukkit.configuration.ConfigurationSection;
+import so.alaz.taffy.config.ConfigReader;
+import so.alaz.taffy.platform.Colors;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Predicate;
+
+public record Settings(
+    ConfigurationSection source,
+    String table,
+    int maxHomes,
+    Duration teleportDelay,
+    Color particleColor,
+    Mode mode,
+    List<String> worlds) {
+
+    public enum Mode { NORMAL, STRICT }
+
+    static final int MAX_HOMES = 3;
+    static final Duration TELEPORT_DELAY = Duration.ofSeconds(3);
+    static final Color PARTICLE_COLOR = Color.AQUA;
+    static final Mode MODE = Mode.NORMAL;
+    static final List<String> WORLDS = List.of("world");
+
+    public static Settings read(ConfigReader reader, Predicate<String> worldExists) {
+        List<String> worlds = reader.strings("worlds", WORLDS);
+        for (String world : worlds) {
+            if (!worldExists.test(world)) {
+                reader.error("worlds has " + ConfigReader.describe(world) + ", which is not a loaded world.");
+            }
+        }
+        return new Settings(
+            reader.root(),
+            Objects.requireNonNullElse(reader.requiredText("storage.table", "set it to the name of the table"), ""),
+            reader.integer("max-homes", MAX_HOMES, 0, 100),
+            reader.duration("teleport-delay", TELEPORT_DELAY, Duration.ZERO, Duration.ofMinutes(1)),
+            reader.parsed("particle-color", PARTICLE_COLOR, "aqua", Colors.EXPECTED, Colors::parse),
+            reader.choice("mode", MODE),
+            worlds);
+    }
+}
+```
+
+The record keeps the section it was read from (`source`) only because `RestartKeys` needs it; a plugin without restart-only settings leaves it out.
+
+## Loading and reloading
+
+```java title="MyPlugin.java"
+import org.bukkit.plugin.java.JavaPlugin;
+import so.alaz.taffy.config.ConfigHolder;
+import so.alaz.taffy.config.ConfigLoadException;
+import so.alaz.taffy.config.ConfigLoader;
+import so.alaz.taffy.config.ConfigReader;
+
+import java.util.List;
+
+public final class MyPlugin extends JavaPlugin {
+
+    private ConfigHolder<Settings> settings;
+
+    @Override
+    public void onEnable() {
+        ConfigLoader files = new ConfigLoader(
+            getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger());
+        try {
+            settings = ConfigHolder.load(() -> loadSettings(files), getLogger()::warning);
+        } catch (ConfigLoadException failure) {
+            getLogger().severe("The settings could not be loaded: " + failure.getMessage());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        // settings.get() is now the record in effect.
+    }
+
+    private Settings loadSettings(ConfigLoader files) throws ConfigLoadException {
+        ConfigReader reader = new ConfigReader(files.load(), getLogger()::warning);
+        Settings loaded = Settings.read(reader, name -> getServer().getWorld(name) != null);
+        List<String> errors = reader.errors();
+        if (!errors.isEmpty()) {
+            errors.forEach(getLogger()::severe);
+            throw new ConfigLoadException(ConfigLoader.FILE_NAME + " has " + errors.size() + " errors, listed above");
+        }
+        return loaded;
+    }
+
+    public boolean reloadSettings() {
+        return settings.reload();
+    }
+}
+```
+
+When the reader has errors, the loader logs each error line and throws a `ConfigLoadException` with a one-line summary. At startup the exception stops the start. On a reload the holder keeps the settings in effect and passes its failure line to the consumer given to `ConfigHolder.load`. The owner sees every error line, then one line that says what happened. The loader, the reader's warning consumer and the failure consumer are all fixed when the holder is built, so a reload reports to the same place every time and its caller learns only whether it succeeded.
+
+A reload of a data folder without `config.yml` writes the shipped file and succeeds, so the shipped defaults take effect.
+
+### Keeping warnings out of a failed load
+
+The reader passes each warning on as soon as it finds it, so a warning that names a fallback as used can come before the load fails. When it fails, the holder's line says that no value read by that reload is used. A loader that keeps such warnings out of a failed load collects them and logs them only when there are no errors:
+
+```java
+private Settings loadSettings(ConfigLoader files) throws ConfigLoadException {
+    List<String> warnings = new ArrayList<>();
+    ConfigReader reader = new ConfigReader(files.load(), warnings::add);
+    Settings loaded = Settings.read(reader, name -> getServer().getWorld(name) != null);
+    List<String> errors = reader.errors();
+    if (!errors.isEmpty()) {
+        errors.forEach(getLogger()::severe);
+        throw new ConfigLoadException(ConfigLoader.FILE_NAME + " has " + errors.size() + " errors, listed above");
+    }
+    warnings.forEach(getLogger()::warning);
+    return loaded;
+}
+```
+
+### Unknown keys
+
+`ConfigReader.unreadKeys()` lists the leaf keys no call read, in file order. A plugin that warns about them leaves out `ConfigLoader.VERSION_KEY`, which the loader keeps in every file:
+
+```java
+reader.unreadKeys().stream()
+    .filter(path -> !path.equals(ConfigLoader.VERSION_KEY))
+    .forEach(path -> getLogger().warning(path + " is not a setting this version reads, so it is ignored."));
+```
+
+Only the path a method is called with is recorded. The leaves beneath a group read whole through `value` or `children` are listed as unread, and a plugin that reads a group that way leaves those paths out itself.
+
+## ConfigLoader
+
+`new ConfigLoader(Path dataFolder, Supplier<@Nullable InputStream> shipped, Logger logger)` loads `config.yml` (`ConfigLoader.FILE_NAME`) from `dataFolder`. `shipped` opens the `config.yml` inside the jar, or gives `null` when the jar has none; it is asked on every load and the loader closes the stream. The data folder is created when the file is first written.
+
+`load()` returns a new `YamlConfiguration` with the file's comments kept, and blocks the calling thread for the file I/O. The shipped file carries its layout version as a whole number under `config-version` (`ConfigLoader.VERSION_KEY`). In the owner's file the version may also be written as text. A file with no such key, or a value that is neither a number nor text holding a whole number of at most nine digits, counts as version 0. In both files a number is read as an `int`: a decimal number counts as its whole part, and a number above 2147483647 is not supported.
+
+| The owner's file | What `load()` does |
+|---|---|
+| Absent | Writes the shipped text byte for byte, logs that it wrote the default file and loads it. |
+| Older version | Adds every shipped key the file lacks, with its comments, sets the version to the shipped one, copies the previous file to `config.yml.v<N>.bak` (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs the keys it added. |
+| Same version | Reads the file as it is, even when a shipped key is missing. |
+| Newer version | Reads the file as it is and logs a warning. Nothing is changed. |
+
+During an upgrade the owner's keys and values are kept, unknown keys included. A shipped key is not added beneath a path where the owner's file holds a plain value. The save writes the file anew from the parsed settings, so its formatting can change and a comment inside a list is not written back; the `.bak` copy holds the file exactly as it was. YAML drops a key whose value is empty or null while it parses, so such a key counts as missing: it gets the shipped value and comments when the shipped file has the key, and is left out of the saved file otherwise.
+
+When the copy or the save of an upgrade fails, a warning is logged, the file stays as the owner left it and the upgraded settings are returned, so the next load tries the upgrade again.
+
+The save goes through a temporary file in the same folder, `config.yml.tmp`, that is flushed to the device and then replaces the target. A save follows a symbolic link to the file it names (the temporary file is then the linked file's name followed by `.tmp`) and keeps the file's POSIX permissions where the file system has them. A leftover temporary file from a write that was cut off is removed by the next load.
+
+### Owner-keyed sections
+
+Some sections hold entries the owner names, such as a list of kits. Without help, an upgrade adds back a shipped entry the owner renamed or removed. The four-argument constructor takes those sections as full dotted paths, each with the keys under it that are not entries:
+
+```yaml title="config.yml (shipped)"
+config-version: 2
+kits:
+  default: starter
+  starter:
+    cooldown: 1h
+    icon: GOLD_INGOT
+```
+
+```java
+ConfigLoader files = new ConfigLoader(
+    getDataPath(),
+    () -> getResource(ConfigLoader.FILE_NAME),
+    getLogger(),
+    Map.of("kits", Set.of("default")));
+```
+
+When the owner's file already holds `kits` with at least one key, a shipped entry the owner does not have (`starter`) is not added, while the fixed key `default` still is, and missing keys inside an entry the owner kept are added. An empty section (`kits: {}`) gets the shipped entries, and so does a file without the section. No listed section may lie inside another listed section. The map and its sets are copied.
+
+### Failures
+
+`load()` throws `ConfigLoadException` when the shipped file is absent, unreadable, not UTF-8 or not valid YAML, when the owner's file cannot be read, is not UTF-8 or is not valid YAML, or when a missing file cannot be written. An existing file is not changed in any of these cases. The loader holds no state between loads, and calls to `load()` must not overlap; `ConfigHolder.reload()` never overlaps, so a loader used only through a holder keeps to that.
+
+## ConfigReader
+
+`new ConfigReader(ConfigurationSection root, Consumer<String> warnings)` reads paths relative to `root`. Paths are dotted, such as `storage.table`. One instance serves one load of one configuration and is not thread-safe.
+
+Problems come in two tiers, and no method throws for a value it cannot use:
+
+- A **warning** goes to the consumer at once, on the calling thread. The value is replaced with the fallback of the call and reading goes on.
+- An **error** is collected and returned by `errors()`, an unmodifiable copy in the order the errors were added. The caller decides what a configuration with errors means.
+
+A key that is absent gives the fallback with no warning. A single value is a text, a number, `true`/`false` or a date.
+
+### Typed readers
+
+| Method | Accepts | Otherwise |
+|---|---|---|
+| `int integer(String path, int fallback)` | A value YAML reads as an `int` | Warning, fallback |
+| `int integer(String path, int fallback, int min, int max)` | As above, from `min` to `max` inclusive | Warning, fallback |
+| `long whole(String path, long fallback)` | An `int` or a `long` | Warning, fallback |
+| `double decimal(String path, double fallback)` | Any finite number, whole numbers included | Warning, fallback (`.inf` and `.nan` included) |
+| `boolean bool(String path, boolean fallback)` | A value YAML reads as a boolean | Warning, fallback |
+| `<E extends Enum<E>> E choice(String path, E fallback)` | The name of a constant of the fallback's enum, trimmed, in any letter case | Warning, fallback |
+| `@Nullable Integer optionalInteger(String path, String fallbackText)` | An `int`; absent gives `null` | Warning naming `fallbackText`, `null` |
+| `Duration duration(String path, Duration fallback)` | The form of `Durations.parseOrNull`, such as `30s` | Warning, fallback |
+| `Duration duration(String path, Duration fallback, Duration min, Duration max)` | As above, from `min` to `max` inclusive | Warning, fallback |
+| `List<Duration> durations(String path, List<Duration> fallback)` | A non-empty list in which every entry is a duration | One warning, the whole fallback |
+| `List<String> strings(String path, List<String> fallback)` | A list, empty included; each single value as text | Bad entries skipped with a warning each; not a list gives a warning and the fallback |
+| `<T> T parsed(String path, T fallback, String expected, Function<String, T> parser)` | A single value `parser` accepts | Warning, fallback |
+| `<T> T parsed(String path, T fallback, String fallbackText, String expected, Function<String, T> parser)` | As above; warnings name `fallbackText` | Warning, fallback |
+
+The range overloads of `integer` and `duration` throw `IllegalArgumentException` when `min` is greater than `max` or the fallback lies outside them. A value outside the range gives the warning `<path> is <value>; expected <min> to <max>, so <fallback> is used.`
+
+`choice` matches with `Locale.ROOT`, so the result does not depend on the server's locale. A hyphen does not stand for an underscore. The constants are listed in lower case and in declaration order in the warning.
+
+`durations` and `strings` return an unmodifiable list, or the fallback itself.
+
+`parsed` hands the parser the text form of the value. The parser rejects it by throwing `IllegalArgumentException`, whose message is not shown. It is not called for a list or a group of keys. The four-argument form writes the fallback with `String.valueOf`, so `T` needs a `toString` an owner can read; for a type such as `org.bukkit.Color`, the five-argument form takes the fallback as the owner would write it. With a parser from `taffy-platform`, pass the parser's `EXPECTED` constant (`Durations.EXPECTED`, `Colors.EXPECTED`, `Expiry.EXPECTED`) as `expected`.
+
+### Text readers
+
+| Method | Absent key | Blank text | A list or a group of keys | Other problems |
+|---|---|---|---|---|
+| `String text(String path, String fallback)` | `fallback` | Returned as it is | Warning, `fallback` | |
+| `String quoted(String path, String fallback)` | `fallback` | Returned as it is | Warning, `fallback` | A number, a date or `true`/`false` adds an error and gives `fallback` |
+| `@Nullable String strictText(String path, @Nullable String fallback, String expected)` | `fallback` | Returned as it is | Error, `null` | |
+| `@Nullable String requiredText(String path, String fix)` | Error, `null` | Error, `null` | Error, `null` | |
+
+A number and `true`/`false` read as their text form in `text`, `strictText` and `requiredText`. `quoted` is for values that must be written in quotes, such as a code like `0451`, which YAML reads as a number.
+
+`fix` in `requiredText` is what the owner has to do, without a full stop: the error is `<path> is missing; <fix>.` for an absent key and `<path> is <value>; <fix>.` otherwise.
+
+### Blank values
+
+A blank text (empty or only whitespace) reads as an absent key in `integer`, `optionalInteger`, `whole`, `decimal`, `bool`, `duration`, `durations`, `strings`, `parsed` and `choice`: it gives the fallback with no warning. `text`, `quoted` and `strictText` return a blank text as it is, and `requiredText` reports it as an error.
+
+### Dates
+
+YAML reads an unquoted `2026-12-31` as a date at midnight UTC, and an unquoted date with a time as an instant in UTC whether the text names a zone or not. The reader handles both:
+
+- Every reader that gives text reads an unquoted date as text written `yyyy-MM-dd`, and `parsed` hands it to the parser that way.
+- An unquoted date with a time makes `text` and `parsed` warn and use the fallback, makes `strings` skip the entry with a warning, and makes `requiredText` and `strictText` add an error. The line asks the owner to write the value in quotes.
+- `quoted` adds its error for any unquoted date.
+- An unquoted date and time whose offset brings it to midnight UTC, such as `2026-12-31T19:00:00-05:00`, cannot be told apart from a date: `text`, `strings`, `requiredText`, `strictText` and `parsed` read it as the UTC date, `2027-01-01`, with no warning.
+
+A value with a time, such as an expiry read through `Expiry`, has to be written in quotes in the file.
+
+### Structure and bookkeeping
+
+| Method | What it does |
+|---|---|
+| `Set<String> children(String path)` | The keys directly beneath the group at `path`, in file order. Absent gives an empty set; a plain value gives an empty set and a warning. |
+| `boolean absentOrSection(String path)` | Whether `path` is absent or holds a group of keys. |
+| `boolean isSection(String path)` | Whether `path` holds a group of keys. |
+| `@Nullable Object value(String path)` | The raw value: a `ConfigurationSection`, a `List`, the single value, or `null`. |
+| `ConfigurationSection root()` | The section given to the constructor. Nothing is recorded as read. |
+| `void warn(String message)` | Passes a line of the plugin's own to the warning consumer. |
+| `void error(String message)` | Adds a line of the plugin's own to `errors()`. |
+| `List<String> errors()` | The errors collected so far. |
+| `Set<String> readPaths()` | Every path a method was called with, each once, in order of first read, whether or not the key exists. An unmodifiable view that follows later reads. |
+| `List<String> unreadKeys()` | The leaf keys of the root not in `readPaths()`, in file order. A list is one leaf. |
+| `static String describe(@Nullable Object value)` | How warnings and errors write a value. |
+
+`describe` writes a group of keys as `a group of keys`, a text in double quotes, a date in UTC as `2026-12-31` at midnight and as `2026-12-31T23:59:59Z` otherwise, and anything else as `String.valueOf` writes it. A text longer than 100 characters is written as its first 100 characters in double quotes followed by `...`. Any other value whose written form is longer than 100 characters is written as `a list of <n> entries` (or `a list of 1 entry`), `a group of <n> keys` (or `a group of 1 key`) for a map, or its first 100 characters followed by `...`.
+
+<Callout type="warn" title="Refused values reach the log">
+A warning names the value it refuses, cut to 100 characters. Part of a mistyped secret, such as a database password written as a list, can therefore reach the log.
+</Callout>
+
+## The lines an owner sees
+
+Every warning and error line of `ConfigReader` names the path first and is a full sentence without the plugin's name, which the logger adds. The shapes:
+
+| Situation | Line |
+|---|---|
+| A value is replaced | `<path> is <value>; expected <what>, so <fallback> is used.` |
+| A value is outside a range | `<path> is <value>; expected <min> to <max>, so <fallback> is used.` |
+| A list entry is dropped | `<path> has <entry>, which is not a single value, so it is skipped.` |
+| A value where a group of keys belongs | `<path> should hold keys beneath it, so its value is ignored.` |
+| A required text is absent | `<path> is missing; <fix>.` |
+| A required text is blank, a list or a group | `<path> is <value>; <fix>.` |
+| A strict text is a list or a group | `<path> is <value>; expected <expected>.` |
+| A date with a time is unquoted (`requiredText`, `strictText`) | `<path> must be in quotes, because YAML reads a date and time written without them in UTC.` |
+| A date with a time is unquoted (`text`, `parsed`) | `<path> must be in quotes, because YAML reads a date and time written without them in UTC, so <fallback> is used.` |
+| A list entry is an unquoted date with a time (`strings`) | `<path> has <entry>, which must be in quotes, because YAML reads a date and time written without them in UTC, so it is skipped.` |
+| A quoted value is unquoted | `<path> must be in quotes, because YAML changes an unquoted value it reads as a number, a date or true/false.` |
+
+With the settings above, an owner who writes `max-homes: five`, `teleport-delay: soon` and `particle-color: pink` sees:
+
+```text
+max-homes is "five"; expected a whole number, so 3 is used.
+teleport-delay is "soon"; expected a whole number followed by ms, s, m, h or d (for example 30s), so 3s is used.
+particle-color is "pink"; expected a named color, "#RRGGBB" hex in quotes or r,g,b, so aqua is used.
+```
+
+`choice` adds a hint when YAML turned the value into `true` or `false` and a constant has a name YAML reads as that value (`yes`, `no`, `on`, `off`, `true` or `false`). For an enum `Switch { ON, OFF, AUTO }` with fallback `AUTO`, an unquoted `toggle: on` gives:
+
+```text
+toggle is true; expected on, off or auto, so auto is used. YAML reads an unquoted yes, no, on or off as true or false, so write the value in quotes, for example "on".
+```
+
+The message of a `ConfigLoadException` is a clause without a full stop, such as `config.yml is not saved as UTF-8`, written to follow a lead-in. `ConfigHolder.reload()` puts its own lead-in before it; a plugin that logs the failure of the first load gives one too, as `onEnable` above does. Every error line of a `YamlFolder` names its file.
+
+The log lines `ConfigLoader` writes for a default file, an upgrade, a failed save and a newer file are worded for the owner and can change in any release. Code branches on exception types and return values, never on a message.
+
+## ConfigHolder
+
+`ConfigHolder<T>` implements `Supplier<T>`.
+
+| Member | What it does |
+|---|---|
+| `static <T> ConfigHolder<T> load(ConfigHolder.Loader<T> loader, Consumer<String> failures)` | Runs the first load and returns a holder of its settings. Throws the loader's `ConfigLoadException` as it was thrown, without passing it to `failures`. |
+| `T get()` | The settings in effect: those of the first load, or of the last reload that succeeded. |
+| `T startup()` | The settings of the first load, which never change. |
+| `boolean reload()` | Runs the loader again and returns `true` when the new settings are in effect. |
+
+`ConfigHolder.Loader<T>` is a functional interface with one method, `T load() throws ConfigLoadException`, which must not return `null`.
+
+When the loader throws `ConfigLoadException` during `reload()`, the settings in effect stay, `false` is returned and the failure consumer receives:
+
+```text
+The reload failed, so the settings in effect stay active and no value read by this reload is used: <message>
+```
+
+A `RuntimeException` from the loader is thrown on to the caller of `reload()` and also keeps the settings in effect. A loader that returns `null` throws `NullPointerException` with the message `the loader returned null`, at the first load and on a reload, and the settings in effect stay. A value the reader replaced with its fallback and a warning does not fail a reload: the new settings hold the fallback.
+
+`holder::reload` serves as a `BooleanSupplier` and as a `Callable<Boolean>`, the form `YamlFileProvider.builder` in [taffy-comficonf](/docs/modules/comficonf) takes for the plugin's reload. The failure consumer receives its line on the thread that called `reload()`.
+
+### Threads
+
+The loader runs on the thread that calls `load` or `reload()` and blocks it while it reads files. Reloads never overlap: a call waits while another one runs. `get()` may be called from any thread. The settings are handed out as they are, so `T` should be immutable, such as a record.
+
+## RestartKeys
+
+Settings that take effect only after a restart, such as the storage backend, are read from `startup()`. After a reload, `RestartKeys.changed(ConfigurationSection before, ConfigurationSection after, Predicate<String> restartOnly)` names the restart-only paths whose value differs, sorted:
+
+```java
+public boolean reloadSettings(CommandSender sender) {
+    if (!settings.reload()) {
+        sender.sendMessage("The reload failed. The console lists why.");
+        return false;
+    }
+    List<String> waiting = RestartKeys.changed(
+        settings.startup().source(), settings.get().source(), path -> path.startsWith("storage."));
+    if (!waiting.isEmpty()) {
+        sender.sendMessage("Takes effect after a restart: " + String.join(", ", waiting));
+    }
+    return true;
+}
+```
+
+- `restartOnly` is asked about every path of both configurations that holds a value. A path is dotted and relative to the section passed, such as `storage.type` when the root is passed. It is never asked about a path that holds a section, so a section present in both is not reported: the keys beneath it are.
+- Values compare with `Objects.equals`, which makes a list one value. A value only one of the two has is reported; an empty section is not.
+- `before` is the configuration loaded at startup, not the one from the previous reload. A key set back to its startup value is no longer reported, and a second reload of an unchanged file reports what the first one did.
+- Values are read with `ConfigurationSection.get(String)`. The configurations `StrictYaml` and `ConfigLoader` return have no defaults attached, so a removed key is always seen as removed.
+
+## YamlFolder
+
+`new YamlFolder(Path folder)` reads the files directly inside `folder`. A file counts when its name ends in `.yml` in any letter case with at least one character before it; its id is the name without those four characters, in the letter case the file has. Subfolders are not read.
+
+```java
+record Kit(String id, Duration cooldown, List<String> items) {
+}
+
+Map<String, Kit> loadKits() throws ConfigLoadException {
+    YamlFolder folder = new YamlFolder(getDataPath().resolve("kits"));
+    YamlFolder.Loaded<Kit> loaded = folder.load((id, fileName, yaml) -> {
+        ConfigReader reader = new ConfigReader(yaml, line -> getLogger().warning(fileName + ": " + line));
+        Kit kit = new Kit(id, reader.duration("cooldown", Duration.ofHours(1)), reader.strings("items", List.of()));
+        if (!reader.errors().isEmpty()) {
+            throw new ConfigLoadException(String.join(" ", reader.errors()));
+        }
+        return kit;
+    });
+    loaded.errors().forEach(getLogger()::warning);
+    return loaded.entries();
+}
+```
+
+`YamlFolder.Parser<T>` is a functional interface: `T parse(String id, String fileName, YamlConfiguration yaml) throws ConfigLoadException`, never returning `null`. A parser that reads through a `ConfigReader` puts the file name and `": "` before each warning, as above, so every warning names its file as the error lines do. When the reader has errors, it throws `ConfigLoadException` with the error lines joined by a space, which becomes the one line of that file.
+
+`YamlFolder.Loaded<T>` is a record of `Map<String, T> entries()` (by id, in file name order) and `List<String> errors()` (one line per failed file, in file name order). Both are unmodifiable copies.
+
+### load and loadOne
+
+`load(Parser<T> parser)` reads every file in the order `String.compareTo` sorts their names. When two names give the same id, as `kit.yml` and `kit.YML` can on a case-sensitive file system, the entry read later replaces the earlier one. A folder that does not exist or is not a directory gives an empty `Loaded`. When the folder cannot be listed, `load` throws `ConfigLoadException` with the message `cannot read the folder <path>: <exception class> <message>` and no file has been read.
+
+`loadOne(String id, Parser<T> parser)` reads only `<id>.yml`, with the suffix in lower case, and returns a `Loaded` holding the entry or the error line. It returns `null` when `id` is empty, `.` or `..`, when it is not a plain file name, or when the folder holds no regular file by that name. The entry is keyed by `id` as given: on a file system that ignores letter case, such as those of Windows and macOS, `id` can match a file whose name has another letter case.
+
+A file that fails adds one line to `errors()` and the other files still load:
+
+| Failure | Line |
+|---|---|
+| The file cannot be read or parsed | The `StrictYaml.read` message, which names the file |
+| The parser throws `ConfigLoadException` | `<file name>: <message>` |
+| The read or the parser throws another `RuntimeException` | `<file name>: <exception class> <message>` |
+| The parser returns `null` | `<file name>: NullPointerException the parser returned null` |
+
+`load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. The folder is never written to and nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread.
+
+## StrictYaml
+
+`StrictYaml` never replaces a document it cannot use with an empty configuration. Both methods return a new `YamlConfiguration` with the document's comments kept, which is not thread-safe.
+
+- `static YamlConfiguration parse(String text, String source)` parses text. Empty text is an empty configuration.
+- `static YamlConfiguration read(Path file, String source)` reads a file as UTF-8 and parses it, blocking the calling thread.
+
+`source` names the document in the failure message, such as `config.yml` or `messages.yml`:
+
+```java
+YamlConfiguration messages = StrictYaml.read(getDataPath().resolve("messages.yml"), "messages.yml");
+```
+
+| Failure | `ConfigLoadException` message |
+|---|---|
+| Text the parser rejects | `<source> is not valid YAML: <problem> at line <n>, column <m>` (line and column from 1, when the parser gives a position) |
+| A top level that is not a mapping, or a second document | `<source> is not valid YAML: <reason>` |
+| An anchor used inside the value it names | `<source> is not valid YAML: an anchor is used inside the value it names` |
+| Aliases that repeat more than 100000 values | `<source> is not valid YAML: its aliases repeat more than 100000 values` |
+| Bytes that are not UTF-8 (`read`) | `<source> is not saved as UTF-8` |
+| A file larger than 16 MiB (`read`) | `<source> is larger than 16 MiB` |
+| Any other read failure, a missing file included (`read`) | `cannot read <path>: <exception class> <message>` |
+
+A parse error names a line and column, not the text of the line, though it can name a key or a character. A reason without a position is the parser's own message, which can quote a value. The exception for a parse error carries no cause.
+
+YAML details a plugin's users meet:
+
+- A key written twice in one mapping is not an error: the last one is kept. Where it holds a section, the keys of the earlier section are dropped.
+- A key that holds a dot is read as a path, so `"a.b": 1` sets `b` inside a section `a`.
+- An unquoted key `yes`, `no`, `on`, `off`, `true` or `false` becomes the key `true` or `false`, and an unquoted number key becomes the text of that number.
+- An unquoted `#` starts a comment, so a hex colour such as `"#ff0000"` has to be quoted; unquoted, the key reads as empty and gives the fallback with no warning.
+- The 16 MiB cap bounds the file size, not the parse time: one very long line can take SnakeYAML minutes to parse.
+
+## Testing settings
+
+`Settings.read` takes a `ConfigReader` and a predicate, so it runs in a plain JUnit test with the Paper API on the test classpath:
+
+```java
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.config.ConfigLoadException;
+import so.alaz.taffy.config.ConfigReader;
+import so.alaz.taffy.config.StrictYaml;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+final class SettingsTest {
+
+    @Test
+    void aWordForTheHomeLimitFallsBackToTheDefault() throws ConfigLoadException {
+        List<String> warnings = new ArrayList<>();
+        ConfigReader reader = new ConfigReader(
+            StrictYaml.parse("storage:\n  table: homes\nmax-homes: five\n", "config.yml"), warnings::add);
+
+        Settings settings = Settings.read(reader, world -> true);
+
+        assertEquals(3, settings.maxHomes());
+        assertEquals(List.of("max-homes is \"five\"; expected a whole number, so 3 is used."), warnings);
+        assertEquals(List.of(), reader.errors());
+    }
+}
+```
+
+[taffy-test](/docs/modules/test) has `CapturedLog`, whose public `logger` field is a `Logger` to pass to a `ConfigLoader` in a test and whose `records` field keeps what it logged. The wording of those lines is not part of the API.
+
+## Behaviour summary
+
+- **Threads:** no class keeps a thread. File reads and writes block the calling thread. `ConfigHolder.get()` and `YamlFolder` are safe from any thread; `ConfigReader` and the returned `YamlConfiguration` objects are not thread-safe; calls to one `ConfigLoader.load()` must not overlap.
+- **Failure handling:** `ConfigLoadException` is the only checked exception. A bad value is a warning with a fallback or a collected error, never an exception; the plugin's loader turns errors into a `ConfigLoadException`.
+- **Reloads:** a failed reload keeps the settings in effect and reports one line; a missing `config.yml` is written again and its defaults take effect.
+- **Not bundled:** the Paper API and SnakeYAML come from the server. `taffy-platform` comes with the module.
+- **Web editing:** [taffy-comficonf](/docs/modules/comficonf) builds on this module to let owners edit the same file in the ComfiConf editor.

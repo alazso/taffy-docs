@@ -1,0 +1,162 @@
+---
+title: Versions and compatibility
+description: How Taffy numbers its releases, what counts as a breaking change, where releases and snapshots are published, and which Java and Paper versions it targets.
+---
+
+Taffy has one version number for everything it publishes: the Gradle plugins, the `alaz` version catalog and the runtime modules. A plugin picks that version once, in `settings.gradle.kts`, and every Taffy artifact it uses follows.
+
+## One version for plugins, catalog and modules
+
+The version on `so.alaz.taffy.settings` decides the rest:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0"
+}
+```
+
+- `so.alaz.taffy.settings` applies `so.alaz.taffy.repositories` and creates the `alaz` catalog from `so.alaz.taffy:taffy-catalog` at the same version as the plugin itself.
+- The convention plugins (`so.alaz.taffy.paper-plugin`, `so.alaz.taffy.paper-api`, `so.alaz.taffy.library`, `so.alaz.taffy.coverage`, `so.alaz.taffy.java`) are applied in `build.gradle.kts` without a version and come from the same `so.alaz.taffy:taffy-gradle` release.
+- The catalog holds a `taffy` version and one library per module (`alaz.taffy.platform`, `alaz.taffy.test`, `alaz.taffy.config`, `alaz.taffy.storage`, `alaz.taffy.hooks`, `alaz.taffy.gui`, `alaz.taffy.metrics`, `alaz.taffy.comficonf`), each resolving at that `taffy` version.
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    implementation(alaz.taffy.config)
+    implementation(alaz.taffy.storage)
+}
+```
+
+Moving to another Taffy release is a change of that one version string. Declaring a module with its own coordinates and a different version mixes Taffy releases in one plugin; use the catalog aliases instead.
+
+`so.alaz.taffy.paper-plugin` relocates `so.alaz.taffy` to `<group>.libs.taffy`, where `<group>` is the plugin project's group, so each plugin carries its own copy of Taffy under its own package.
+
+## Version numbers
+
+Taffy follows [Semantic Versioning](https://semver.org), starting at `0.1.0`.
+
+| Release line | Breaking change | Addition | Fix |
+|---|---|---|---|
+| Before `1.0.0` | raises the minor version (`0.1.3` to `0.2.0`) | raises the patch version | raises the patch version |
+| From `1.0.0` | raises the major version | raises the minor version | raises the patch version |
+
+A breaking change removes or changes, incompatibly, any of:
+
+- a public type or member,
+- a Gradle plugin id,
+- a catalog alias,
+- documented behaviour.
+
+Before `1.0.0`, a patch upgrade (`0.1.0` to `0.1.1`) is safe to take without code changes, and a minor upgrade (`0.1.x` to `0.2.0`) can need them. Read the `Changed` and `Deprecated` groups of the [changelog](#reading-the-changelog) before a minor upgrade.
+
+### What is and is not a contract
+
+Log lines and exception messages are written for the server owner or for the developer reading the log, and their wording can change in any release. Only text that a Javadoc spells out is part of the API, such as:
+
+- the parser messages of `Durations`, `Colors` and `Expiry` and their public `EXPECTED` texts,
+- the `describe()` texts of `HookStatus` and `ComfiConfStatus`,
+- the warning and error shapes of `ConfigReader` and its `describe`,
+- the `StrictYaml` message shapes, such as `<source> is larger than 16 MiB` and `<source> is not valid YAML: <problem> at line <n>, column <m>`,
+- the clause form of the `ConfigLoadException` message (written for the server owner, with no full stop at the end, so it reads after a lead-in),
+- the `<red>missing:key` marker that `Messages` renders for a key no language file has.
+
+Plugin code branches on exception types, statuses and return values, never on a message. A test that pins one of Taffy's own log lines (for example through `CapturedLog`) can break on any upgrade.
+
+The conventions the Gradle plugins add are published behaviour: the `tr-TR` test locale and `Pacific/Auckland` test zone, the Mockito agent on test tasks, the javadoc flags `-Xdoclint:all,-missing` and `--no-fonts`, and the root project's `LICENSE` file, when it has one, in `META-INF`. A change to one is listed in the changelog as a change to plugin builds, and a plugin build meets it only when it moves to that Taffy version.
+
+## Deprecation and removal
+
+A public element is not removed without warning. Before the release that removes it, an earlier release:
+
+<Steps>
+<Step>
+Marks the element `@Deprecated(forRemoval = true)`, so the compiler warns at every use.
+</Step>
+<Step>
+Names the replacement in the element's Javadoc.
+</Step>
+<Step>
+Lists it under `### Deprecated` in the changelog.
+</Step>
+</Steps>
+
+`so.alaz.taffy.java` (applied through `so.alaz.taffy.paper-plugin`) compiles with `-Xlint:all,-processing,-serial`, which includes the deprecation and removal warnings, so a build lists every use of an element a later release removes.
+
+## Releases and snapshots
+
+| Kind | Version | Published to | When |
+|---|---|---|---|
+| Release | `0.1.0` | `https://repo.alaz.so/releases` | a `v<version>` tag, such as `v0.1.0` |
+| Snapshot | `0.1.0-SNAPSHOT` | `https://repo.alaz.so/snapshots` | every push to `main` that passes CI |
+
+- `main` carries the next version with the `-SNAPSHOT` suffix.
+- Each push to `main` builds and tests the repository, then publishes that snapshot. Snapshot artifacts change with every push.
+- A release commit drops the suffix and is tagged `v<version>`. The tag publishes the plugins, the catalog and every runtime module to the releases repository. The release build refuses a tag that does not match the version in `gradle.properties`.
+- The commit after a release sets the next `-SNAPSHOT` version.
+
+<Callout type="info" title="Taffy 0.1.0 is not published yet">
+Until the first release, build against a local publish as described in [Getting started](/docs/getting-started).
+</Callout>
+
+### Building against a snapshot
+
+`so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for dependencies, limited to snapshot versions in the `so.alaz` group and its subgroups, so the `alaz` catalog and the modules resolve at a snapshot version. The settings plugin itself resolves through `pluginManagement`, so add the snapshots repository there:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        maven("https://repo.alaz.so/snapshots")
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+}
+```
+
+A snapshot carries changes that the `[Unreleased]` section of the changelog describes, including breaking ones. Release a plugin against a release version, not a snapshot.
+
+## Java and Paper
+
+| Requirement | Value |
+|---|---|
+| Java | 25. `so.alaz.taffy.java` sets the Java 25 toolchain on each module that applies it, directly or through another Taffy convention plugin. |
+| Gradle's own JVM | Java 25, because the Taffy Gradle plugins are Java 25 class files. |
+| Server | Paper. `Scheduler` runs on Paper and on Folia. |
+| Paper API | `io.papermc.paper:paper-api` `26.1.2.build.66-stable`, the `paper` version of the `alaz` catalog (`alaz.paper.api`). |
+
+Gradle picks a Java 25 JVM whatever `JAVA_HOME` is when the plugin project holds this file:
+
+```properties title="gradle/gradle-daemon-jvm.properties"
+toolchainVersion=25
+```
+
+Taffy's modules compile against the same `paper-api` version the catalog pins, so a plugin compiles against `alaz.paper.api`:
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    compileOnly(alaz.paper.api)
+}
+```
+
+The catalog pins the versions of the rest of the stack the same way (HikariCP, the JDBC drivers, bStats, FastStats, the integration APIs, JUnit, AssertJ, Mockito), so a Taffy upgrade can also move those versions.
+
+## Reading the changelog
+
+`CHANGELOG.md` uses the layout of [Keep a Changelog](https://keepachangelog.com):
+
+- `## [Unreleased]` collects what is on `main` and not yet released, which is what a snapshot contains.
+- Each release has a section headed `## [<version>]`, and that section is the release's notes.
+- Inside a section, entries are grouped under headings such as `### Added`, `### Changed` and `### Deprecated`.
+
+An entry in `### Changed` that starts with `Breaking:` changes a public signature or documented behaviour incompatibly and describes the new signature or behaviour. For example, the entry for `Scheduler` states that `new Scheduler(plugin, errors)` replaces `new Scheduler(plugin)`.
+
+Before an upgrade, read every section between the current version and the target, and search them for `Breaking:` and `### Deprecated`.

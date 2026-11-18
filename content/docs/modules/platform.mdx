@@ -1,0 +1,739 @@
+---
+title: taffy-platform
+description: The base module every other Taffy module builds on, with Folia-safe scheduling, shutdown helpers, MiniMessage text and language files, item builders, durations, rate-limited logging and a Discord webhook.
+---
+
+`taffy-platform` holds the classes a Paper plugin needs before it needs anything else. Every other Taffy
+runtime module (all but `taffy-test`) depends on it through `api`, so a plugin that uses `taffy-config`,
+`taffy-storage` or any other runtime module already has it on its classpath.
+
+All classes live in one package, `so.alaz.taffy.platform`.
+
+| Area | Classes |
+|---|---|
+| Scheduling | `Scheduler`, `Dispatcher`, `ThreadTag`, `EntityThread`, `EntityUnavailableException` |
+| Shutdown | `TaskGate`, `PendingSettlements`, `Shutdown`, `ErrorReports` |
+| Text | `Text`, `Messages`, `LegacyText` |
+| Items | `ItemBuilder`, `SkullBuilder`, `Items`, `InventoryFit`, `PdcKey`, `Colors`, `Sounds` |
+| Time | `Durations`, `Expiry`, `CooldownManager` |
+| Logging | `ThrowLog`, `Classes` |
+| Discord | `DiscordWebhook`, `WebhookPayload` |
+
+The module holds no static plugin, logger, executor or thread and ships no resource files. Each class takes the
+narrowest thing it uses (a `Plugin`, a `Logger`, a `Path`, an `Executor`) through its constructor or method
+arguments. `DiscordWebhook` is the one class here that owns threads: those of its HTTP client.
+
+## Setup
+
+Add the module through its catalog alias, `alaz.taffy.platform`. `so.alaz.taffy.paper-plugin` shades it into the
+plugin jar and relocates `so.alaz.taffy` to `<group>.libs.taffy`.
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.platform)
+}
+```
+
+The published coordinates are `so.alaz.taffy:taffy-platform:0.1.0`.
+
+`Text` uses PlaceholderAPI and MiniPlaceholders when they are installed. Neither is bundled, and the plugin needs
+no compile dependency on them. A plugin described by `paper-plugin.yml` sees another plugin's classes only when it
+lists that plugin under `dependencies.server`, so a plugin that wants those placeholders in its text lists both:
+
+```yaml title="paper-plugin.yml"
+dependencies:
+  server:
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+    MiniPlaceholders:
+      load: BEFORE
+      required: false
+```
+
+A typical plugin creates these objects once, in its main class:
+
+```java title="ShopPlugin.java"
+import so.alaz.taffy.platform.DiscordWebhook;
+import so.alaz.taffy.platform.ErrorReports;
+import so.alaz.taffy.platform.Messages;
+import so.alaz.taffy.platform.PendingSettlements;
+import so.alaz.taffy.platform.Scheduler;
+import so.alaz.taffy.platform.TaskGate;
+import so.alaz.taffy.platform.Text;
+import org.bukkit.plugin.java.JavaPlugin;
+
+public final class ShopPlugin extends JavaPlugin {
+
+    private final ErrorReports errors = new ErrorReports();
+    private final TaskGate gate = new TaskGate();
+    private final PendingSettlements settlements = new PendingSettlements();
+    private Scheduler scheduler;
+    private Text text;
+    private Messages messages;
+    private DiscordWebhook webhook;
+
+    @Override
+    public void onEnable() {
+        scheduler = new Scheduler(this, errors);
+        text = new Text(getLogger());
+        messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger());
+        webhook = new DiscordWebhook();
+    }
+}
+```
+
+The disable side of the same class is under [Shutdown](#shutdown).
+
+## Scheduler
+
+`Scheduler` runs tasks on Paper's region-threaded schedulers. It behaves the same on Paper and on Folia and never
+calls `Bukkit.getScheduler()`, which Folia does not support. Every task is owned by the plugin, so Paper cancels
+it when the plugin disables. Every method may be called from any thread.
+
+```java
+Scheduler scheduler = new Scheduler(plugin, errors);
+```
+
+The constructor takes the owning `Plugin` and the plugin's `ErrorReports`, and throws `NullPointerException` when
+either is `null`. `mode()` returns `Scheduler.Mode.FOLIA` when Folia's server class was loadable at construction,
+otherwise `Scheduler.Mode.PAPER`. A lookup that failed reads as Paper, with a warning in the plugin's log.
+
+### Running work
+
+| Method | Runs the task | Returns |
+|---|---|---|
+| `global(Runnable)` | on the global region thread, as soon as possible | `false` when the plugin is disabling |
+| `async(Runnable)` | on an async thread, as soon as possible | `false` when the plugin is disabling |
+| `asyncOrRun(Runnable)` | on an async thread, or on the calling thread (which it may then block) when the plugin is disabling | nothing |
+| `asyncExecutor()` | an `Executor` over `async` whose `execute` throws `RejectedExecutionException` while the plugin is disabling | the executor |
+| `delayedAsync(Runnable, Duration)` | once on an async thread after the delay | `false` when the plugin is disabling |
+| `repeatingAsync(Runnable, Duration, Duration)` | on an async thread after the initial delay, then every period, until `close()` | `false` when the plugin is disabling |
+| `entity(Entity, Runnable)` | on the region thread that owns the entity | nothing |
+| `entity(Entity, Runnable, Runnable)` | the task on the entity's region thread, or the `retired` callback | nothing |
+
+```java
+scheduler.async(() -> {
+    List<Offer> offers = loadOffers();
+    scheduler.global(() -> broadcastOffers(offers));
+});
+
+scheduler.repeatingAsync(this::saveDirtyAccounts, Duration.ofMinutes(1), Duration.ofMinutes(5));
+```
+
+Delays and periods are passed to Paper in whole milliseconds. Paper throws `IllegalArgumentException` for a
+negative delay or a period below one millisecond.
+
+`close()` cancels every task `repeatingAsync` started through this instance. A run already in progress finishes,
+and one-shot tasks are left to Paper. The instance stays usable after the call: a repeating task started later is
+cancelled by the next `close()`.
+
+### Entity work
+
+`entity(Entity, Runnable, Runnable)` runs the task on the region thread that owns the entity, or the `retired`
+callback when the task cannot run. At most one of the two runs.
+
+- Paper runs `retired` when the entity retires (a player logs out, for example) before the task runs.
+- When the entity is already removed, or the plugin is disabling, `retired` runs on the calling thread, so it must
+  not assume a region thread.
+- A task still scheduled when the plugin disables runs neither.
+- `task` and `retired` are checked for `null` before anything is scheduled.
+
+The two-argument `entity(Entity, Runnable)` drops the task when the entity is gone or the plugin is disabling.
+
+```java
+scheduler.entity(player,
+    () -> Items.giveOrDrop(player, reward),
+    () -> getLogger().info(player.getName() + " left before the reward was given"));
+```
+
+### Dispatcher, ThreadTag and EntityThread
+
+`Scheduler` implements `Dispatcher`, whose one method runs a `Supplier<T>` on a named thread and returns a
+`CompletableFuture<T>`:
+
+```java
+<T> CompletableFuture<T> dispatch(ThreadTag tag, Supplier<T> task);
+```
+
+`ThreadTag` is a sealed interface with three kinds: `ThreadTag.GLOBAL`, `ThreadTag.ASYNC` and
+`ThreadTag.entity(UUID)`, which names the region thread of the online player with that id. Their record types are
+`ThreadTag.Global`, `ThreadTag.Async` and `ThreadTag.Entity`; two entity tags are equal when their ids are.
+
+The future completes with the task's result, or with what it threw, on the thread the tag names. When that thread
+does not take the task, the task never runs and the future completes with:
+
+- `RejectedExecutionException` for `GLOBAL` and `ASYNC` while the plugin is disabling,
+- `EntityUnavailableException` for an entity tag when the player is offline, the task was retired, or the plugin is
+  disabling. `EntityUnavailableException` is a `RuntimeException` whose `id()` returns the entity's `UUID`.
+
+`EntityThread` wraps a `Dispatcher` for player work. `EntityThread.on(Dispatcher, Server)` dispatches each call with
+`ThreadTag.entity` and looks the player up once the task runs:
+
+```java
+EntityThread players = EntityThread.on(scheduler, getServer());
+
+players.call(playerId, Player::getLevel)
+    .thenAccept(level -> getLogger().info("Level " + level));
+```
+
+<Callout type="warn" title="Do not wait on a server thread">
+  Every tag queues the task, also when the caller is already on that thread. Calling `join()` or `get()` on the
+  future from a server thread can block that thread for good. A future whose task Paper accepted may also stay
+  incomplete when the plugin disables before the task runs: bound it with `CompletableFuture.orTimeout`, or track
+  the work in `PendingSettlements`. When an `orTimeout` timeout fires, the future and every dependent stage added
+  to it without an executor complete on the JDK's timeout thread.
+</Callout>
+
+`dispatch` with an entity tag looks the player up on the server from the calling thread. A refusal for an entity
+tag is always an `EntityUnavailableException`, also when the cause is the plugin disabling.
+
+### Task failures
+
+Paper's region, async and entity schedulers log a task that throws but fire no `ServerExceptionEvent`, so nothing
+that watches the plugin's errors sees it. `Scheduler` therefore catches anything a task Paper runs throws (a
+checked exception thrown without being declared included), reports it to its `ErrorReports`, then rethrows it
+unchanged so Paper logs and handles it as usual.
+
+| Source | Tasks |
+|---|---|
+| `scheduler.global` | `global` |
+| `scheduler.async` | `async`, `asyncExecutor`, `asyncOrRun`, `delayedAsync`, `repeatingAsync` |
+| `scheduler.entity` | `entity` tasks, and `retired` callbacks Paper runs |
+
+Each throw is reported once, so a repeating task that throws on several runs is reported for each run. A task or
+`retired` callback run on the calling thread is not reported, and what it throws reaches the caller. `dispatch`
+reports nothing: its future carries what the task threw.
+
+### While the plugin disables
+
+The scheduler never waits for work and never runs leftover work on its own. Once the plugin is disabling:
+
+- `global`, `async`, `delayedAsync` and `repeatingAsync` return `false` and run nothing,
+- `entity(Entity, Runnable, Runnable)` runs `retired` on the calling thread,
+- `dispatch` completes exceptionally,
+- `asyncExecutor()` rejects,
+- `asyncOrRun` runs the task on the calling thread.
+
+A task Paper accepted but has not run when the plugin disables may never run: an entity task then runs neither its
+task nor its `retired` callback, and a delayed task is cancelled. Work that must settle is tracked in
+`PendingSettlements` before it is scheduled.
+
+## ErrorReports
+
+`ErrorReports` is where a plugin reports an error that nothing watching the plugin's errors would otherwise see:
+an error handled inside the plugin, or a scheduler task that threw. The plugin creates one instance and passes it to
+the classes that report (`Scheduler`, `Shutdown`, and the hooks, storage, gui, metrics and comficonf modules).
+
+| Method | Behaviour |
+|---|---|
+| `report(String source, Throwable error)` | Reports an error under a short stable source key such as `shutdown`. Never throws: anything the target throws, an `Error` included, is discarded. |
+| `install(BiConsumer<String, Throwable> handle)` | Routes later reports to `handle`, on the thread that reported each one, or nowhere when `handle` is `null`. |
+| `clear()` | Drops every later report until the next `install`. |
+
+```java
+errors.install((source, error) -> getLogger().log(Level.WARNING, "Handled error in " + source, error));
+errors.report("import", exception);
+```
+
+The sink has one target. Each `install` replaces the one before it; to send each report to two places, install one
+target that passes it to both.
+
+Until `install` or `clear` first runs, reports are held: the first one of each source, at most 16 in all. The first
+`install` of a non-null target delivers them, in order, on the installing thread. A first `clear()` or
+`install(null)` discards them, and a plugin that calls neither keeps them for its lifetime. After the first
+`install` or `clear`, a report made while no target is installed is dropped.
+
+<Callout type="info" title="With taffy-metrics">
+  `MetricsBuilder.start()` of `taffy-metrics` installs its FastStats error tracking target when FastStats error
+  tracking is available, and clears the sink otherwise. Either way it replaces a target the plugin installed
+  earlier, and the held reports reach FastStats only when nothing was installed or cleared before the call. A
+  plugin using it installs no target of its own. See [taffy-metrics](/docs/modules/metrics).
+</Callout>
+
+All methods are thread-safe.
+
+## Shutdown
+
+Three classes cover the disable side. Each one solves a different problem: a step that throws, async tasks still
+running, and work no callback will ever finish.
+
+### Shutdown.closeQuietly
+
+```java
+public static void closeQuietly(String what, Shutdown.ShutdownStep step, Logger logger, ErrorReports errors)
+```
+
+Runs one step and catches anything it throws, an `Error` included, so the steps after it still run. The failure is
+logged as one plain-text warning that reads "Failed to `what` during shutdown" followed by the failure's
+`toString()`, without a stack trace, and reported to
+`errors` under the source `shutdown`. An `InterruptedException` sets the thread's interrupt flag again.
+`ShutdownStep` is a functional interface whose `run()` may throw `Exception`. `what` completes the phrase
+"Failed to", for example `close storage`.
+
+### TaskGate
+
+`TaskGate` admits async tasks until the plugin disables. A task calls `enter()` before it does any work and returns
+at once when it gets `false`; an admitted task calls `exit()` in a `finally`.
+
+```java
+scheduler.async(() -> {
+    if (!gate.enter()) {
+        return;
+    }
+    try {
+        processOrders();
+    } finally {
+        gate.exit();
+    }
+});
+```
+
+`close(Duration wait)` refuses every later entry, then waits up to `wait` for admitted tasks to exit. It returns how
+many are still running, `0` once all have exited. An interrupt ends the wait early and stays set. A result above
+`0` means a task may still track work after the call.
+
+### PendingSettlements
+
+A task still scheduled on an entity when the plugin disables runs neither its task nor its `retired` callback, and
+a delayed task is cancelled. `PendingSettlements` tracks such work so it still settles.
+
+`track(Runnable settlement)` returns a `PendingSettlements.Entry`. Each entry is started exactly once:
+`Entry.start()` returns `true` for one caller only, which then does its side of the work. Track before scheduling,
+so the work is pending before any callback can start it.
+
+```java
+PendingSettlements.Entry entry = settlements.track(() -> refund(buyerId, price));
+scheduler.entity(buyer,
+    () -> {
+        if (entry.start()) {
+            Items.giveOrDrop(buyer, purchase);
+        }
+    },
+    () -> {
+        if (entry.start()) {
+            refund(buyerId, price);
+        }
+    });
+```
+
+`settleAll(Consumer<Throwable> onFailure)` starts every pending entry, runs its settlement on the calling thread and
+returns how many ran. A settlement that throws is passed to `onFailure`, and what `onFailure` throws is discarded,
+so the rest still run. An entry tracked after `settleAll` began may be left pending, so a caller whose scheduling
+call is refused starts the entry itself.
+
+### Disable order
+
+The shutdown classes assume this order, with each step run through `Shutdown.closeQuietly`:
+
+<Steps>
+  <Step>`ComfiConfConnection.close` of [taffy-comficonf](/docs/modules/comficonf), which unregisters the plugin's settings from the bridge.</Step>
+  <Step>`PlaceholderRegistration.unregister` of [taffy-hooks](/docs/modules/hooks), which unregisters the plugin's placeholders.</Step>
+  <Step>`Menus.shutdown` of [taffy-gui](/docs/modules/gui), which ends every prompt and then closes the open menus of the players the disabling thread owns.</Step>
+  <Step>`Scheduler.close()`, which stops the repeating tasks.</Step>
+  <Step>`TaskGate.close`, which refuses new async tasks and waits for the admitted ones.</Step>
+  <Step>`PendingSettlements.settleAll`, which settles the work no callback started.</Step>
+  <Step>The close of whatever the settlements write to, such as [storage](/docs/modules/storage).</Step>
+  <Step>`DiscordWebhook.close()`, which waits for the posts still in flight.</Step>
+  <Step>`Metrics.shutdown` of [taffy-metrics](/docs/modules/metrics), which stops reporting and makes the final send, so the reports the steps before it raised are sent.</Step>
+</Steps>
+
+For a plugin that uses only this module:
+
+```java title="ShopPlugin.java"
+@Override
+public void onDisable() {
+    Logger log = getLogger();
+    Shutdown.closeQuietly("stop repeating tasks", () -> scheduler.close(), log, errors);
+    Shutdown.closeQuietly("wait for async tasks", () -> gate.close(Duration.ofSeconds(5)), log, errors);
+    Shutdown.closeQuietly("settle pending work",
+        () -> settlements.settleAll(failure -> errors.report("settlement", failure)), log, errors);
+    Shutdown.closeQuietly("close the webhook client", () -> webhook.close(), log, errors);
+}
+```
+
+## Text
+
+`Text` renders MiniMessage strings (RGB, gradients, PlaceholderAPI and MiniPlaceholders) into Adventure
+`Component`s. `new Text(Logger)` detects PlaceholderAPI and MiniPlaceholders once, by class presence; when a plugin
+is absent, its pass is skipped.
+
+| Method | Returns |
+|---|---|
+| `render(String input)` | MiniMessage with MiniPlaceholders' global tags, no PlaceholderAPI |
+| `render(String input, Player viewer)` | PlaceholderAPI against the viewer (when non-null and present), then MiniMessage with MiniPlaceholders' global and audience tags |
+| `render(String template, Player viewer, TagResolver... values)` | the same, with values filled in |
+| `render(List<String> lines, Player viewer)` | each line as `render(String, Player)` |
+| `send(Player player, String miniMessage)` | renders with the player as viewer and sends it |
+| `resolve(String input, Player viewer)` | PlaceholderAPI only, no MiniMessage |
+| `plain(String input, Player viewer)` | the rendered text flattened to plain text |
+
+The viewer parameters accept `null`.
+
+```java
+Text text = new Text(getLogger());
+
+player.sendMessage(text.render("<gradient:gold:yellow>Welcome, %player_name%!", player));
+
+player.sendMessage(text.render(
+    "<green>{buyer}</green> bought <item> for <price>",
+    player,
+    Placeholder.unparsed("buyer", buyer.getName()),
+    Placeholder.component("item", purchase.displayName()),
+    Placeholder.unparsed("price", "250")));
+```
+
+### Values in a template
+
+- A value is written as `<name>`, or as `{name}`, which reads as `<name>` for every name the call supplies. A
+  `{name}` nothing supplies stays as written. Only names of lower-case letters, digits, `_` and `-` are rewritten.
+- The order is: `{name}` rewrite, PlaceholderAPI on the template, then MiniMessage with the values. PlaceholderAPI
+  never sees a supplied value; a value with placeholders of its own goes through `resolve` first. A supplied
+  `{name}` inside a `%...%` placeholder is rewritten to `<name>` as well, so that placeholder does not receive the
+  value.
+- `Placeholder.unparsed` and `Placeholder.component` insert player-typed text as it is. `Placeholder.parsed` is for a
+  value that carries MiniMessage on purpose.
+- A supplied value wins over a MiniPlaceholders tag of the same name.
+- A supplied `{name}` inside a tag argument MiniMessage does not parse, such as a click value, becomes the literal
+  text `<name>`. Written as an unquoted tag argument, as in `<hover:show_text:{name}>`, it leaves a tag MiniMessage
+  cannot read.
+
+### Legacy codes
+
+MiniMessage refuses a section sign followed by a legacy code character, which many PlaceholderAPI expansions
+return. Every render converts such codes to tags, as `LegacyText.sectionToMiniMessage` does: in the input, in what
+PlaceholderAPI returned and in each `Placeholder.parsed` value. A converted code such as `<red>` in a parsed value
+is an open tag, so it colours the rest of the template after the value, as the legacy code would. Values supplied
+as `Placeholder.unparsed` or `Placeholder.component` are inserted unchanged, section sign included. `render(String, Player, TagResolver...)` throws MiniMessage's
+`ParsingException` when the text still holds a section sign followed by a code character once the values are in.
+
+### Threads and failures
+
+An instance is thread-safe and may be shared. PlaceholderAPI expansions and MiniPlaceholders audience tags run on
+the calling thread and read the viewer, so a call that passes a viewer belongs on the thread that owns that player.
+
+A PlaceholderAPI pass that throws, or a MiniPlaceholders resolver that cannot be built or throws during parsing, is
+skipped and logged through `ThrowLog` under the sources `placeholderapi` and `miniplaceholders`. Nothing is
+reported to `ErrorReports`. A single MiniPlaceholders tag that throws is left as written and is not logged.
+
+## Messages
+
+`Messages` serves player messages from `lang/<locale>.yml` files in the plugin's data folder. The plugin bundles
+its English file; Taffy ships none.
+
+```yaml title="src/main/resources/lang/en.yml"
+prefix: "<gray>[<gold>Shop</gold>]</gray> "
+shop:
+  bought: "{prefix}<green>You bought <item> for {price}."
+  help:
+    - "<gold>/shop buy [item]"
+    - "<gold>/shop sell [item]"
+```
+
+```java
+Messages messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger());
+
+player.sendMessage(messages.render(text, player, "shop.bought",
+    Placeholder.component("item", purchase.displayName()),
+    Placeholder.unparsed("price", "250")));
+```
+
+`load(Path dataFolder, Supplier<InputStream> bundled, Logger logger)` uses English as the default locale with
+per-player languages on. `load(Path, Supplier<InputStream>, Logger, String defaultLocale, boolean perPlayer)` sets
+both. Loading:
+
+1. writes the bundled file to `lang/en.yml` when that file is absent,
+2. reads every `.yml` file in `lang`, skipping an unreadable file with a warning and listing the keys each file
+   lacks in one warning per file,
+3. falls back to the bundled English text when the folder cannot be written or listed, with a warning,
+4. warns when a default locale other than `en` has no file, and uses the bundled English text in its place.
+
+`bundled` opens a new stream on each call. `load` throws `IllegalStateException` when the bundled file is missing,
+is not valid UTF-8 or is not valid YAML.
+
+### Lookup
+
+A key resolves through, in order: the exact locale's file (`pt_br`), its language's file (`pt`), the default
+locale's file, then the bundled English text. The first two apply only when per-player languages are on and a
+locale is given. File names and locales are matched in lower case with `-` read as `_`, so `pt-BR` finds
+`pt_br.yml`. `Messages.normalizeLocale(String)` gives that form, with `null` or blank read as `en`.
+
+A key no file has renders as the visible marker `<red>missing:key` and never throws.
+
+### Methods
+
+| Method | Behaviour |
+|---|---|
+| `render(Locale, String key, TagResolver...)` | Renders without PlaceholderAPI or MiniPlaceholders. |
+| `render(Text, Player viewer, String key, TagResolver...)` | Renders in the viewer's language through `Text`, so PlaceholderAPI and MiniPlaceholders apply. |
+| `renderTemplate(Text, Player viewer, String template, TagResolver...)` | Renders a template that is not a key, with the viewer's prefix. |
+| `lines(Locale, String key, TagResolver...)` | One component per line; a tag opened on one line does not carry into the next. |
+| `template(Locale, String key)` | The raw template, lines joined by a newline. |
+| `has(Locale, String key)` | Whether the key resolves for that locale. |
+| `reload()` | Reads the folder again, with the same warnings as the load, and writes `lang/en.yml` again if it is missing. The bundled text is not read again. |
+| `loadedLanguages()` | The loaded locale codes. |
+| `defaultLocale()`, `perPlayer()` | The values given at load. |
+
+A `null` locale or viewer is for the console and other output without a viewer. `Messages.FOLDER` is `lang` and
+`Messages.FALLBACK` is `en`.
+
+- A YAML list is kept as its lines; a message of several lines renders joined by a newline, or one component per
+  line through `lines`.
+- The prefix is the template under the key `prefix`. It is never put in front of a message: it appears only where a
+  template writes `<prefix>` or `{prefix}`, and is empty when no file has the key. A value named `prefix` in the
+  call replaces it.
+- With `render(Text, Player, ...)`, PlaceholderAPI runs on the template and the prefix, never on the values.
+
+Methods without a viewer may be called from any thread; those with one follow the thread rule of `Text`. A render
+during `reload()` sees either all the old files or all the new ones.
+
+## LegacyText
+
+`LegacyText` converts legacy codes to MiniMessage tags.
+
+| Method | Converts |
+|---|---|
+| `toMiniMessage(String)` | `&` and `§` color and format codes and the `&#RRGGBB` hex form |
+| `sectionToMiniMessage(String)` | only codes written with `§`, leaving every `&` as written |
+
+```java
+String mini = LegacyText.toMiniMessage("&6Gold &l&#ff8800bold");
+// "<gold>Gold <bold><#ff8800>bold"
+```
+
+The input is scanned without regard to MiniMessage tags, so a code inside a tag, such as a query string in a
+click URL, is converted too. The paired hex form `§x§R§R§G§G§B§B` is read; the `&x&R&R&G&G&B&B` form is not, and
+comes out as a run of color tags.
+
+## Items
+
+### ItemBuilder
+
+A fluent `ItemStack` builder with Adventure names and lore, both with the default italic removed. `build()` needs
+a running server, since it edits item meta.
+
+```java
+ItemStack voucher = new ItemBuilder(Material.PAPER)
+    .amount(1)
+    .name(text.render("<gold>Shop voucher"))
+    .lore(List.of(text.render("<gray>Right-click to redeem")))
+    .glow(true)
+    .build();
+```
+
+`ItemBuilder.applyGlow(ItemMeta)` gives any item meta the enchantment glint without adding an enchantment.
+
+The static methods handle a full-fidelity item reference, `serialized:<base64>`, which carries the entire item and
+round-trips exactly:
+
+| Member | Behaviour |
+|---|---|
+| `SERIALIZED_PREFIX` | `serialized:` |
+| `isSerialized(String)` | whether the reference starts with the prefix |
+| `serialize(ItemStack)` | the item as a `serialized:<base64>` reference |
+| `deserialize(String)` | the exact item, or `null` when the reference is malformed or from an incompatible server version |
+
+`deserialize` skips the prefix by length without checking it, so check the reference with `isSerialized` first.
+
+### SkullBuilder
+
+Builds `PLAYER_HEAD` items.
+
+- `SkullBuilder.fromTexture(String base64)` and `SkullBuilder.fromUrl(String url)` are static, synchronous and need
+  no network. `fromUrl` throws `IllegalArgumentException` for a URL holding a double quote or a backslash.
+- `fromName(String)` and `fromUuid(UUID)` resolve the player's current skin from Mojang on the executor given to
+  the constructor and return a `CompletableFuture<ItemStack>`. They complete with a blank head when the lookup fails
+  or the executor rejects it.
+
+```java
+SkullBuilder skulls = new SkullBuilder(scheduler.asyncExecutor());
+
+skulls.fromName("Notch").thenAccept(head ->
+    scheduler.entity(player, () -> Items.giveOrDrop(player, head)));
+```
+
+The executor must run tasks off the calling thread, since a lookup blocks on the network, and must throw
+`RejectedExecutionException` when it cannot take a task, as `Scheduler.asyncExecutor()` does. The future completes
+on the executor's thread, or on the calling thread for a cached texture, so inventory or entity work is scheduled
+back onto the owning thread. Resolved textures are cached per instance; failed lookups are not. A lookup the
+executor accepted but never runs, as can happen to a task scheduled just before the plugin disables, leaves its
+future, and every later future for the same name or uuid from that instance, incomplete. A lookup that throws an
+`Error` completes its future exceptionally.
+
+### Items, InventoryFit and PdcKey
+
+`Items.giveOrDrop(Player, ItemStack)` adds the item to the player's inventory and drops whatever does not fit at the
+player's feet. It must be called on the thread that owns the player.
+
+`InventoryFit.fits(ItemStack[] storage, int inventoryMax, List<ItemStack> stacks)` tells whether the stacks fit when
+added in order, following `Inventory.addItem`, without changing anything. A `null` or empty slot is free.
+
+```java
+PlayerInventory inventory = player.getInventory();
+boolean room = InventoryFit.fits(inventory.getStorageContents(), inventory.getMaxStackSize(), List.of(voucher));
+```
+
+`PdcKey<P, C>` is typed access to one persistent-data key, with `get` (or `null` when absent), `has` and `set`. A
+write to an `ItemMeta` reaches its item only once the meta is set back, which `ItemStack.editMeta` does.
+
+```java
+PdcKey<String, String> voucherId = new PdcKey<>(new NamespacedKey(this, "voucher_id"), PersistentDataType.STRING);
+
+voucher.editMeta(meta -> voucherId.set(meta, "spring-sale"));
+```
+
+`get` throws `IllegalArgumentException` when the key holds a value of another type.
+
+### Colors and Sounds
+
+`Colors.parse(String)` reads a `org.bukkit.Color` from config: one of the 17 named colors in any case, `#RRGGBB`, or
+an `r,g,b` triple of whole numbers from 0 to 255. It throws `IllegalArgumentException` with the message
+`invalid color '<raw>': expected ` followed by `Colors.EXPECTED`.
+
+`Sounds.play(Player, String spec)` plays a sound written as `"key [volume] [pitch]"` on the calling thread. The key
+is read in lower case; a missing or non-numeric volume or pitch is `1`; a `null` or blank spec does nothing. A key
+that does not parse throws Adventure's `InvalidKeyException`, and `Sounds.isValid(String)` checks for that
+beforehand, for example while loading config.
+
+```java
+Sounds.play(player, "minecraft:entity.player.levelup 0.8 1.2");
+```
+
+## Time
+
+### Durations
+
+`Durations` parses and formats short durations: 1 to 18 digits followed by `ms`, `s`, `m`, `h` or `d` in any case,
+such as `250ms`, `30s` or `7d`. Surrounding whitespace is ignored; a sign, a decimal point or a space before the unit
+is not accepted. The longest accepted duration is `Long.MAX_VALUE / 2` milliseconds.
+
+| Method | Behaviour |
+|---|---|
+| `parseOrNull(Object)` | the duration of the value's `toString()`, or `null` |
+| `parse(Object)` | the same, or `IllegalArgumentException` with `invalid duration '<value>': expected ` followed by `Durations.EXPECTED` |
+| `format(Duration)` | the largest unit that divides exactly: `1d`, `90s`, `1500ms`; zero is `0s` |
+| `format(List<Duration>)` | `[30s, 1d]` |
+
+### Expiry
+
+`Expiry` reads an optional expiry or start setting.
+
+| Method | Behaviour |
+|---|---|
+| `resolve(String raw, Instant now)` | blank or `null` is never (returns `null`); a duration counts from `now`; a date ends at the end of that day in the system zone; a local date-time is read in the system zone; an ISO-8601 instant is used as written |
+| `resolveStart(String raw)` | the same absolute forms, with a plain date at the start of the day; durations are refused |
+| `isExpired(Instant expiry, Instant now)` | `true` when `expiry` is non-null and not after `now` |
+| `isRelative(String raw)` | whether the value is a duration |
+
+Bad values throw `IllegalArgumentException` with `invalid expiry '<raw>': expected ` plus `Expiry.EXPECTED`, or
+`invalid start '<raw>': expected ` plus `Expiry.EXPECTED_START`.
+
+### CooldownManager
+
+Keyed cooldowns against the system clock. A key is any object compared by `equals` and `hashCode`, typically a
+record of a player id and what is on cooldown.
+
+```java
+record Cooldown(UUID player, String action) {}
+
+CooldownManager cooldowns = new CooldownManager();
+Cooldown key = new Cooldown(player.getUniqueId(), "daily");
+
+if (cooldowns.isOnCooldown(key)) {
+    player.sendMessage(text.render("<red>Wait " + Durations.format(cooldowns.remaining(key))));
+} else {
+    cooldowns.set(key, Duration.ofHours(24));
+}
+```
+
+`set` starts or restarts a cooldown, and a length of zero or less clears it. `extend` keeps the later of the current
+expiry and the new one, and a length of zero or less changes nothing. `remaining` is `Duration.ZERO` when the key is not on cooldown. Lengths are read in whole
+milliseconds. Each call is atomic, but a check followed by a `set` is two calls, so two threads can both pass the
+check for one key.
+
+## Logging
+
+`ThrowLog` rate-limits warnings about a third party that keeps failing, keyed by source. The first failure of a
+source is logged with its stack trace. After that, at most one line per source per `ThrowLog.WINDOW` (one minute) is
+logged, without the stack trace and with the number of failures left out since the last one.
+
+```java
+ThrowLog failures = new ThrowLog(getLogger());
+
+try {
+    refreshPrices();
+} catch (RuntimeException ex) {
+    failures.warn("prices", "Could not refresh the prices, so the old ones stay.", ex);
+}
+```
+
+Every distinct source is kept for the life of the instance. `warn` may be called from any thread.
+
+`Classes.present(String className, Class<?> caller, Logger logger)` tells whether a class is loadable from the
+caller's class loader, without initializing it. A lookup that throws for another reason, such as another plugin's
+closed jar, counts as absent and is logged as a warning; an absent class is not logged.
+
+## Discord
+
+`DiscordWebhook` posts to Discord webhooks asynchronously through one HTTP client.
+
+| Member | Behaviour |
+|---|---|
+| `post(String url, String content, Consumer<String> onError)` | Posts `content` as the message text, cut to 2000 characters. |
+| `postBody(String url, String body, Consumer<String> onError)` | Posts a ready JSON body. |
+| `isWebhookUrl(String)` | Static. Whether the URL is an `https` Discord webhook URL on `discord.com` or `discordapp.com`, with optional `canary.` or `ptb.` and API version. |
+| `close()` | Closes the client and blocks until every in-flight request has finished. |
+
+```java
+String url = getConfig().getString("webhook-url");
+if (DiscordWebhook.isWebhookUrl(url)) {
+    webhook.post(url, buyer.getName() + " bought a voucher",
+        reason -> getLogger().warning("Discord webhook failed: " + reason));
+}
+```
+
+Failures are never thrown. Each one reaches `onError` as a one-line reason for the server owner's log, such as
+`invalid webhook URL` or `Discord returned HTTP 404`, and nothing is reported to `ErrorReports`. The callback runs at
+most once per post, either on the calling thread (a URL that does not parse, or a post after `close()`) or later on
+a thread the caller does not choose. A callback for a request that has already finished can still run after
+`close()` has returned. It must not throw: what it throws for a request that was sent is discarded, and for a URL
+that does not parse it reaches the caller of the post method. Neither post method checks that the URL points at
+Discord:
+apply `isWebhookUrl` when reading the URL from config.
+
+Each request fails when no response headers arrive within 15 seconds, but `close()` has no upper bound: a server
+that sends headers and then stalls keeps it blocked longer. An interrupt ends the wait, aborts the in-flight
+requests through their callbacks and stays set. `close()` is meant to be the last step of a shutdown before metrics.
+
+`WebhookPayload.render(Map<String, Object> template, UnaryOperator<String> resolve)` turns a payload template (nested
+maps, lists, strings, numbers and booleans) into the JSON body `postBody` sends. Every string goes through
+`resolve` first, and the structure is then serialized, so a resolved value cannot change the JSON structure.
+
+```java
+Map<String, Object> template = Map.of(
+    "username", "Shop",
+    "embeds", List.of(Map.of("title", "{buyer} bought {item}", "color", 5814783)));
+
+String body = WebhookPayload.render(template,
+    value -> value.replace("{buyer}", buyer.getName()).replace("{item}", "a voucher"));
+webhook.postBody(url, body, reason -> getLogger().warning("Discord webhook failed: " + reason));
+```
+
+## Threads at a glance
+
+| Class | Thread rule |
+|---|---|
+| `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog` | any thread |
+| `Text`, `Messages` | any thread without a viewer; the player's thread with one |
+| `Items.giveOrDrop`, `Sounds.play` | the thread that owns the player |
+| `InventoryFit.fits` | the thread that owns the inventory, for live slots |
+| `SkullBuilder.fromName`, `fromUuid` | any thread; the future completes on the lookup executor, or on the calling thread for a cached texture |
+| `DiscordWebhook` callbacks | the calling thread for a URL that does not parse or a post after `close()`, otherwise a thread the caller does not choose |
+
+Next: read settings with [taffy-config](/docs/modules/config), or see how the modules fit together in
+[Getting started](/docs/getting-started).

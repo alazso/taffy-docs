@@ -1,0 +1,534 @@
+---
+title: taffy-hooks
+description: Custom items, a Vault economy, LuckPerms, WorldGuard and placeholders behind Taffy interfaces, detected safely at enable.
+---
+
+`taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
+
+- `CustomItems` builds and reads items of ItemsAdder, Nexo, Oraxen and HeadDatabase.
+- `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
+- `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
+- `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
+- `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
+- `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
+
+No public signature names an integration type. Each integration sits behind an interface of `so.alaz.taffy.hooks`, and the class that calls it loads only after its API classes are found visible to the plugin (and, for every integration but Vault, after its plugin is found installed and enabled). A server without an integration never loads a class that names it.
+
+## Setup
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.hooks)
+}
+```
+
+The module is published as `so.alaz.taffy:taffy-hooks` and is `alaz.taffy.hooks` in the catalog. It brings `taffy-platform` with it as an `api` dependency, so `Scheduler`, `ErrorReports` and `ThreadTag` are on the plugin's compile classpath. `so.alaz.taffy.paper-plugin` shades both and relocates `so.alaz.taffy` to `<group>.libs.taffy`.
+
+### What is not bundled
+
+Taffy compiles against each integration's API with `compileOnly` and ships none of them. They appear in no published dependency of `taffy-hooks`, so the plugin's jar carries none of them, and the plugin needs none of them on its own classpath to call Taffy's types. The server provides each API through the integration plugin itself.
+
+| Integration | API Taffy compiles against | Catalog alias |
+|---|---|---|
+| ItemsAdder | `beer.devs:itemsadder-api` | `alaz.itemsadder.api` |
+| Nexo | `com.nexomc:nexo` | `alaz.nexo` |
+| Oraxen | `io.th0rgal:oraxen` | `alaz.oraxen` |
+| HeadDatabase | `com.github.Arcaniax-Development:HeadDatabase-API` | `alaz.headdatabase.api` |
+| Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
+| LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
+| WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
+| PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
+| MiniPlaceholders | `io.github.miniplaceholders:miniplaceholders-api` | `alaz.miniplaceholders.api` |
+
+A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
+
+### Declaring the integrations in paper-plugin.yml
+
+A plugin described by `paper-plugin.yml` sees another plugin's classes only when it lists that plugin under `dependencies.server`. List each integration the plugin uses with `load: BEFORE`, so it is enabled first when installed, and `required: false`, so the plugin still starts without it:
+
+```yaml title="paper-plugin.yml"
+dependencies:
+  server:
+    ItemsAdder:
+      load: BEFORE
+      required: false
+    Nexo:
+      load: BEFORE
+      required: false
+    Oraxen:
+      load: BEFORE
+      required: false
+    HeadDatabase:
+      load: BEFORE
+      required: false
+    Vault:
+      load: BEFORE
+      required: false
+    LuckPerms:
+      load: BEFORE
+      required: false
+    WorldGuard:
+      load: BEFORE
+      required: false
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+    MiniPlaceholders:
+      load: BEFORE
+      required: false
+```
+
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI` and `MiniPlaceholders`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+
+<Callout type="warn" title="An installed integration that is not listed stays off">
+An integration that is installed but missing from `dependencies.server` is `HookState.NOT_VISIBLE`. Detection logs one warning naming the missing entry, and the status's reason tells the server owner the same.
+</Callout>
+
+## Wiring it up at enable
+
+Every entry point takes the same arguments in the same order: the owner `Plugin` (whose plugin manager is searched and whose logger receives every warning), the plugin's `ErrorReports`, the owner's switch, then that integration's own options. The switch is a `boolean`, or a `Set<CustomItemPlugin>` for custom items. An integration that is switched off is `HookState.SWITCHED_OFF` and looks at nothing.
+
+```java title="ShopPlugin.java"
+import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.java.JavaPlugin;
+import org.jetbrains.annotations.Nullable;
+import so.alaz.taffy.hooks.CustomItemPlugin;
+import so.alaz.taffy.hooks.CustomItems;
+import so.alaz.taffy.hooks.Detected;
+import so.alaz.taffy.hooks.EconomyProvider;
+import so.alaz.taffy.hooks.EconomyWatcher;
+import so.alaz.taffy.hooks.HookStatus;
+import so.alaz.taffy.hooks.PermissionProvider;
+import so.alaz.taffy.hooks.PlaceholderExpansionBuilder;
+import so.alaz.taffy.hooks.PlaceholderRegistration;
+import so.alaz.taffy.hooks.RegionProvider;
+import so.alaz.taffy.platform.ErrorReports;
+import so.alaz.taffy.platform.Scheduler;
+
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+public final class ShopPlugin extends JavaPlugin {
+
+    private final ErrorReports errors = new ErrorReports();
+    private Scheduler scheduler;
+    private CustomItems items;
+    private Detected<PermissionProvider> permissions;
+    private Detected<RegionProvider> regions;
+    private volatile Detected<EconomyProvider> economy;
+    private PlaceholderRegistration placeholders;
+    private final Map<UUID, String> balances = new ConcurrentHashMap<>();
+    private final Set<UUID> refreshing = ConcurrentHashMap.newKeySet();
+
+    @Override
+    public void onEnable() {
+        scheduler = new Scheduler(this, errors);
+        items = CustomItems.detect(this, errors, EnumSet.allOf(CustomItemPlugin.class));
+        permissions = PermissionProvider.luckPerms(this, errors, true);
+        regions = RegionProvider.worldGuard(this, errors, true);
+
+        economy = lookUpEconomy();
+        getServer().getPluginManager().registerEvents(
+            new EconomyWatcher(() -> economy = lookUpEconomy(), getServer()::isStopping), this);
+        scheduler.global(() -> economy = lookUpEconomy());
+
+        placeholders = new PlaceholderExpansionBuilder()
+            .identifier("shop")
+            .player("balance", this::balanceText)
+            .register(this, errors, true);
+    }
+
+    private Detected<EconomyProvider> lookUpEconomy() {
+        return EconomyProvider.vault(this, errors, true, scheduler.mode(), null);
+    }
+
+    private @Nullable String balanceText(Player player) {
+        EconomyProvider money = economy.provider();
+        if (money == null) {
+            return null;
+        }
+        UUID id = player.getUniqueId();
+        if (refreshing.add(id)) {
+            scheduler.dispatch(money.thread(id), () -> money.balance(id).toPlainString())
+                .whenComplete((text, failure) -> {
+                    if (text != null) {
+                        balances.put(id, text);
+                    }
+                    refreshing.remove(id);
+                });
+        }
+        return balances.get(id);
+    }
+
+    void showHooks(CommandSender sender) {
+        List<HookStatus> all = new ArrayList<>(items.statuses());
+        all.add(economy.status());
+        all.add(permissions.status());
+        all.add(regions.status());
+        all.addAll(placeholders.statuses());
+        for (HookStatus status : all) {
+            sender.sendPlainMessage(status.reason() == null
+                ? status.describe()
+                : status.describe() + ". " + status.reason());
+        }
+    }
+
+    @Override
+    public void onDisable() {
+        if (placeholders != null) {
+            placeholders.unregister();
+        }
+        if (scheduler != null) {
+            scheduler.close();
+        }
+    }
+}
+```
+
+PlaceholderAPI may call `balanceText` from any thread, so it reads a cached balance and asks for a fresh one on the thread `thread(UUID)` names through `Scheduler.dispatch`, with at most one refresh per player in flight. The first request for a player gives no value.
+
+In a real plugin each `true` comes from the plugin's own config, so the owner can switch an integration off. Register the `EconomyWatcher` and the first-tick lookup only while the economy is switched on. Detection runs once, on the server thread, in `onEnable`. An integration plugin that is not enabled by then stays off until the plugin detects again. There is no listener for an integration enabled later, except the Vault economy through `EconomyWatcher`.
+
+At disable, call `PlaceholderRegistration.unregister()` before `Scheduler.close()`, so no placeholder request reaches the plugin while it shuts down. It is the first step of `onDisable`, or the second, after `ComfiConfConnection.close`, when the plugin also uses [taffy-comficonf](/docs/modules/comficonf). The full order is in [taffy-platform](/docs/modules/platform).
+
+## Detection and status
+
+### HookState
+
+Detection stops at the first check that fails and gives its state. The checks run in the order of the constants, except for the Vault economy, which never checks that Vault is enabled: it checks the switch, that the economy API is visible, then that an economy is registered, and gives `NOT_INSTALLED` at either of the last two when no Vault plugin is installed.
+
+| State | `describe()` text | Meaning |
+|---|---|---|
+| `SWITCHED_OFF` | `<plugin> switched off` | The owner switched the integration off, so its plugin was not looked at. |
+| `NOT_INSTALLED` | `<plugin> not installed` | The integration plugin is not installed, or was no longer installed by the time the integration was built. |
+| `NOT_ENABLED` | `<plugin> installed but not enabled` | Installed but not enabled at detection, or disabled since. |
+| `NOT_VISIBLE` | `<plugin> <version> not visible to this plugin` | Installed with the API, but missing from `dependencies.server`. |
+| `API_MISSING` | `<plugin> <version> lacks the API that is read` | The installed version does not hold the API class that is read. |
+| `NOT_REGISTERED` | `<plugin> <version> has nothing registered with it` | Vault is there, but no economy has registered with it. A later registration can turn it on. |
+| `FAILED` | `<plugin> <version> could not be hooked` | The API is present, but building or registering the integration threw or a method it calls is missing. |
+| `ON` | `<plugin> on` | The integration is on. |
+| `LOADING` | `<plugin> on, waiting for its items to load` | On, and the plugin is still loading its items. |
+
+A version that was not read shows as `unknown`.
+
+### HookStatus
+
+`HookStatus` is a record: `HookStatus(String plugin, HookState state, @Nullable String version, @Nullable String reason)`.
+
+- `plugin()` is the integration plugin's name, such as `Vault`.
+- `version()` is `null` for `SWITCHED_OFF`, `NOT_INSTALLED` and `NOT_ENABLED`, and set (possibly to `unknown`) for every other state.
+- `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, and for a placeholder backend's `FAILED`.
+- `describe()` never includes the reason. `describe()` plus `reason()` is the owner's line.
+
+The constructor throws `NullPointerException` for a `null` plugin or state, and `IllegalArgumentException` for a blank reason.
+
+### Detected
+
+`Detected<T>` holds one integration's result: `status()` and `provider()`. `provider()` is non-null exactly when detection turned the integration on (`ON` or `LOADING`).
+
+Every status is read when asked. An integration bound to its plugin reads `NOT_ENABLED` (no version, no reason) while that plugin is disabled, and the status found at detection again once it is enabled. `provider()` stays set after the plugin disables; its calls then give their empty answers. The Vault economy is the exception: its status is fixed and changes only through a new lookup.
+
+`Detected` is immutable and safe to read from any thread. Its public constructor `Detected(HookStatus status, @Nullable T provider)` gives a fixed status, which suits tests:
+
+```java
+EconomyProvider testEconomy = Mockito.mock(EconomyProvider.class);
+Detected<EconomyProvider> fake = new Detected<>(
+    new HookStatus("Vault", HookState.ON, "1.7.3", null), testEconomy);
+```
+
+The constructor throws `IllegalArgumentException` when the state is `ON` or `LOADING` and the provider is `null`, or any other state is given a provider.
+
+## Custom items
+
+`CustomItems.detect(Plugin owner, ErrorReports errors, Set<CustomItemPlugin> switchedOn)` detects every custom item plugin once and logs one line naming the state of each. Plugins not in `switchedOn` are `SWITCHED_OFF`.
+
+### CustomItemPlugin
+
+The constants run in resolution order:
+
+| Constant | `plugin()` | `key()` | Alias |
+|---|---|---|---|
+| `ITEMSADDER` | `ItemsAdder` | `itemsadder` | `ia` |
+| `NEXO` | `Nexo` | `nexo` | |
+| `ORAXEN` | `Oraxen` | `oraxen` | |
+| `HEADDATABASE` | `HeadDatabase` | `headdatabase` | `hdb` |
+
+`CustomItemPlugin.byKey(String hint)` finds a plugin by key or alias, ignoring case and surrounding white space, and returns `null` for `null`, blank or unknown text.
+
+### Ids and references
+
+An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`).
+
+`CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config:
+
+```java
+CustomItemRef ref;
+try {
+    ref = CustomItemRef.parse(text);
+} catch (IllegalArgumentException invalid) {
+    getLogger().warning("reward " + text + " names no item");
+    return;
+}
+if (!ref.hasKnownProvider()) {
+    getLogger().warning("reward " + text + " names an unknown item plugin " + ref.providerHint());
+}
+```
+
+<Callout type="warn" title="ItemsAdder ids need their key">
+The text before the first colon is always read as a hint. `gems:ruby` has the hint `gems`, which names no plugin, so `create("gems:ruby")` returns `null`. Write `itemsadder:gems:ruby` or `ia:gems:ruby`.
+</Callout>
+
+### Building and reading items
+
+```java
+ItemStack reward = items.create("ia:gems:ruby");
+if (reward == null) {
+    // the hint names no plugin that is on, or no plugin knows the id
+}
+
+CustomItems.Resolution found = items.resolve(player.getInventory().getItemInMainHand());
+if (found.id() != null) {
+    // found.id() is such as "nexo:ruby"
+} else if (found.failed()) {
+    // a plugin could not answer, so the item may be a custom item whose id was not read
+}
+```
+
+| Method | Behaviour |
+|---|---|
+| `create(String reference)` | With a hint, asks only the plugin the hint names. Without one, asks each plugin in order and returns the first item built. Each plugin gets the id without the hint. Returns `null` when nothing is built. Throws `IllegalArgumentException` for `null` or a blank id. |
+| `resolve(@Nullable ItemStack item)` | Asks each plugin that reads ids in order and returns the first id as `Resolution(id, failed)`. A `null` or empty item gives no id and no failure. |
+| `idOrNull(@Nullable ItemStack item)` | `resolve(item).id()`. |
+| `ready()` | `true` when no enabled plugin is still loading its items. |
+| `available(String hint)` | `true` when the plugin a key or alias names is on and still enabled. |
+| `active()` | The plugins whose integration is on, in `CustomItemPlugin` order, whether or not each is still enabled. |
+| `statuses()` | One `HookStatus` per `CustomItemPlugin`, read now: `LOADING`, `ON` or `NOT_ENABLED` for a plugin that is on, the detected state for every other. |
+
+A plugin that is on but no longer enabled, or still loading its items, is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
+
+### Per plugin
+
+- **ItemsAdder** is `LOADING` until ItemsAdder fires `ItemsAdderLoadDataEvent`, or `ON` at once when it had loaded its items before detection. Its integration registers a listener for the owner, so `detect` runs while the owner is enabled, normally in `onEnable`. The listener stays until the owner disables, so each further `detect` (such as one from a reload command) leaves at most one more small listener.
+- **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items.
+- **HeadDatabase** only builds heads: `hdb:1234` builds head `1234`. It is never asked for an id and never counts as a failure in `resolve`. It knows no id until it has loaded its database shortly after startup, so `create` returns `null` until then.
+
+`CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item.
+
+## Economy
+
+`EconomyProvider.vault(Plugin owner, ErrorReports errors, boolean switchedOn, Scheduler.Mode mode, @Nullable Integer scale)` looks up the economy registered with Vault. It reads the registration once and calls nothing in the economy.
+
+- `mode` is `scheduler.mode()`. It decides what each reason asks the owner to install: on `Scheduler.Mode.FOLIA` the reasons name VaultUnlocked and an economy plugin that supports Folia.
+- `scale` is the number of decimal places to use, from 0 to `EconomyProvider.MAX_SCALE` (4), or `null` to use the economy's own fractional digits, capped at 4, or 2 when it reports none. A scale finer than the economy keeps is warned about on first use. A scale outside 0 to 4 throws `IllegalArgumentException`, also when switched off.
+
+Vault itself need not be enabled: only the API and the registration are read. The status's plugin is always `Vault`, and each state but `SWITCHED_OFF` and `ON` carries a reason:
+
+| State | When |
+|---|---|
+| `SWITCHED_OFF` | `switchedOn` is `false`; nothing is read. |
+| `NOT_INSTALLED` | No Vault plugin is installed. |
+| `NOT_VISIBLE` | Vault holds the API, but the plugin does not list `Vault` in `dependencies.server`. Logged as a warning. |
+| `API_MISSING` | The installed Vault lacks the economy API. Logged as a warning. |
+| `NOT_REGISTERED` | Vault is installed and no economy has registered with it. |
+| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vault`. |
+| `ON` | The provider is set. |
+
+### Late economies and EconomyWatcher
+
+An economy plugin that enables after the caller registers with Vault only then, so a `NOT_REGISTERED` found in `onEnable` may not last. While the economy is switched on, the plugin:
+
+1. keeps the latest `Detected<EconomyProvider>` in a `volatile` field;
+2. registers `new EconomyWatcher(Runnable resolve, BooleanSupplier stopping)` as a listener, where `resolve` looks the economy up again and stores the result;
+3. looks the economy up once more on the first tick, with `scheduler.global(...)`.
+
+`EconomyWatcher` runs `resolve` on `ServiceRegisterEvent` and `ServiceUnregisterEvent` for the Vault `Economy` service, matched by class name so the listener loads no Vault class. An unregistration while `stopping` returns `true` is ignored. `resolve` runs on the thread that fires the event.
+
+Each lookup is a new detection: a Vault that stays `NOT_VISIBLE`, `API_MISSING` or `FAILED` is warned about (and a `FAILED` lookup reported) once per lookup, so at least twice at startup.
+
+### EconomyProvider
+
+| Method | Behaviour |
+|---|---|
+| `int scale()` | Decimal places, from 0 to 4. |
+| `ThreadTag thread(UUID player)` | The thread to call the economy on. The Vault provider gives `ThreadTag.GLOBAL` for every player. |
+| `BigDecimal balance(UUID player)` | The balance rounded half-even to `scale()`, possibly negative. Throws `IllegalStateException` when the economy reports a value that is not finite. |
+| `boolean has(UUID player, BigDecimal amount)` | Compares the unrounded balance with the amount rounded half-even to `scale()`. Accepts any amount. |
+| `EconomyResult withdraw(UUID player, BigDecimal amount)` | Takes money when `has` holds. Never `NOT_STARTED`. |
+| `EconomyResult withdraw(UUID player, BigDecimal amount, BooleanSupplier start)` | As above; `start` runs after the balance check and before money moves, on the same thread, and `false` gives `NOT_STARTED` with no money moved. |
+| `EconomyResult deposit(UUID player, BigDecimal amount)` | Gives money. |
+| `String probe()` | A self-test that reads what the economy reports about itself and moves no money. Returns one line naming what was reached (for Vault, the economy's name and its decimal places). Throws a `RuntimeException` when nothing was reached. |
+
+Every call is synchronous. A withdraw or deposit rounds the amount half-even to `scale()` and throws `IllegalArgumentException` for an amount that is negative, rounds to zero, or cannot reach the economy exactly. Vault carries amounts as `double` (the Vault 1.7 API), so an amount that does not survive the conversion to `double` and back is refused. A withdraw or deposit that throws has an unknown outcome: money may or may not have moved.
+
+### EconomyResult
+
+`EconomyResult(Status status, @Nullable String message)`, with `EconomyResult.ok()`, `EconomyResult.of(Status)` and `EconomyResult.failed(String message)`. A `FAILED` result needs a non-blank message; `of(Status.FAILED)` throws `IllegalArgumentException`.
+
+| `EconomyResult.Status` | Meaning |
+|---|---|
+| `OK` | The money moved. |
+| `INSUFFICIENT` | The balance did not cover the amount; no money moved. |
+| `UNSUPPORTED` | The economy does not support the call; no money moved. |
+| `OVERDRAWN` | The money moved and left the balance below zero. |
+| `FAILED` | The economy refused the call; `message()` holds its reason; no money moved. |
+| `NOT_STARTED` | `start` returned `false` after the balance check; no money moved. |
+
+### Charging a player on Paper and Folia
+
+Run each call on the thread `thread(UUID)` names, through `Scheduler.dispatch`:
+
+```java
+void charge(Player player, BigDecimal price) {
+    EconomyProvider money = economy.provider();
+    if (money == null) {
+        player.sendPlainMessage("The shop is closed.");
+        return;
+    }
+    UUID id = player.getUniqueId();
+    scheduler.dispatch(money.thread(id), () -> money.withdraw(id, price))
+        .whenComplete((result, failure) -> scheduler.entity(player, () -> {
+            if (failure != null) {
+                player.sendPlainMessage("The payment could not be confirmed.");
+            } else if (result.status() == EconomyResult.Status.OK) {
+                player.sendPlainMessage("Paid " + price.toPlainString() + ".");
+            } else {
+                player.sendPlainMessage("The payment did not go through.");
+            }
+        }));
+}
+```
+
+The future also fails when the plugin is disabling (`RejectedExecutionException` for `ThreadTag.GLOBAL`, before anything runs) or when the amount is refused with `IllegalArgumentException` before it reaches the economy. A withdraw that throws inside the economy has an unknown outcome, so the plugin does not refund or retry blindly.
+
+## Permissions
+
+`PermissionProvider.luckPerms(Plugin owner, ErrorReports errors, boolean switchedOn)` detects LuckPerms. It reads LuckPerms only when switched on, installed, enabled and its API classes are visible, and gives `FAILED` when a method the provider calls is missing. A detection failure is reported under `hook.luckperms`.
+
+Plain permission checks go through Bukkit's `Player.hasPermission` and are not part of this interface.
+
+| Method | Behaviour |
+|---|---|
+| `boolean available()` | LuckPerms is enabled and has finished loading. |
+| `@Nullable String primaryGroup(UUID player)` | The primary group, or `null` when the player's data is not loaded or cannot be read. |
+| `List<String> groups(UUID player)` | Every group the player inherits, directly or through other groups, without context; empty when the data is not loaded or cannot be read. |
+| `boolean addGroup(UUID player, String group)` | Adds a permanent membership; `true` when the player was not already in the group and the change was saved. |
+| `boolean addTempGroup(UUID player, String group, Duration duration)` | Adds a membership until a time from now, in whole seconds rounded down. An earlier expiry is moved to the new time; a later one is kept; a permanent membership is left and the temporary one added beside it. Throws `IllegalArgumentException` for under one second or an end after `Instant.MAX`. |
+| `boolean removeGroup(UUID player, String group)` | Removes a membership. |
+| `boolean setPermission(UUID player, String node, boolean value)` | Grants (`true`) or denies (`false`) a node, without context. |
+| `boolean unsetPermission(UUID player, String node)` | Clears a node set directly on the player, whatever its value or context, in saved data only. |
+
+Reads come from LuckPerms' cache, so a player whose data is not loaded (usually one who is offline) gives `null` or an empty list. Writes load the player's data when it is not cached, then block until the change is saved, so run them off the server thread:
+
+```java
+PermissionProvider perms = permissions.provider();
+UUID buyer = player.getUniqueId();
+if (perms != null) {
+    scheduler.async(() -> perms.addTempGroup(buyer, "vip", Duration.ofDays(30)));
+}
+```
+
+A write returns `true` only when the data changed and was saved, and `false` when nothing changed, LuckPerms is not available, or the write failed. A failure inside LuckPerms is logged as a warning (at most once a minute per kind of call, with its stack the first time) and reported under `hook.luckperms`, not thrown.
+
+## Regions
+
+`RegionProvider.worldGuard(Plugin owner, ErrorReports errors, boolean switchedOn)` detects WorldGuard the same way, reporting a detection failure under `hook.worldguard`.
+
+| Method | Behaviour |
+|---|---|
+| `boolean available()` | WorldGuard is enabled. |
+| `List<String> regionsAt(Location location)` | The ids of every region covering the block, in an unmodifiable list. |
+
+`regionsAt` returns an empty list when WorldGuard is not available, the location has no world or its world has unloaded, WorldGuard keeps no regions for that world, or the lookup fails. Only a failed lookup is logged (at most once a minute) and reported under `hook.worldguard`. A lookup may run on any thread, since WorldGuard's region index supports concurrent reads.
+
+WorldGuard lowers region ids in the server's default locale, which on a Turkish server turns `I` into a dotless i. Compare ids with `String.equalsIgnoreCase`, not after lowering them in a fixed locale:
+
+```java
+RegionProvider wg = regions.provider();
+boolean inMarket = wg != null
+    && wg.regionsAt(player.getLocation()).stream().anyMatch(id -> id.equalsIgnoreCase("market"));
+```
+
+## Placeholders
+
+`PlaceholderExpansionBuilder` collects the plugin's placeholders and registers them with PlaceholderAPI and MiniPlaceholders, each when it is installed, enabled and its API classes are visible. With the identifier `shop`, the name `balance` is `%shop_balance%` in PlaceholderAPI and `<shop_balance>` in MiniPlaceholders.
+
+```java
+placeholders = new PlaceholderExpansionBuilder()
+    .identifier("shop")
+    .player("balance", this::balanceText)
+    .offline("veteran", offlinePlayer -> offlinePlayer.hasPlayedBefore() ? "yes" : "no")
+    .global("online", () -> String.valueOf(getServer().getOnlinePlayers().size()))
+    .register(this, errors, true);
+```
+
+| Method | Behaviour |
+|---|---|
+| `identifier(String identifier)` | Sets the prefix, kept in lower case. Letters `a` to `z` in either case, digits and `-` only; `_` is refused because PlaceholderAPI reads it as the end of the identifier. |
+| `player(String name, Function<Player, @Nullable String> handler)` | Resolved for an online player. In PlaceholderAPI it gives no value for an offline player. |
+| `offline(String name, Function<OfflinePlayer, @Nullable String> handler)` | Resolved for a player who may be offline. PlaceholderAPI only. |
+| `global(String name, Supplier<@Nullable String> handler)` | No player. |
+| `register(Plugin owner, ErrorReports errors, boolean switchedOn)` | Registers what was added so far, PlaceholderAPI first, and returns the `PlaceholderRegistration`. |
+
+Without `identifier`, the identifier is the owner's name in lower case with only the letters `a` to `z` and digits kept. When that leaves nothing, `register` throws `IllegalStateException`, also when switched off. A name holds only lower case `a` to `z`, digits, `_` and `-`; any other name throws `IllegalArgumentException`. A later placeholder of the same kind and name replaces the earlier one.
+
+Behaviour to know:
+
+- A handler that returns `null` gives no value. One that throws a `RuntimeException` gives no value, and the failure is logged at most once a minute per placeholder and not reported.
+- PlaceholderAPI may call a handler from any thread, so handlers must be thread-safe. The builder itself is not thread-safe.
+- In PlaceholderAPI a global placeholder wins over an offline or player one of the same name, and an offline one over a player one. In MiniPlaceholders a player and a global placeholder of the same name collide, and which answers is unspecified.
+- MiniPlaceholders inserts a value as plain text, so markup in it is shown as written.
+- Registering replaces any PlaceholderAPI expansion that already uses the identifier. MiniPlaceholders refuses an identifier another expansion uses, which makes it `FAILED`. The PlaceholderAPI expansion stays registered across `/papi reload`.
+- A backend that refuses or throws is `FAILED`: logged, reported under `hook.placeholderapi` or `hook.miniplaceholders`, with the warning's text as its reason. The other backend is still registered. A backend that is installed but not enabled, not visible, or lacks the API is skipped with a warning; one that is not installed is skipped silently.
+- Call `register` on the server thread in `onEnable`: PlaceholderAPI fires a synchronous event when it registers. The owner's authors and version describe the expansion.
+
+### PlaceholderRegistration
+
+- `statuses()` gives PlaceholderAPI's status, then MiniPlaceholders'. It may be called from any thread and is not changed by `unregister()`.
+- `unregister()` removes the placeholders from both backends, leaving an expansion that has since replaced them under the same identifier. A failure is logged as a warning, and a second call does nothing. Call it at the start of `onDisable`, on the server thread, after `ComfiConfConnection.close` when the plugin also uses taffy-comficonf: PlaceholderAPI keeps an expansion registered after the plugin that registered it disables.
+
+## Failures and threads
+
+Detection follows one rule for every integration:
+
+- Not visible, or lacking the API: one warning, not reported.
+- Could not be hooked (threw, or a method it calls is missing): `FAILED`, one warning, and a report to `ErrorReports` under `hook.<name>`, the integration plugin's name in lower case.
+- An `Error` other than a `LinkageError` propagates.
+
+Beyond these, `CustomItems.detect` logs one line naming every custom item plugin's state, and `register` warns about a placeholder backend that is installed but not enabled. No other state is logged.
+
+A failure inside a later call is logged at most once a minute per kind of call, with its stack the first time. These sources reach `ErrorReports`:
+
+| Source | Reported for |
+|---|---|
+| `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, and an item that could not be built. |
+| `hook.vault` | A lookup that failed, once per lookup. |
+| `hook.luckperms` | A failed detection, and every failed call. |
+| `hook.worldguard` | A failed detection, and every failed lookup. |
+| `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
+
+Reading an item's id and resolving a placeholder log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
+
+A `null` argument throws `NullPointerException`, except where a parameter is marked `@Nullable`, and except a reference given to `CustomItemRef.parse` or `CustomItems.create`, which throws `IllegalArgumentException`.
+
+| Type | Thread |
+|---|---|
+| `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
+| `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
+| `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
+| `CustomItems` calls | The thread that owns the item. |
+| `EconomyProvider` calls | The thread `thread(UUID)` names. |
+| `PermissionProvider` writes | Off the server thread; they block until saved. |
+| `RegionProvider.regionsAt` | Any thread. |
+| `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
+| Placeholder handlers | Called from any thread by PlaceholderAPI. |

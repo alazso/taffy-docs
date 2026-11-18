@@ -1,0 +1,526 @@
+---
+title: taffy-storage
+description: JDBC storage over HikariCP for SQLite, MySQL, MariaDB and PostgreSQL, with transactions on its own threads and migrations from the plugin's scripts.
+---
+
+`taffy-storage` gives a plugin one `Storage` object for its database. It connects through HikariCP to SQLite, MySQL, MariaDB or PostgreSQL, brings the schema up to date from SQL scripts the plugin ships, and runs every piece of work in a transaction of its own on database threads that storage owns. The plugin never touches a `Connection`, never passes an executor, and never writes its own migration runner.
+
+| Type | What it is |
+|---|---|
+| `Storage` | Starts the database, runs migrations, runs work in transactions, closes with a drain. |
+| `StorageSettings` | The dialect, the SQLite file or `Server`, the `Pool`, the thread count and the backup count. |
+| `Dialect` | `SQLITE`, `MYSQL`, `MARIADB`, `POSTGRES`: driver class names and the SQL that differs between them. |
+| `Migration` | One numbered schema step, located by its script name. |
+| `Baseline` | The version table of the plugin's previous migration runner, taken over once. |
+| `Tx`, `TxWork` | The open transaction, and the work run inside it. |
+| `Params`, `Row` | Typed placeholder binding and column reading: UUID, text, integer, money, time, JSON, bytes. |
+| `MoneyColumn` | Stores an amount as a whole number at 4 decimal places. |
+| `StorageException`, `CommitUnknownException`, `MoneyOutOfRangeException` | A failure for the server owner, a commit with an unknown outcome, an amount out of range. |
+
+All types are in the package `so.alaz.taffy.storage`. The module depends on `taffy-platform` (for `ErrorReports`, see [taffy-platform](/docs/modules/platform)).
+
+## Setup
+
+The module is `alaz.taffy.storage` in the catalog. HikariCP and the JDBC drivers are not bundled, and the published metadata of `taffy-storage` names none of them. A plugin lists HikariCP and the driver of every dialect it offers in `paperPlugin.runtimeLibraries`, so that Paper downloads them at server start. A plugin whose own tests start storage also declares HikariCP and the driver of each dialect those tests start as `testRuntimeOnly`.
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.storage)
+
+    testImplementation(alaz.paper.api)
+    testImplementation(alaz.taffy.test)
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+    testRuntimeOnly(alaz.hikari)
+    testRuntimeOnly(alaz.sqlite.jdbc)
+}
+
+paperPlugin {
+    runtimeLibrary(alaz.hikari)
+    runtimeLibrary(alaz.sqlite.jdbc)
+    runtimeLibrary(alaz.mysql.connector)
+    runtimeLibrary(alaz.mariadb.jdbc)
+    runtimeLibrary(alaz.postgresql.jdbc)
+}
+```
+
+`runtimeLibrary` adds the catalog entry's Maven coordinates to `paperPlugin.runtimeLibraries`, and a non-empty list generates `RuntimeLibraries.COORDINATES` in the plugin's group package for the plugin's `PluginLoader` to read. [Gradle plugins](/docs/gradle-plugins) covers the generated class.
+
+| Library | Catalog alias | Maven coordinates | Driver class |
+|---|---|---|---|
+| HikariCP | `alaz.hikari` | `com.zaxxer:HikariCP` | |
+| SQLite | `alaz.sqlite.jdbc` | `org.xerial:sqlite-jdbc` | `org.sqlite.JDBC` |
+| MySQL | `alaz.mysql.connector` | `com.mysql:mysql-connector-j` | `com.mysql.cj.jdbc.Driver` |
+| MariaDB | `alaz.mariadb.jdbc` | `org.mariadb.jdbc:mariadb-java-client` | `org.mariadb.jdbc.Driver` |
+| PostgreSQL | `alaz.postgresql.jdbc` | `org.postgresql:postgresql` | `org.postgresql.Driver` |
+
+The pool names the driver class explicitly (`Dialect.driverClassName()`), because Paper's library loader puts the drivers on the plugin class loader, where `java.sql.DriverManager` does not find them by URL.
+
+<Callout type="warn" title="Missing libraries fail the start, not the server">
+`Storage.start` looks up HikariCP and the driver of the configured dialect before it builds any pool. Without HikariCP its future fails with a `StorageException` whose message is `HikariCP is not available`. Without the driver it fails with `the mysql driver is not available` (with the dialect's id: `sqlite`, `mysql`, `mariadb` or `postgres`). No pool is built and the database threads stop.
+</Callout>
+
+## Settings
+
+`StorageSettings` is a record. Its constructors check every value, and the host, the database name and the table prefix are restricted because they are concatenated into SQL and JDBC URLs. The plugin reads its own config and builds the record; [taffy-config](/docs/modules/config) covers reading the file.
+
+```java
+public record StorageSettings(Dialect dialect, String sqliteFile, @Nullable Server server, Pool pool,
+                              int asyncThreads, int backupKeep)
+```
+
+| Component | Rule |
+|---|---|
+| `dialect` | The database. |
+| `sqliteFile` | The SQLite file, relative to the plugin's data folder. Not blank for `SQLITE`, ignored otherwise. Never `null`. |
+| `server` | The server for `MYSQL`, `MARIADB` and `POSTGRES` (required), `null` for `SQLITE`. |
+| `pool` | The connection pool. |
+| `asyncThreads` | The number of database threads, 1 or more. |
+| `backupKeep` | How many SQLite backups taken before a migration to keep, 0 or more. 0 takes none. |
+
+`StorageSettings.Pool(int maxSize, int minIdle, Duration connectionTimeout)` takes `maxSize` of 1 or more, `minIdle` from 0 to `maxSize`, and a `connectionTimeout` of 250 milliseconds or more.
+
+`StorageSettings.Server(String host, int port, String database, String user, String password, SslMode sslMode, String tablePrefix)` takes:
+
+| Component | Rule |
+|---|---|
+| `host` | A host name or IPv4 address of ASCII letters, digits, dots, hyphens and underscores, or an IPv6 address in brackets such as `[::1]`. |
+| `port` | 1 to 65535. |
+| `database` | 1 to 64 letters, digits, underscores, dollar signs and hyphens. |
+| `user`, `password` | The credentials. The password is empty for none. `Server.toString()` shows `(set)` instead of the password. |
+| `sslMode` | `DISABLE`, `TRUST` or `VERIFY_FULL`. |
+| `tablePrefix` | Empty, or up to 32 lowercase letters, digits and underscores starting with a letter or underscore. |
+
+`StorageSettings.tablePrefix()` returns the server's prefix, or an empty string for SQLite: a SQLite database has no table prefix.
+
+<Tabs items={['SQLite', 'MariaDB']}>
+<Tab value="SQLite">
+```java
+StorageSettings settings = new StorageSettings(
+    Dialect.SQLITE, "data.db", null,
+    new StorageSettings.Pool(4, 1, Duration.ofSeconds(10)),
+    2, 5);
+```
+</Tab>
+<Tab value="MariaDB">
+```java
+StorageSettings.Server server = new StorageSettings.Server(
+    "db.example.net", 3306, "minecraft", "plugin", "secret",
+    StorageSettings.SslMode.VERIFY_FULL, "myplugin_");
+StorageSettings settings = new StorageSettings(
+    Dialect.MARIADB, "data.db", server,
+    new StorageSettings.Pool(8, 2, Duration.ofSeconds(10)),
+    4, 0);
+```
+</Tab>
+</Tabs>
+
+A constructor throws `NullPointerException` for a `null` component (other than `StorageSettings.server`, which is `null` for SQLite) and `IllegalArgumentException` with a message naming the bad value, so a plugin can show that message to the server owner.
+
+### SSL modes
+
+`SslMode` decides whether the connection to a server is encrypted and what is checked. Each mode becomes the driver's own setting in the JDBC URL:
+
+| `SslMode` | Meaning | MySQL | MariaDB | PostgreSQL |
+|---|---|---|---|---|
+| `DISABLE` | Not encrypted. | `sslMode=DISABLED` | `sslMode=disable` | `sslmode=disable` |
+| `TRUST` | Encrypted, the server's certificate is not checked. | `sslMode=REQUIRED` | `sslMode=trust` | `sslmode=require` |
+| `VERIFY_FULL` | Encrypted, the certificate and the host name are checked. | `sslMode=VERIFY_IDENTITY` | `sslMode=verify-full` | `sslmode=verify-full` with `sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory` |
+
+- With `DISABLE`, MySQL and MariaDB URLs also carry `allowPublicKeyRetrieval=true`, so an unencrypted login with MySQL 8's `caching_sha2_password` can fetch the server key.
+- With `VERIFY_FULL`, the certificate is checked against the JVM's default trust store on every server dialect. On PostgreSQL that is what `DefaultJavaSSLFactory` does; the driver's default socket factory would check only a `root.crt` file in the user's home. A server whose certificate comes from a private authority needs that authority in the trust store of the JVM that runs Paper.
+- `VERIFY_FULL` checks the host name against the certificate, so `host` must be a name the certificate holds. A certificate for `localhost` is accepted with host `localhost` and refused with host `127.0.0.1`.
+- With `TRUST`, PostgreSQL uses `sslmode=require` with the driver's default socket factory.
+
+Every server URL also sets a socket timeout of 30 seconds (`socketTimeout=30000` on MySQL and MariaDB, `socketTimeout=30` on PostgreSQL), and MySQL and MariaDB URLs set `useAffectedRows=true`.
+
+## Starting storage
+
+```java
+public static CompletableFuture<Storage> start(Plugin plugin, ErrorReports errors, StorageSettings settings,
+                                               List<Migration> migrations, Clock clock)
+
+public static CompletableFuture<Storage> start(Plugin plugin, ErrorReports errors, StorageSettings settings,
+                                               List<Migration> migrations, Baseline baseline, Clock clock)
+```
+
+`start` reads the plugin's name, version, data path and logger on the calling thread, then does everything else on a new database thread (on SQLite, the writer thread): it checks the libraries, builds the pools, runs the pending migrations and completes the future.
+
+- `Plugin.getName()` names the threads and pools and must not be blank.
+- The plugin version is written into the file name of a SQLite backup.
+- `Plugin.getDataPath()` holds the SQLite file and the `backups` folder; missing folders are created.
+- `Plugin.getLogger()` receives a line for each applied migration and backup, and the warnings.
+- `Plugin.getResource(String)` opens each migration script.
+- `errors` receives the failures storage catches and handles itself, under the source `storage`: an `afterCommit` action that throws, and a task on the database threads that throws while storage closes.
+- `clock` is the clock of `Tx.now()` and of the times recorded for migrations and backups.
+
+`start` throws `NullPointerException` for a `null` argument and `IllegalArgumentException` when the plugin name is blank or the migration versions are not strictly increasing. Every other failure completes the future exceptionally.
+
+```java title="MyPlugin.java"
+public final class MyPlugin extends JavaPlugin {
+
+    private static final List<Migration> MIGRATIONS = List.of(
+        new Migration(1, "accounts"),
+        new Migration(2, "account_history"));
+
+    private final ErrorReports errors = new ErrorReports();
+    private volatile CompletableFuture<Storage> starting;
+    private volatile Storage storage;
+    private Scheduler scheduler;
+
+    @Override
+    public void onEnable() {
+        scheduler = new Scheduler(this, errors);
+        StorageSettings settings = new StorageSettings(
+            Dialect.SQLITE, "data.db", null,
+            new StorageSettings.Pool(4, 1, Duration.ofSeconds(10)),
+            2, 5);
+        CompletableFuture<Storage> start = Storage.start(this, errors, settings, MIGRATIONS, Clock.systemUTC());
+        starting = start;
+        start.whenComplete((started, failure) -> {
+            if (failure == null) {
+                storage = started;
+                return;
+            }
+            if (failure instanceof CancellationException) {
+                return;
+            }
+            if (failure instanceof StorageException owner) {
+                getLogger().severe("Cannot start the database: " + owner.getMessage());
+            } else {
+                getLogger().log(Level.SEVERE, "Cannot start the database", failure);
+            }
+            scheduler.global(() -> getServer().getPluginManager().disablePlugin(this));
+        });
+    }
+}
+```
+
+A start cancelled at disable completes with a `CancellationException`, which the handler ignores.
+
+The future fails with:
+
+- a `StorageException` when HikariCP or the driver is missing, a migration script is missing, unreadable, not valid UTF-8, cannot be split into statements or changed after it ran, a SQLite migration leaves a broken foreign key, the database was set up by a newer version of the plugin, the version table exists in another layout, the connection names no current database (on PostgreSQL, no current schema), or another start has held the migration lock for a day (MySQL and MariaDB);
+- an `SQLException` when the database refuses a statement; for a statement of a migration script the message names the migration and the statement;
+- whatever HikariCP throws when it cannot connect.
+
+A `StorageException` message is written for the server owner as one sentence without a final full stop, so it reads after a lead-in such as `Cannot start the database: `.
+
+When the start fails, it closes the pools it built and stops its threads. When the future was already completed by the time the start finishes (by `cancel`, `orTimeout` or `completeOnTimeout`), the start closes the storage it built itself, so a plugin that gives up on a start has nothing to close.
+
+The future completes on a database thread. On SQLite it completes on a read thread, never on the writer thread.
+
+## Running work
+
+Each piece of work is a `TxWork<T>`, a function from an open `Tx` to a result that may throw `SQLException`. It runs in one transaction with a connection of its own. The transaction commits when the work returns and rolls back when it throws.
+
+| Method | Use |
+|---|---|
+| `<T> CompletableFuture<T> async(TxWork<T> work)` | Work that may write. |
+| `<T> CompletableFuture<T> read(TxWork<T> work)` | Work that only reads. On SQLite it runs on read-only connections that refuse a write. |
+| `<T> CompletableFuture<T> asyncRetrying(TxWork<T> work)` | As `async`, retried when the database rolled the transaction back. |
+| `<T> CompletableFuture<T> readRetrying(TxWork<T> work)` | As `read`, retried the same way. |
+
+`Tx` runs statements and carries the transaction's context:
+
+| `Tx` method | What it does |
+|---|---|
+| `int update(String sql, Tx.Binder binder)` | Runs an `INSERT`, `UPDATE` or `DELETE` and returns the row count. |
+| `<T> List<T> query(String sql, Tx.Binder binder, Tx.Mapper<T> mapper)` | Maps every row of the result, in order. |
+| `<T> Optional<T> queryOne(String sql, Tx.Binder binder, Tx.Mapper<T> mapper)` | At most one row. More than one throws `SQLException`; a mapper returning `null` gives an empty `Optional`. |
+| `void execute(String sql)` | A statement without values, such as DDL. |
+| `void afterCommit(Runnable action)` | Runs `action` once the transaction has committed, on the database thread, before the work's future completes, in the order the actions were added. Never runs for a transaction that rolled back or whose commit has an unknown outcome. An action that throws is logged and reported to `errors`, and the future still completes with the result. |
+| `String table(String name)` | The table prefix followed by `name`. |
+| `Instant now()` | The storage clock's instant when the transaction opened, the same for every call in it. |
+| `Dialect dialect()` | The database. |
+
+`Tx.Binder.NONE` binds nothing, for a statement without placeholders. `Storage` itself also has `table(String)` and `dialect()`.
+
+```java
+public CompletableFuture<Optional<BigDecimal>> balance(UUID player) {
+    return storage.read(tx -> tx.queryOne(
+        "SELECT balance FROM " + tx.table("accounts") + " WHERE player = ?",
+        params -> params.uuid(player),
+        row -> row.money("balance")));
+}
+
+public CompletableFuture<Boolean> deposit(UUID player, BigDecimal amount) {
+    return storage.asyncRetrying(tx -> {
+        int changed = tx.update(
+            "UPDATE " + tx.table("accounts") + " SET balance = balance + ?, updated_at = ? WHERE player = ?",
+            params -> params.money(amount).time(tx.now()).uuid(player));
+        if (changed == 1) {
+            tx.afterCommit(() -> getLogger().info("Deposited " + amount + " for " + player));
+        }
+        return changed == 1;
+    });
+}
+```
+
+### Binding and reading values
+
+`Params` binds placeholders in order, the first call binding the first `?`, and every method returns the same `Params` so calls chain. Every method that takes an object binds SQL `NULL` for `null`. `Row` reads the current row by column name, decodes each value the way `Params` binds it, and returns `null` for SQL `NULL`.
+
+| `Params` | `Row` | Stored as |
+|---|---|---|
+| `uuid(UUID)` | `uuid(String)` | 16 bytes, most significant first, on SQLite, MySQL and MariaDB; a native `uuid` on PostgreSQL. |
+| `text(String)` | `text(String)` | A string. |
+| `integer(long)`, `integer(Long)` | `integer(String)` returns `Long` | A whole number; a `null` `Long` binds `NULL` typed `BIGINT`. |
+| `money(BigDecimal)` | `money(String)` | A `BIGINT` at 4 decimal places, through `MoneyColumn.toStored`. |
+| `moneyOrNull(BigDecimal)` | `money(String)` | A signed amount through `MoneyColumn.toStoredOrNull`: an amount above `MoneyColumn.MAX` in magnitude binds `NULL`. |
+| `time(Instant)` | `time(String)` | Milliseconds since the epoch in a `BIGINT`; precision below a millisecond is dropped. |
+| `json(String)` | `json(String)` | `Types.OTHER` on PostgreSQL (fits `json` and `jsonb`), a string elsewhere. |
+| `bytes(byte[])` | `bytes(String)` | A byte array. |
+
+`Row.json` returns a normalized document for a MySQL `JSON` column and a PostgreSQL `jsonb` column, which may differ from the stored text in whitespace, key order and duplicate keys. MariaDB, SQLite and a PostgreSQL `json` column return the stored text.
+
+`MoneyColumn.SCALE` is 4 and `MoneyColumn.MAX` is `Long.MAX_VALUE` at 4 decimal places. `12.5` is stored as `125000`, so stored values sort numerically on every database. `toStored` rounds half even and throws `MoneyOutOfRangeException` (an `IllegalArgumentException`) for an amount of `-0.0001` or less, or above `MAX`. An amount whose magnitude is below `0.0001` is stored as 0 whatever its sign. `fromStored(long)` decodes.
+
+### Dialect SQL
+
+`Dialect` builds the statements that differ between databases. Table and column names are concatenated as given, so they must come from code, never from a player or a server owner; every value is a `?` placeholder.
+
+| Method | Result |
+|---|---|
+| `insertOrIgnore(String table, List<String> columns, List<String> key)` | An insert that does nothing on a conflict, counting 0. On MySQL and MariaDB it skips a conflict on any unique key, so `key` must be the table's only unique key. |
+| `upsert(String table, List<String> columns, List<String> key, List<String> updated)` | An insert that overwrites `updated` on a conflict. Through `Tx.update` on MySQL or MariaDB it counts 1 for an insert, 2 for a changed row and 0 for an unchanged row; on SQLite and PostgreSQL it counts 1. MySQL and MariaDB ignore `key`. |
+| `forUpdate()` | `" FOR UPDATE"`, or an empty string on SQLite. |
+| `listTables()` | A query listing the tables of the current database or schema. |
+| `id()` | `sqlite`, `mysql`, `mariadb` or `postgres`, also the folder of the migration scripts. |
+| `transactionalDdl()` | `true` for SQLite and PostgreSQL, `false` for MySQL and MariaDB. |
+
+```java
+storage.async(tx -> tx.update(
+    tx.dialect().upsert(tx.table("accounts"),
+        List.of("player", "balance", "updated_at"),
+        List.of("player"),
+        List.of("balance", "updated_at")),
+    params -> params.uuid(player).money(balance).time(tx.now())));
+```
+
+### Row counts differ per dialect
+
+MySQL and MariaDB connections are opened with `useAffectedRows=true`. An `UPDATE` there counts only the rows whose values it changed, so a matched row written with its current values counts 0. SQLite and PostgreSQL count every matched row. A conditional update that must report success on MySQL and MariaDB changes a column, for example a timestamp.
+
+### Retrying rolled-back transactions
+
+`asyncRetrying` and `readRetrying` run the work again when the database rolled its transaction back to break a deadlock or a serialization conflict, up to 4 attempts in all. A failure counts as rolled back when it is, or has as a cause, an `SQLTransactionRollbackException` or an `SQLException` whose SQLState starts with `40` (`40001` on MySQL and MariaDB, `40P01` on PostgreSQL).
+
+- Each attempt gets its own connection and `Tx`, so `afterCommit` actions of an attempt that rolled back never run. An effect outside the database belongs in `afterCommit`, and each run of the work must be safe to repeat.
+- Before attempt `n + 1` the database thread sleeps a random 5n to 20n milliseconds. The sleep holds that thread; on SQLite it holds every write queued behind it. When the thread is interrupted during the sleep, the future fails with an `SQLException` and the thread's interrupt flag is set again.
+- When no attempt commits, the future fails with the failure of the last attempt.
+- A `CommitUnknownException` is never retried.
+- A SQLite transaction begins deferred: work that reads and then writes while another process holds the file's write lock fails at once with `SQLITE_BUSY`, and the retrying methods do not retry it.
+
+### Failures
+
+| Failure | Meaning |
+|---|---|
+| The exception the work threw | The transaction rolled back; nothing was written. |
+| `CommitUnknownException` | The commit statement itself failed, so whether the transaction was written is unknown. It extends `SQLException` and keeps the SQLState and vendor code. Read the state back to find out. |
+| `RejectedExecutionException` | Storage is closed, or closed before this work ran. |
+| `IllegalStateException` from `update`, `query`, `queryOne`, `execute` or `afterCommit` | The `Tx` was used from another thread or after the work returned. |
+
+## Threads
+
+`Storage` owns its threads. `start` creates `asyncThreads` daemon threads named `<name>-db-1`, `<name>-db-2` and so on, where `<name>` is the plugin name, and `close` stops them.
+
+| Dialect | Writes | Reads | Pools |
+|---|---|---|---|
+| SQLite | One extra thread `<name>-db-writer`, one write at a time in submission order, through a pool of one connection named `<name>-writer`. | The `<name>-db-N` threads, through read-only connections from the pool `<name>-reader` (`Pool.maxSize` connections). | Two |
+| MySQL, MariaDB, PostgreSQL | The `<name>-db-N` threads. | The same threads. | One, named `<name>` |
+
+Every SQLite connection opens with `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000` and `foreign_keys=true`, so foreign keys are enforced. Read connections also run `PRAGMA query_only = ON`. On a server, every connection has a socket timeout of 30 seconds during normal work: a statement that waits longer for the server, a lock wait included, fails and its connection is closed. Migrations run without that timeout.
+
+### Where stages run
+
+- The future of work completes on a database thread after the transaction has ended and the connection is back in the pool, so a stage chained onto it never holds the connection or sees an open transaction.
+- The future of `read` and `readRetrying` completes on the thread that ran the work.
+- On SQLite, the futures of `async`, `asyncRetrying` and `start` complete on a read thread, not on the writer thread. With more than one read thread, the futures of two writes may complete in another order than the writes, which still commit in submission order.
+- A stage chained without an executor runs on that database thread and holds it. The `Executor` from `executor()` runs tasks that use no connection on the database threads (the read threads on SQLite); it refuses new tasks with `RejectedExecutionException` once `close` has begun.
+- A `Tx` is confined to the thread that opened it. Bukkit and Paper API calls do not belong on a database thread: hop to the right thread with the [Scheduler](/docs/modules/platform).
+
+```java
+deposit(player.getUniqueId(), amount).whenComplete((done, failure) ->
+    scheduler.entity(player, () -> player.sendMessage(Component.text(
+        failure == null && done ? "Deposited." : "The deposit failed."))));
+```
+
+<Callout type="error" title="Waiting on a database thread">
+Work, a task from `executor()`, or a stage on a database thread that blocks on the future of other database work holds its thread while it waits. That wait ends only once another `<name>-db-N` thread is free. With `asyncThreads` at 1, or storage from `Storage.over`, such a wait never ends. On SQLite, work must never wait for another write at all: that write queues behind it on the one writer thread and never runs.
+</Callout>
+
+## Migrations
+
+A `Migration(int version, String name)` names one schema step. The version is 1 or more; the name is not blank and at most 128 characters. A plugin lists its migrations with strictly increasing versions and ships one script per migration for every dialect it offers, as a resource of its jar at `db/migration/<dialect id>/V<version>__<name>.sql`:
+
+```text title="src/main/resources"
+db/migration/sqlite/V1__accounts.sql
+db/migration/sqlite/V2__account_history.sql
+db/migration/mysql/V1__accounts.sql
+db/migration/mysql/V2__account_history.sql
+db/migration/mariadb/V1__accounts.sql
+db/migration/mariadb/V2__account_history.sql
+db/migration/postgres/V1__accounts.sql
+db/migration/postgres/V2__account_history.sql
+```
+
+Only the scripts of the configured dialect are read. Before a script runs, every `${prefix}` in it is replaced by the table prefix (empty on SQLite).
+
+<Tabs items={['SQLite', 'MariaDB', 'PostgreSQL']}>
+<Tab value="SQLite">
+```sql title="db/migration/sqlite/V1__accounts.sql"
+CREATE TABLE ${prefix}accounts (
+    player BLOB NOT NULL PRIMARY KEY,
+    balance BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+```
+</Tab>
+<Tab value="MariaDB">
+```sql title="db/migration/mariadb/V1__accounts.sql"
+CREATE TABLE IF NOT EXISTS ${prefix}accounts (
+    player BINARY(16) NOT NULL PRIMARY KEY,
+    balance BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+) ENGINE = InnoDB;
+```
+</Tab>
+<Tab value="PostgreSQL">
+```sql title="db/migration/postgres/V1__accounts.sql"
+CREATE TABLE ${prefix}accounts (
+    player UUID NOT NULL PRIMARY KEY,
+    balance BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+```
+</Tab>
+</Tabs>
+
+### Script rules
+
+- A script is read as UTF-8; one that is not valid UTF-8 stops the start.
+- A statement ends at a semicolon that ends its line, and a line holds at most one statement. A semicolon outside a quoted string that does not end its line stops the start.
+- Blank lines, lines holding only a `--` comment, and a `--` comment at the end of a line are dropped. A final statement without a semicolon is kept.
+- Only single-quoted strings are recognised, so a semicolon or `--` inside one is kept. A string ends on the line it starts, a backslash does not escape a quote, and a quote inside a string is written as two quotes.
+- Block comments, double-quoted or backquoted identifiers that hold a semicolon or `--`, dollar quoting and a body of statements between `BEGIN` and `END` (a trigger or a procedure) are not supported.
+- Every pending script is read and split before the SQLite backup and before the first migration runs, so a broken script stops the start before anything changes.
+
+### Checksums
+
+The SHA-256 checksum of each script is taken over its exact bytes, before `${prefix}` is replaced, and stored with its version. A script that differs from the one that ran, even in its line endings, stops the start. Pin scripts to LF line endings:
+
+```text title=".gitattributes"
+*.sql text eol=lf
+```
+
+### The version table
+
+Storage records applied migrations in `<prefix>schema_version` (columns `version`, `name`, `checksum`, `statements_done`, `applied_at`) and creates it itself, so no script creates it. A script that creates it with `CREATE TABLE IF NOT EXISTS` still runs. A table of that name in another layout stops the start before anything changes. A database whose version table records a version higher than the plugin's highest migration stops the start as set up by a newer version of the plugin. When the database holds no version table under the configured prefix but holds one under another prefix, storage logs a warning naming that prefix.
+
+### Per-dialect behaviour
+
+| Dialect | Transaction | Notes |
+|---|---|---|
+| SQLite | One transaction per migration. | Runs with foreign keys off, so the table rebuild SQLite documents for changes `ALTER TABLE` cannot make neither cascades nor deletes child rows. A `PRAGMA foreign_keys` line in a script has no effect. `PRAGMA foreign_key_check` runs before the commit, and a row that breaks a foreign key rolls the migration back and stops the start. |
+| PostgreSQL | One transaction per migration. | |
+| MySQL, MariaDB | DDL commits on its own. | Progress is recorded after each statement, and a start interrupted between a statement and its record runs that statement again, so every statement must succeed a second time (`CREATE TABLE IF NOT EXISTS` and similar). A resumed migration runs on a new connection, so no statement may depend on session state set earlier, such as a user variable, a prepared statement or `SET FOREIGN_KEY_CHECKS`. A resumed migration whose script changed stops the start. |
+
+MariaDB has `CREATE INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`. MySQL has neither, so on MySQL an index belongs inline in its `CREATE TABLE IF NOT EXISTS`.
+
+On MySQL, MariaDB and PostgreSQL, starts that share a database migrate one at a time: a start holds a lock keyed by the database (on PostgreSQL the schema) and the version table while it reads the applied migrations and runs the pending ones. Starts on another database of the same server, or in another PostgreSQL schema, do not wait for it. On MySQL and MariaDB a start that waits a day for the lock fails with a `StorageException`; on PostgreSQL a start waits for the lock with no limit.
+
+### SQLite backups
+
+When a SQLite database already holds a table and has a pending migration, `start` first copies it with `VACUUM INTO` to `backups/data-<version>-<yyyyMMdd-HHmmss>.db` under the plugin's data path, with the plugin version and the UTC time. It then keeps the newest `backupKeep` files of that pattern by modification time and leaves other files in the folder alone. With `backupKeep` at 0 no copy is taken.
+
+## Taking over another runner's version table
+
+A plugin that kept its schema with its own migration runner passes a `Baseline` naming that runner's version table to the second `start` overload. On a database that has no `<prefix>schema_version` yet, storage takes the database over before any migration runs; once its version table exists, the baseline is ignored, so it can stay in the plugin's start for good.
+
+```java
+Storage.start(this, errors, settings, MIGRATIONS, Baseline.versionTable("db_version"), Clock.systemUTC());
+```
+
+`Baseline.versionTable(String table)` takes the full name of the old table with no prefix added: 1 to 32 lowercase letters, digits and underscores, starting with a letter or underscore. It is written into SQL unquoted, so it must not be a reserved word such as `order` or `user`.
+
+The old table has a column named `version`, with one row or one row per applied step, each a whole number from 0 to 2147483647 or `NULL` (skipped). Its other columns are not read. Its highest version N is the version the database is at, and a table with no version is at 0.
+
+<Steps>
+<Step>
+Storage reads N from the old table. When the old table does not exist the database is new and every migration runs. On SQLite the old table is found whatever the case of its declared name; on MySQL, MariaDB and PostgreSQL its stored name must be the lowercase name given.
+</Step>
+<Step>
+It stops the start when N is higher than the highest migration version, or N is 1 or more and no migration has version N. It reads and checks every migration script before it changes anything.
+</Step>
+<Step>
+On SQLite it copies the database file into the backups folder.
+</Step>
+<Step>
+It creates its version table and records every migration up to N as applied, with the checksum of its current script, without running it.
+</Step>
+<Step>
+It renames the old table to `<table>_baseline`, or, when that name is taken, to the first free name of `<table>_baseline2`, `<table>_baseline3` and so on. The old table is never dropped.
+</Step>
+<Step>
+It runs the migrations above N.
+</Step>
+</Steps>
+
+Creating the version table, recording the versions and renaming the old table take effect together: in one transaction on SQLite and PostgreSQL, and on MySQL and MariaDB through `<prefix>schema_version_takeover` and one statement that renames it and the old table. An interrupted takeover leaves either no version table of storage's, and the next start takes over again, or a complete one. On the server dialects the takeover runs under the migration lock.
+
+The future of this `start` also fails with a `StorageException` when the old table records a version higher than the highest migration, has no `version` column, holds a version that is not a whole number of 0 or more, or records a version of 1 or more that no migration has.
+
+<Callout type="warn" title="Recorded on the plugin's word">
+Storage does not check that the database matches the scripts up to N. A plugin's scripts up to N describe the layout the old runner produced. An old table named `<prefix>schema_version` is not a baseline: storage refuses a version table in another layout and stops the start. An old table under any other name is not noticed without a `Baseline`, so a plugin whose database may hold one passes it.
+</Callout>
+
+## Shutdown
+
+```java
+public boolean close(Duration drain)
+```
+
+`close` refuses new work from the moment it begins, waits on the calling thread up to `drain` for the queued work, then closes the pools. It returns `true` when every queued piece of work finished within the drain. A negative drain waits no time; a drain of `Long.MAX_VALUE` nanoseconds or more, such as `ChronoUnit.FOREVER.getDuration()`, waits with no limit.
+
+- Work submitted from a database thread during the drain, such as from a stage chained onto a future, still runs within the drain on the submitting thread, after the work that submitted it. On SQLite such a write can commit before writes submitted earlier, and fails with an `SQLException` when its wait for the writer connection passes `Pool.connectionTimeout`.
+- During the drain, the futures of SQLite writes complete on the thread that ran them, and a stage chained onto one without an executor runs there.
+- When the drain runs out, the database threads are interrupted. Queued work and work still waiting for a connection fail with `RejectedExecutionException`, and other queued tasks (from `executor()`, write completions) run on the closing thread. A warning names how many queued pieces of work did not run, and `close` returns `false`: some writes may then be missing.
+- Work still running sees the interrupt. On SQLite it keeps its connection until it ends. On MySQL, MariaDB and PostgreSQL the pool aborts the connections in use, so that work fails with an `SQLException`, or a `CommitUnknownException` when the abort meets its commit. `close` does not wait for it: it ends afterwards on its daemon thread, where its future completes.
+- `close` must not be called from a database thread: the drain would wait on its own thread and run out every time.
+
+In the plugin's disable, storage closes after `PendingSettlements.settleAll` and before `DiscordWebhook.close`, in the order [taffy-platform](/docs/modules/platform) gives. A settlement that writes only queues its write, so the drain must cover that write too. A start still pending at disable is cancelled; the storage that start then builds closes itself.
+
+```java
+@Override
+public void onDisable() {
+    // ... the earlier steps of the platform order, ending with Scheduler.close and TaskGate.close
+    Shutdown.closeQuietly("settle pending work",
+        () -> settlements.settleAll(failure -> errors.report("settlement", failure)), getLogger(), errors);
+    CompletableFuture<Storage> start = starting;
+    if (start != null && !start.cancel(false) && !start.isCompletedExceptionally()) {
+        Storage started = start.join();
+        Shutdown.closeQuietly("close storage", () -> started.close(Duration.ofSeconds(10)), getLogger(), errors);
+    }
+    // ... later steps: DiscordWebhook.close, Metrics.shutdown
+}
+```
+
+`cancel(false)` returns `false` when the start already completed; `isCompletedExceptionally()` is then `false` only for a start that succeeded, whose storage `join()` returns at once.
+
+## Testing
+
+A plugin's tests that start storage need HikariCP and the driver of each dialect they start on the test runtime classpath (`testRuntimeOnly(alaz.hikari)`, `testRuntimeOnly(alaz.sqlite.jdbc)`), because `taffy-storage` publishes no dependency on them.
+
+`Storage.over(Plugin plugin, ErrorReports errors, Dialect dialect, DataSource source, String prefix, Clock clock)` builds storage over a data source the test owns. Work runs one transaction at a time on a single thread `<name>-db-1`, every connection comes from `source`, no migration runs and no pool is built. On SQLite a read is not made read-only. `close` stops the thread and leaves `source` open.
+
+It pairs with `FaultyDataSource` from [taffy-test](/docs/modules/test), which makes statements and commits fail on demand: the test brings the schema up to date with `start`, closes that storage, and opens storage with `over` on a `FaultyDataSource` for the same database. The connections carry only the properties the test passes, so a SQLite test that should behave as `start` does passes `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000` and `foreign_keys=true`.
+
+## Thread safety
+
+Every `Storage` method may be called from any thread, except `close`, which must not be called from a database thread. `Params` and `Row` belong to one statement or result and are not thread-safe. A `Tx` is usable only on its own thread while its work runs.

@@ -1,0 +1,424 @@
+---
+title: taffy-metrics
+description: bStats and FastStats charts from one definition, with the plugin's handled errors sent from ErrorReports to FastStats error tracking.
+---
+
+`taffy-metrics` starts bStats and FastStats for a plugin from one set of chart definitions. A chart is declared once as a `MetricChart` and reported to every provider that starts. When FastStats starts, the plugin's handled errors, reported through the `ErrorReports` sink from [taffy-platform](/docs/modules/platform), go to FastStats error tracking under their source.
+
+A plugin names three types from the module: `MetricChart`, `MetricsBuilder` and `Metrics`, all in `so.alaz.taffy.metrics`. No public signature names a bStats or FastStats type, so plugin code never imports either SDK.
+
+| Type | What it is |
+|---|---|
+| `MetricChart` | One custom metric: a string, number, bool, string list or counter chart. |
+| `MetricsBuilder` | Takes the owner plugin, its `ErrorReports` and the owner's switch, then the bStats service id, the FastStats token and the charts, and starts once. |
+| `Metrics` | The live handle: diagnostics readers, `report`, and `shutdown` for disable. |
+
+## Setup
+
+The module is `so.alaz.taffy:taffy-metrics`, `alaz.taffy.metrics` in the catalog. It depends on `taffy-platform` as an API dependency, and publishes `org.bstats:bstats-bukkit` and `dev.faststats.metrics:bukkit` as runtime dependencies: a plugin compiles without them and its shadow jar carries them.
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.metrics)
+}
+```
+
+### Repository
+
+The FastStats SDK resolves from `https://repo.faststats.dev/releases`. `so.alaz.taffy.settings` applies `so.alaz.taffy.repositories`, which already declares it (as the repository named `faststats`). A build that does not apply those settings plugins adds it itself:
+
+```kotlin title="settings.gradle.kts"
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+        maven("https://repo.papermc.io/repository/maven-public/")
+        maven("https://repo.alaz.so/releases")
+        maven("https://repo.faststats.dev/releases")
+    }
+}
+```
+
+### Relocation
+
+Each plugin carries its own relocated copy of both SDKs and of Taffy. `so.alaz.taffy.paper-plugin` handles this: its `shadowJar` relocates `org.bstats`, `dev.faststats` and `so.alaz.taffy` to `<group>.libs.bstats`, `<group>.libs.faststats` and `<group>.libs.taffy`, and its duplicates strategy keeps one `META-INF/faststats.properties`.
+
+A build on another shadow setup relocates the same three packages and keeps that file in the jar:
+
+```kotlin title="build.gradle.kts"
+tasks.shadowJar {
+    relocate("org.bstats", "com.example.myplugin.libs.bstats")
+    relocate("dev.faststats", "com.example.myplugin.libs.faststats")
+    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy")
+}
+```
+
+<Callout type="warn" title="Both are required">
+bStats refuses to start from classes that were not relocated. FastStats cannot create its context without `META-INF/faststats.properties`; without the file, `start()` logs one warning and leaves FastStats off before it writes `plugins/faststats/config.properties`.
+</Callout>
+
+Neither SDK may be listed as a Paper runtime library (`paperPlugin.runtimeLibrary(...)`), which would load it unrelocated.
+
+## Starting metrics
+
+In `onEnable`, a plugin:
+
+<Steps>
+<Step>
+Reads its metrics switch from its own config.
+</Step>
+<Step>
+Creates a `MetricsBuilder` with itself, its `ErrorReports` and the switch, and gives it its bStats service id and FastStats token. An unset id or token leaves that provider off.
+</Step>
+<Step>
+Adds its charts. A chart's supplier reads in-memory state only.
+</Step>
+<Step>
+Calls `start()` as the last step of enable, once the state the charts read exists, and keeps the returned `Metrics`.
+</Step>
+</Steps>
+
+```java title="MyPlugin.java"
+import org.bukkit.plugin.java.JavaPlugin;
+import so.alaz.taffy.metrics.MetricChart;
+import so.alaz.taffy.metrics.Metrics;
+import so.alaz.taffy.metrics.MetricsBuilder;
+import so.alaz.taffy.platform.ErrorReports;
+import so.alaz.taffy.platform.Shutdown;
+
+import java.util.concurrent.atomic.LongAdder;
+
+public final class MyPlugin extends JavaPlugin {
+
+    private static final int BSTATS_SERVICE_ID = 12345;
+    private static final String FASTSTATS_TOKEN = "0123456789abcdef0123456789abcdef";
+
+    private final ErrorReports errors = new ErrorReports();
+    private final LongAdder commandsRun = new LongAdder();
+    private volatile String storageType = "sqlite";
+    private Metrics metrics;
+
+    @Override
+    public void onEnable() {
+        boolean metricsOn = getConfig().getBoolean("metrics", true);
+        MetricsBuilder builder = new MetricsBuilder(this, errors, metricsOn)
+            .bStats(BSTATS_SERVICE_ID)
+            .fastStats(FASTSTATS_TOKEN);
+        if (!startStorage()) {
+            metrics = builder.start();
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        metrics = builder
+            .addChart(MetricChart.string("storage_type", () -> storageType))
+            .addChart(MetricChart.counter("commands_run", commandsRun::sum))
+            .start();
+    }
+
+    @Override
+    public void onDisable() {
+        if (metrics != null) {
+            Shutdown.closeQuietly("shut down metrics", metrics::shutdown, getLogger(), errors);
+        }
+    }
+
+    private boolean startStorage() {
+        return true;
+    }
+}
+```
+
+An enable that gives up after the switch is read, such as when storage fails to start, still calls `start()` before it returns, without the charts whose state never came up. Its disable then shuts the metrics down, and the reports raised during enable go out in the final send. Without that call they are lost.
+
+### MetricsBuilder
+
+| Member | Behaviour |
+|---|---|
+| `MetricsBuilder(Plugin owner, ErrorReports errors, boolean enabled)` | The owner's logger receives the start warnings. `enabled` is the owner's switch: `false` starts nothing. A null owner or sink throws `NullPointerException`. |
+| `bStats(int serviceId)` | Reports to bStats under the plugin's service id. A value of 0 or below leaves bStats off. |
+| `fastStats(@Nullable String token)` | Reports to FastStats under the plugin's project token, with error tracking on. A `null` or blank token leaves FastStats off. |
+| `addChart(MetricChart chart)` | Adds a chart for every provider that starts. A second chart with the same id throws `IllegalArgumentException`; a null chart throws `NullPointerException`. |
+| `start()` | Starts every provider whose credential is set, when the switch is on, and returns the handle. Never returns `null`. |
+
+Every setter returns the builder. A builder starts once: after `start()`, every call on it, a second `start()` included, throws `IllegalStateException` (except `addChart(null)`, which throws `NullPointerException` first). The builder is not thread-safe; build and start it on one thread.
+
+With the switch off, `start()` touches no metrics SDK, clears the error sink and returns an inert `Metrics`.
+
+### FastStats token rules
+
+A token that does not match `[a-z0-9]{32}` (32 lowercase letters and digits), such as a placeholder, is refused at `start()` and logged as one warning, before FastStats reads or writes any file. A jar without `META-INF/faststats.properties` is refused the same way. A refused start leaves the server's first run to the next plugin that starts FastStats.
+
+On the first start of a server with no `plugins/faststats/config.properties`, FastStats writes the file, prints its own first-run notice of several lines through the plugin's logger, and sends nothing until the next start.
+
+### Failure handling
+
+A provider that fails to start is logged as one warning through the owner's logger (`bStats metrics failed to start: ...` or `FastStats metrics failed to start: ...`) and skipped, and enable goes on. A FastStats start that fails after its context exists shuts the context down with submission turned off, so it sends nothing. Taffy logs nothing else. FastStats with its `debug` option on logs each send through the plugin's logger.
+
+## Charts
+
+Each `MetricChart` factory takes an id and a supplier, and maps to one chart on each provider:
+
+| Factory | Supplier | bStats | FastStats |
+|---|---|---|---|
+| `MetricChart.string(String id, Supplier<@Nullable String>)` | One string | `SimplePie` | string metric |
+| `MetricChart.number(String id, Supplier<@Nullable Integer>)` | One integer, reported as is | `SingleLineChart` | number metric |
+| `MetricChart.bool(String id, Supplier<@Nullable Boolean>)` | One boolean | `SimplePie` of `true` or `false` | bool metric |
+| `MetricChart.stringList(String id, Supplier<List<String>>)` | A list of strings | `AdvancedPie` of how often each string occurs | string array metric |
+| `MetricChart.counter(String id, LongSupplier total)` | A running total that is never reset | `SingleLineChart` of the increase | number metric of the increase |
+
+```java
+import so.alaz.taffy.metrics.MetricChart;
+
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
+
+final class Charts {
+
+    private final AtomicInteger openMenus = new AtomicInteger();
+    private final Set<String> hooks = ConcurrentHashMap.newKeySet();
+    private final LongAdder tradesCompleted = new LongAdder();
+    private volatile boolean webhookOn;
+    private volatile String language = "en";
+
+    List<MetricChart> all() {
+        return List.of(
+            MetricChart.string("language", () -> language),
+            MetricChart.number("open_menus", openMenus::get),
+            MetricChart.bool("discord_webhook", () -> webhookOn),
+            MetricChart.stringList("hooks", () -> List.copyOf(hooks)),
+            MetricChart.counter("trades_completed", tradesCompleted::sum));
+    }
+}
+```
+
+A null value from a string, number or bool supplier leaves that value out of the report. bStats also leaves out an empty string and a number of 0. A string list supplier returns an empty list, never `null`, when there is nothing to report.
+
+### Counters
+
+A counter reads one monotonically increasing total, such as `LongAdder::sum`. Each provider keeps its own mark and reports the increase since its own last report, so the charts show activity per interval and no event is split between the providers or counted twice. A total that goes down reports 0 for that interval, and the next interval counts from the lower total.
+
+On bStats the mark advances when bStats reads the chart, and an increase above `Integer.MAX_VALUE` is reported as `Integer.MAX_VALUE`. On FastStats it advances only after a submission is accepted, so a failed submission, or a read made while FastStats assembles an error report, leaves the count for the next report.
+
+### Ids
+
+Every id matches `^[a-z0-9_]+$` and is not one of the ids FastStats fills itself in every report: `client`, `core_count`, `java_vendor`, `java_version`, `os_arch`, `os_name`, `os_version`, `game_version`, `online_mode`, `player_count`, `plugin_version`, `server_type` and `platform_version`. A factory given another id throws `IllegalArgumentException` when the chart is declared, and a null id or supplier throws `NullPointerException`.
+
+### The supplier contract
+
+<Callout type="info" title="Suppliers read memory only">
+A supplier only reads in-memory state. It never resets what it reads, never blocks and never touches storage.
+</Callout>
+
+- A supplier may run on any thread. bStats reads it on the server's main thread (its own thread on Folia). FastStats reads it on its asynchronous submission task, again whenever it assembles an error report, and once more during the final send at disable, which may come after the plugin's storage has closed.
+- A supplier that throws makes that value absent from that report. On FastStats the throwable is also reported to the plugin's global error tracker, when FastStats error tracking is on, on every read that throws.
+
+## The Metrics handle
+
+`start()` returns a `Metrics` that wraps the providers that started. Keep it for the life of the plugin and call `shutdown()` on disable.
+
+### Diagnostics
+
+The state readers report what each provider is actually doing, for a plugin's diagnostics command. They read cached state without blocking and never throw, so they are safe on any thread. On an inert handle and after `shutdown()` they read `false` or `null`.
+
+| Reader | Reads |
+|---|---|
+| `bStatsStarted()` | `true` while bStats runs. `false` when the server owner turned bStats off in `plugins/bStats/config.yml`. |
+| `fastStatsSdk()` | The FastStats SDK name and version, such as `bukkit 0.32.2`, or `null` when FastStats did not start. |
+| `fastStatsEnabled()` | `true` while FastStats runs and is enabled for this server. |
+| `fastStatsSubmitting()` | `true` while FastStats submits metrics. |
+| `fastStatsCharts()` | `true` while FastStats submits the plugin's charts, which needs `submitAdditionalMetrics` on. |
+| `fastStatsErrorTracking()` | `true` while FastStats submits error reports, which answers whether a report handed to `report` will be sent. |
+
+```java
+import so.alaz.taffy.metrics.Metrics;
+
+import java.util.List;
+
+final class MetricsStatus {
+
+    static List<String> lines(Metrics metrics) {
+        String sdk = metrics.fastStatsSdk();
+        return List.of(
+            "bStats: " + (metrics.bStatsStarted() ? "running" : "off"),
+            "FastStats: " + (sdk == null ? "off" : sdk),
+            "FastStats enabled: " + metrics.fastStatsEnabled(),
+            "FastStats metrics: " + metrics.fastStatsSubmitting(),
+            "FastStats charts: " + metrics.fastStatsCharts(),
+            "FastStats errors: " + metrics.fastStatsErrorTracking());
+    }
+}
+```
+
+`fastStatsErrorTracking()` cannot see the Error Tracking switch in the project's settings on the FastStats dashboard, which discards reports when off. It does not see the error sink either: after the plugin installs a target of its own that does not pass reports to `report`, a report made through the sink is not sent, and the reader still reads `true`.
+
+### Shutdown
+
+`shutdown()` is the last step of disable, after the plugin's other shutdown steps, `DiscordWebhook.close()` included. In order, it clears the error sink, stops the Taffy usage chart without a final send, stops bStats, and has FastStats send its last errors and metrics on the calling thread and stop. A step that fails does not stop the next. It is idempotent and never throws. Because it runs last, the reports raised by the earlier shutdown steps go out in that final send.
+
+<Callout type="warn" title="The final send blocks the disabling thread">
+The final send makes one request for errors and one for metrics on the calling thread. Each has 3 second connect and request timeouts, which do not cover a stalled name lookup or a response that never finishes, so on a stalled network `shutdown()` can block the disabling thread for tens of seconds. No thread is started to bound it, since such a thread would outlive the plugin's class loader.
+</Callout>
+
+## Error tracking
+
+Plugin code reports handled errors through its `ErrorReports` and never calls FastStats itself:
+
+```java
+try {
+    loadShop();
+} catch (IOException ex) {
+    errors.report("shop.load", ex);
+}
+```
+
+`ErrorReports` holds the reports raised before its first install or clear, the first of each source and at most 16. When FastStats starts with its error service, `start()` installs the handle into the sink: the held reports are delivered to FastStats error tracking on the calling thread, and every later report goes there too, each under its source. Otherwise `start()` clears the sink, which discards the held reports, and nothing receives later reports.
+
+There is no error service when the switch is off, no token is set, FastStats fails to start, the server is on its first run, the server was started with `-Dfaststats.enabled=false`, or the server owner turned off `enabled` or `submitErrors` in `plugins/faststats/config.properties`.
+
+### What FastStats receives
+
+- **Handled reports.** Each report made through `ErrorReports`, including those `Scheduler` makes for a task Paper's region, async or entity scheduler runs that throws (those schedulers fire no `ServerExceptionEvent`).
+- **Chart failures.** A chart supplier that throws, on every read that throws.
+- **Paper's exception events.** Each exception Paper reports for the plugin in a `ServerExceptionEvent`, such as one thrown from one of its event handlers, sent without a source.
+
+Reports of one kind from one source merge into one error with a count, and each error carries its source as the `source` attribute. Two reports are of one kind when their exception classes, stack frames and messages match through the whole cause chain, once the anonymize rules have hidden addresses, UUIDs and the like. A scheduled error submission runs every 30 minutes. Once the first report has arrived, every scheduled error submission and the final send post an `errors` array, even when it is empty.
+
+| Limit | Value |
+|---|---|
+| Sources with a tracker of their own | The first 64. Reports from any further source are sent without a source, and those sources share one limit of kinds. |
+| Kinds per source | 32 for the life of the handle. A report of any further kind from that source is dropped. A handle from a new `start()` starts with none. |
+| Reports held before `start()` | 16, the first of each source. |
+
+FastStats clears every report it holds once a scheduled error submission is accepted, so a report made while that send is in flight is lost. A later report of the same kind is sent as usual, with its count starting again. The final send in `shutdown()` has no such window, because the error sink is cleared before it.
+
+### Anonymizing
+
+Every FastStats error tracker of this module hides email addresses, bearer tokens, AWS access key ids, UUIDs, `api_key`, `apikey`, `token` and `secret` query values, whole jdbc URLs, SQL statements and Windows paths. These rules come on top of what the SDK hides by itself in every report: IPv4 and IPv6 addresses, the user name in a home directory path, Discord webhook ids and tokens, the password in a jdbc URL, and the JVM's `user.name`. FastStats data is pseudonymous.
+
+### Uncaught exceptions
+
+Taffy leaves the JVM default uncaught exception handler alone: neither `MetricsBuilder.start()` nor `Metrics.shutdown()` installs, replaces or restores it. An uncaught exception on a thread the plugin starts itself is printed by the JVM as usual and is not sent to FastStats. A plugin that wants such an error tracked catches it and reports it through `ErrorReports`:
+
+```java
+Thread worker = new Thread(() -> {
+    try {
+        rebuildIndex();
+    } catch (RuntimeException ex) {
+        errors.report("index.rebuild", ex);
+    }
+}, "myplugin-index");
+worker.start();
+```
+
+### The error sink has one target
+
+Each `ErrorReports.install` replaces the target before it, and only the first install receives the held reports. A plugin using this module therefore installs no target of its own before `start()`: such a target would take the held reports, and `start()` would then replace it. A target installed after `start()` replaces the handle in turn, and FastStats receives no further report through the sink.
+
+A plugin that also wants its reports elsewhere installs, after `start()`, one target that passes each report to `Metrics.report` and to its own handler:
+
+```java
+metrics = builder.start();
+errors.install((source, error) -> {
+    metrics.report(source, error);
+    getLogger().warning("Handled error in " + source + ": " + error);
+});
+```
+
+`Metrics.report(String source, Throwable error)` does nothing on a handle without a FastStats error service and after `shutdown()`, and never throws.
+
+`shutdown()` clears the sink, which holds nothing after its first install or clear: a plugin that restarts its metrics on reload with the same sink loses the reports raised between the shutdown and the next `start()`.
+
+## The Taffy usage chart
+
+With the switch on, `start()` also starts Taffy's own usage metrics on the same plugin:
+
+- a second bStats instance under Taffy's bStats service id, 35379, when the plugin's own bStats instance started;
+- a second FastStats context, with metrics only and no error tracking, under Taffy's FastStats token, when the plugin's own context started.
+
+Each reports one chart, `taffy_version`, the Taffy version the plugin was built with, beside what the SDK sends for any plugin. Taffy therefore adds no provider, configuration file or first-run notice that the plugin's own metrics do not. The server owner's opt-outs in `plugins/bStats/config.yml` and `plugins/faststats/config.properties` apply to it as to the plugin's own metrics. At disable it stops before the plugin's own providers, without a final send. A failed start logs one warning (`Taffy usage metrics failed to start on bStats` or `... on FastStats`) and is skipped.
+
+## Server owner switches
+
+Every plugin on the server shares the two SDK configuration files. The plugin's own switch is separate and comes first: with it off, nothing starts.
+
+| File | Key | Effect |
+|---|---|---|
+| `plugins/bStats/config.yml` | `enabled` | `false` turns bStats off. `start()` shuts the bStats instance down again at once and `bStatsStarted()` reads `false`. A file that cannot be read counts as on. |
+| `plugins/faststats/config.properties` | `enabled` | `false` turns FastStats off for every plugin. `-Dfaststats.enabled=false` on the server command line does the same. |
+| `plugins/faststats/config.properties` | `submitMetrics` | `false` stops metrics submissions. |
+| `plugins/faststats/config.properties` | `submitErrors` | `false` stops error reports; `start()` then clears the error sink. |
+| `plugins/faststats/config.properties` | `submitAdditionalMetrics` | `false` leaves every chart added with `addChart` out of the submissions. FastStats then sends only the fields it fills itself. |
+| `plugins/faststats/config.properties` | `debug` | `true` logs each send through the plugin's logger. |
+
+## Threads
+
+- A started bStats instance runs on its own `bStats-Metrics` daemon thread while bStats is enabled. The Taffy usage chart adds a second one beside the plugin's own.
+- FastStats runs its HTTP client with its tasks on Paper's async scheduler.
+- The final FastStats send at `shutdown()` runs on the disabling thread.
+
+## Unit tests
+
+A plugin passes `false` as the switch in its own unit tests. bStats refuses to start from classes that were not relocated, which they are not in a plugin's test run, and FastStats writes `plugins/faststats/config.properties` under whatever folder the mocked server gives. With the switch off, `start()` touches no SDK and returns an inert handle whose readers read `false` or `null`.
+
+```java title="MetricsSetupTest.java"
+import org.bukkit.plugin.Plugin;
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.metrics.MetricChart;
+import so.alaz.taffy.metrics.Metrics;
+import so.alaz.taffy.metrics.MetricsBuilder;
+import so.alaz.taffy.platform.ErrorReports;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+
+class MetricsSetupTest {
+
+    @Test
+    void switchOffStartsNothing() {
+        Metrics metrics = new MetricsBuilder(mock(Plugin.class), new ErrorReports(), false)
+            .bStats(12345)
+            .fastStats("0123456789abcdef0123456789abcdef")
+            .addChart(MetricChart.number("open_menus", () -> 0))
+            .start();
+
+        assertFalse(metrics.bStatsStarted());
+        assertNull(metrics.fastStatsSdk());
+        assertFalse(metrics.fastStatsErrorTracking());
+        metrics.shutdown();
+    }
+
+    @Test
+    void reservedIdIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> MetricChart.number("player_count", () -> 0));
+    }
+}
+```
+
+The test uses JUnit and Mockito from the catalog. The Taffy Gradle plugins run tests on the JUnit Platform and pass the Mockito core jar on the test classpath to the test JVM as a Java agent:
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    testImplementation(alaz.junit.jupiter)
+    testImplementation(alaz.mockito.core)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+```
+
+Chart ids are checked when the chart is declared, so a test that builds the plugin's charts catches a bad or reserved id without starting any provider.
+
+## Related pages
+
+<Cards>
+<Card title="taffy-platform" href="/docs/modules/platform" />
+<Card title="Gradle plugins" href="/docs/gradle-plugins" />
+<Card title="Getting started" href="/docs/getting-started" />
+</Cards>
