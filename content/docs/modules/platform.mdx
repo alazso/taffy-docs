@@ -419,7 +419,9 @@ the calling thread and read the viewer, so a call that passes a viewer belongs o
 
 A PlaceholderAPI pass that throws, or a MiniPlaceholders resolver that cannot be built or throws during parsing, is
 skipped and logged through `ThrowLog` under the sources `placeholderapi` and `miniplaceholders`. Nothing is
-reported to `ErrorReports`. A single MiniPlaceholders tag that throws is left as written and is not logged.
+reported to `ErrorReports`. A single MiniPlaceholders tag that throws an exception is left as written and is not
+logged. From `0.1.1`, a tag that throws a `LinkageError` such as `NoSuchMethodError`, as an expansion built against
+another API does, skips the whole MiniPlaceholders pass and is logged; in `0.1.0` the error reaches the caller.
 
 ## Messages
 
