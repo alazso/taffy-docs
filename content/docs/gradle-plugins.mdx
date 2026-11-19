@@ -78,6 +78,11 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 | `oraxen` | `https://repo.oraxen.com/releases` | everything |
 | `nexo` | `https://repo.nexomc.com/releases` | everything |
 | `enginehub` | `https://maven.enginehub.org/repo/` | everything |
+| `fancyinnovations` | `https://maven.fancyspaces.net/fancyinnovations/releases` | the `de.oliver` group only |
+| `thenextlvl` | `https://repo.thenextlvl.net/releases` | the `net.thenextlvl` group only |
+| `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | the `com.github.retrooper` group only |
+
+The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`.
 
 The plugin sets `RepositoriesMode.PREFER_SETTINGS`: Gradle ignores a repository declared in a project build script. A build that needs another repository declares it in `settings.gradle.kts`:
 
@@ -404,7 +409,7 @@ Each module has an entry at the catalog's own version, the version key `taffy`.
 
 ### Integration APIs
 
-No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, Vault, LuckPerms, `worldguard-core`, `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI and MiniPlaceholders, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. `alaz.vaultunlocked.api`, `alaz.playerpoints` and `alaz.worldguard.bukkit` are in the catalog for a plugin's own code. A plugin declares one `compileOnly` only when its own code calls that API directly.
+No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, Vault, LuckPerms, `worldguard-core`, `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI, MiniPlaceholders, DecentHolograms, FancyHolograms, Holograms and HologramLib, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. `taffy-hooks` uses `alaz.packetevents.api` in its tests only, because HologramLib's classes link only with PacketEvents present. `alaz.vaultunlocked.api`, `alaz.playerpoints` and `alaz.worldguard.bukkit` are in the catalog for a plugin's own code. A plugin declares one `compileOnly` only when its own code calls that API directly.
 
 | Accessor | Coordinates | Version key |
 |---|---|---|
@@ -422,6 +427,13 @@ No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, N
 | `alaz.worldguard.core` | `com.sk89q.worldguard:worldguard-core` | `worldguard` |
 | `alaz.worldedit.bukkit` | `com.sk89q.worldedit:worldedit-bukkit` | `worldedit` |
 | `alaz.worldedit.core` | `com.sk89q.worldedit:worldedit-core` | `worldedit` |
+| `alaz.decentholograms` | `com.github.decentsoftware-eu:decentholograms` | `decentholograms` |
+| `alaz.fancyholograms` | `de.oliver:FancyHolograms` | `fancyholograms` |
+| `alaz.holograms` | `net.thenextlvl:holograms` | `holograms` |
+| `alaz.hologramlib` | `com.github.HologramLib:HologramLib` | `hologramlib` |
+| `alaz.packetevents.api` | `com.github.retrooper:packetevents-api` | `packetevents` |
+
+The hologram rows, `alaz.decentholograms`, `alaz.fancyholograms`, `alaz.holograms`, `alaz.hologramlib` and `alaz.packetevents.api`, are available from `0.1.2`.
 
 `taffy-hooks` and `taffy-platform` declare each API they compile against with `{ isTransitive = false }`, which keeps that API's own dependencies off the compile classpath. A plugin can do the same:
 
