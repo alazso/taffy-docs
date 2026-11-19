@@ -568,7 +568,8 @@ future, and every later future for the same name or uuid from that instance, inc
 ### Items, InventoryFit and PdcKey
 
 `Items.giveOrDrop(Player, ItemStack)` adds the item to the player's inventory and drops whatever does not fit at the
-player's feet. It must be called on the thread that owns the player.
+player's feet. It must be called on the thread that owns the player. From `0.1.1`, the stack passed in is left
+unchanged and the player gets a copy of it; `0.1.0` reduces the stack to what did not fit.
 
 `InventoryFit.fits(ItemStack[] storage, int inventoryMax, List<ItemStack> stacks)` tells whether the stacks fit when
 added in order, following `Inventory.addItem`, without changing anything. A `null` or empty slot is free.
