@@ -133,6 +133,18 @@ Each test task passes every `mockito-core-*.jar` on its own classpath to the tes
 
 Every `Jar` task (the plain jar, the sources and javadoc jars, and the shadow jar) copies the file `LICENSE` from the root project directory into `META-INF`. When the root project has no `LICENSE`, the jars build without one.
 
+In the shadow jar of `so.alaz.taffy.paper-plugin` that copy does not survive when the plugin shades a Taffy module. Shadow copies the plugin's own classes and resources first, then the dependency jars, then files added on the `shadowJar` task itself, and `DuplicatesStrategy.EXCLUDE` keeps the first copy of each path. Every Taffy module carries Taffy's MIT `LICENSE` in `META-INF`, so the shadow jar ships that license and drops the root project's. A plugin ships its own license by copying it into its main resources, which come first:
+
+```kotlin title="build.gradle.kts"
+tasks.processResources {
+    from(rootProject.file("LICENSE")) {
+        into("META-INF")
+    }
+}
+```
+
+`unzip -p build/libs/myplugin-1.0.0.jar META-INF/LICENSE` prints the license the jar ships. The plain `jar` task, which would hold both copies of the file, is disabled under `so.alaz.taffy.paper-plugin`.
+
 ## so.alaz.taffy.coverage
 
 Applies `so.alaz.taffy.java` and `jacoco`, and adds the `coverage` extension (`so.alaz.taffy.gradle.CoverageExtension`).

@@ -417,7 +417,7 @@ dependencies {
 - the `library` Maven publication as `<group>:<module name>`, here `com.example.myplugin:myplugin-api:1.0.0`, with the module's `description` in the POM and the MIT License,
 - the `alazso` repository, `https://repo.alaz.so/releases`, or `https://repo.alaz.so/snapshots` for a `-SNAPSHOT` version, with credentials from the `ALAZSO_REPO_USER` and `ALAZSO_REPO_TOKEN` environment variables.
 
-The POM url is `https://github.com/alazso/<root project name>` unless the Gradle property `alaz.repositoryUrl` is set. The root project's `LICENSE` file, when there is one, goes into `META-INF` of every jar. `./gradlew :myplugin-api:publishToMavenLocal` publishes the API to the local Maven repository. The API module applies no coverage gate; `so.alaz.taffy.library` is the variant with one. [Gradle plugins](/docs/gradle-plugins) describes every plugin and its settings.
+The POM url is `https://github.com/alazso/<root project name>` unless the Gradle property `alaz.repositoryUrl` is set. The root project's `LICENSE` file, when there is one, goes into `META-INF` of each of the API module's jars. `./gradlew :myplugin-api:publishToMavenLocal` publishes the API to the local Maven repository. The API module applies no coverage gate; `so.alaz.taffy.library` is the variant with one. [Gradle plugins](/docs/gradle-plugins) describes every plugin and its settings.
 
 The plugin module shades the API classes into its own jar. The shadow jar relocates only `org.bstats`, `dev.faststats` and `so.alaz.taffy`, so the API classes keep their package names, and other plugins compile against the published `myplugin-api` artifact with `compileOnly`.
 
