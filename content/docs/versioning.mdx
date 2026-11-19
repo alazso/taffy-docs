@@ -93,20 +93,16 @@ Lists it under `### Deprecated` in the changelog.
 | Kind | Version | Published to | When |
 |---|---|---|---|
 | Release | `0.1.0` | `https://repo.alaz.so/releases` | a `v<version>` tag, such as `v0.1.0` |
-| Snapshot | `0.1.0-SNAPSHOT` | `https://repo.alaz.so/snapshots` | every push to `main` that passes CI |
+| Snapshot | `<next>-SNAPSHOT`, the version in Taffy's `gradle.properties` on `main` | `https://repo.alaz.so/snapshots` | every push to `main` that passes CI |
 
 - `main` carries the next version with the `-SNAPSHOT` suffix.
 - Each push to `main` builds and tests the repository, then publishes that snapshot. Snapshot artifacts change with every push.
 - A release commit drops the suffix and is tagged `v<version>`. The tag publishes the plugins, the catalog and every runtime module to the releases repository. The release build refuses a tag that does not match the version in `gradle.properties`.
 - The commit after a release sets the next `-SNAPSHOT` version.
 
-<Callout type="info" title="Taffy 0.1.0 is not published yet">
-Until the first release, build against a local publish as described in [Getting started](/docs/getting-started).
-</Callout>
-
 ### Building against a snapshot
 
-`so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for dependencies, limited to snapshot versions in the `so.alaz` group and its subgroups, so the `alaz` catalog and the modules resolve at a snapshot version. The settings plugin itself resolves through `pluginManagement`, so add the snapshots repository there:
+`so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for dependencies, limited to snapshot versions in the `so.alaz` group and its subgroups, so the `alaz` catalog and the modules resolve at a snapshot version. The settings plugin itself resolves through `pluginManagement`, so add the snapshots repository there, and replace `<next>-SNAPSHOT` with the version in Taffy's `gradle.properties` on `main`:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
@@ -118,11 +114,11 @@ pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+    id("so.alaz.taffy.settings") version "<next>-SNAPSHOT"
 }
 ```
 
-A snapshot carries changes that the `[Unreleased]` section of the changelog describes, including breaking ones. Release a plugin against a release version, not a snapshot.
+A snapshot carries changes that the `[Unreleased]` section of the changelog describes, including breaking ones. Release a plugin against a release version, not a snapshot. [Getting started](/docs/getting-started#build-against-a-snapshot-or-a-local-publish) also covers building against a local publish of a Taffy checkout.
 
 ## Java and Paper
 

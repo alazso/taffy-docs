@@ -47,10 +47,6 @@ plugins {
 rootProject.name = "myplugin"
 ```
 
-<Callout type="info" title="Taffy 0.1.0 is not published yet">
-Until it is, apply the settings plugin at a local publish or a snapshot, as the last section of this page describes. Every other step stays the same.
-</Callout>
-
 `so.alaz.taffy.repositories` declares every repository the build needs in `dependencyResolutionManagement`: Maven Central, Paper, `repo.alaz.so` releases and snapshots (for the `so.alaz` group and its subgroups only), FastStats, and the repositories of the integration APIs in the catalog, such as PlaceholderAPI, Oraxen, Nexo, EngineHub and JitPack. It also applies the foojay toolchain resolver, so Gradle downloads a Java 25 JDK for compiling when none is installed. It sets `RepositoriesMode.PREFER_SETTINGS`, so a `repositories` block in `build.gradle.kts` is ignored: add any extra repository to `dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
 
 </Step>
@@ -425,9 +421,9 @@ The POM url is `https://github.com/alazso/<root project name>` unless the Gradle
 
 The plugin module shades the API classes into its own jar. The shadow jar relocates only `org.bstats`, `dev.faststats` and `so.alaz.taffy`, so the API classes keep their package names, and other plugins compile against the published `myplugin-api` artifact with `compileOnly`.
 
-## Build against an unpublished Taffy
+## Build against a snapshot or a local publish
 
-Taffy 0.1.0 is not published yet. Until it is, a plugin builds against a local publish or a snapshot.
+This section is for trying Taffy changes that are not released yet. A plugin builds against a local publish of a Taffy checkout or against a snapshot, and every step above stays the same.
 
 <Tabs items={['Local publish', 'Snapshot']}>
 <Tab value="Local publish">
@@ -438,7 +434,7 @@ In a checkout of Taffy, publish the Gradle plugins, the catalog and every module
 ./gradlew publishToMavenLocal
 ```
 
-They are published at the version in Taffy's `gradle.properties`, `0.1.0-SNAPSHOT` at the moment. In the plugin, add `mavenLocal()` to both `pluginManagement.repositories`, for the Gradle plugins, and `dependencyResolutionManagement.repositories`, for the catalog and the modules, and apply the settings plugin at that version:
+They are published at the version in Taffy's `gradle.properties`, the next release with `-SNAPSHOT` appended, written `<next>-SNAPSHOT` below. In the plugin, add `mavenLocal()` to both `pluginManagement.repositories`, for the Gradle plugins, and `dependencyResolutionManagement.repositories`, for the catalog and the modules, and apply the settings plugin at that version:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
@@ -450,7 +446,7 @@ pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+    id("so.alaz.taffy.settings") version "<next>-SNAPSHOT"
 }
 
 dependencyResolutionManagement {
@@ -467,7 +463,7 @@ The catalog follows the settings plugin's version, so every `alaz.taffy.*` alias
 </Tab>
 <Tab value="Snapshot">
 
-Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`. Add that repository to `pluginManagement` and apply the settings plugin at the snapshot version:
+Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`. That version is the one in Taffy's `gradle.properties` on `main`, written `<next>-SNAPSHOT` below. Add that repository to `pluginManagement` and apply the settings plugin at the snapshot version:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
@@ -479,7 +475,7 @@ pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.1.0-SNAPSHOT"
+    id("so.alaz.taffy.settings") version "<next>-SNAPSHOT"
 }
 
 rootProject.name = "myplugin"
