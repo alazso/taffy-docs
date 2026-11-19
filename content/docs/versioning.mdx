@@ -177,6 +177,6 @@ The `paper-api` pin and the oldest supported server stay the same for every patc
 - Each release has a section headed `## [<version>]`, and that section is the release's notes.
 - Inside a section, entries are grouped under headings such as `### Added`, `### Changed` and `### Deprecated`.
 
-An entry in `### Changed` that starts with `Breaking:` changes a public signature or documented behaviour incompatibly and describes the new signature or behaviour. For example, the entry for `Scheduler` states that `new Scheduler(plugin, errors)` replaces `new Scheduler(plugin)`.
+An entry in `### Changed` that starts with `Breaking:` changes a public signature or documented behaviour incompatibly, and names the new signature or behaviour and the one it replaces.
 
 Before an upgrade, read every section between the current version and the target, and search them for `Breaking:` and `### Deprecated`.
