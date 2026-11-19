@@ -484,43 +484,60 @@ boolean inMarket = wg != null
 `HologramProvider`, `HologramPlugin` and the hologram catalog aliases are available from Taffy `0.1.2`. Earlier versions have no hologram hooks.
 </Callout>
 
-`HologramProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn, HologramPlugin plugin)` detects one hologram plugin the same way, reporting a detection failure under `hook.<plugin key>`. Call it once, on the server thread in `onEnable`: the provider registers a listener for the plugin that removes a hologram when its world unloads. `HologramPlugin.byKey` reads the plugin from a config value such as `fancyholograms`.
+`HologramProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn, HologramPlugin plugin)` detects one hologram plugin the same way, reporting a detection failure under `hook.<plugin key>`. Call it on the server thread while the plugin is enabled, normally in `onEnable`. The provider registers a listener for the plugin that removes a hologram when its world unloads, and removes every hologram the provider placed when the plugin's `PluginDisableEvent` fires, before its `onDisable`. To detect again, such as when the plugin reloads its settings, close the held provider, then detect again. `HologramPlugin.byKey` reads the plugin from a config value such as `fancyholograms`. A later version may add `HologramPlugin` constants, so a `switch` over `HologramPlugin` keeps a `default` branch.
 
 | `HologramPlugin` | Installed as | What to know |
 |---|---|---|
-| `DECENTHOLOGRAMS` | `DecentHolograms` | 2.10 or newer; Folia from 2.10.2. Lines are converted to `&` colour codes with `&#RRGGBB` hex, so MiniMessage that colour codes cannot hold, such as hover and click, is dropped. |
-| `FANCYHOLOGRAMS` | `FancyHolograms` | FancyHolograms 2. FancyHolograms 3 has another API and reads as `API_MISSING`. A hologram with a placeholder in a line is drawn again every second. Each removal rewrites `plugins/FancyHolograms/holograms.yml`, except while the server stops, and drops any saved hologram of the same name from it. |
+| `DECENTHOLOGRAMS` | `DecentHolograms` | 2.10 or newer; Folia from 2.10.2. Lines are converted to `&` colour codes with `&#RRGGBB` hex, so MiniMessage that colour codes cannot hold, such as hover and click, is dropped. A `&` or `#` in a line's text shows as written, so a code such as `&6` or `#ff8800` typed there gives no colour. |
+| `FANCYHOLOGRAMS` | `FancyHolograms` | FancyHolograms 2. FancyHolograms 3 has another API and reads as `API_MISSING`. A `&` in a line shows as written, so a code such as `&6` or `&#ff8800` typed there gives no colour. A hologram with a placeholder in a line is drawn again every second. Each removal rewrites `plugins/FancyHolograms/holograms.yml`, except while the server stops, and drops any saved hologram of the same name from it. |
 | `HOLOGRAMS` | `Holograms` | Holograms by TheNextLvl. A move runs on the location's region thread a little later. |
-| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text. Fills PlaceholderAPI placeholders for each viewer when a player starts seeing the hologram and when its lines are replaced, not on a timer. HologramLib parses the filled text as MiniMessage, so a placeholder whose value holds `§` colour codes leaves that viewer's text unfilled and PacketEvents logs the failure. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
+| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text. Fills PlaceholderAPI placeholders for each viewer when a player starts seeing the hologram and when its lines are replaced, not on a timer, and only when PlaceholderAPI enabled before HologramLib. HologramLib parses the filled text as MiniMessage, so a placeholder whose value holds `§` colour codes leaves that viewer's text unfilled and PacketEvents logs the failure. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
 
 | Method | Behaviour |
 |---|---|
-| `boolean create(String id, Location location, List<String> lines)` | Places a hologram. `false` when any hologram holds the prefixed name, the location has no world or its world unloaded, or the call failed. |
+| `boolean create(String id, Location location, List<String> lines)` | Places a hologram with the bottom centre of its text at the location. `false` when any hologram holds the prefixed name, the location has no world or its world unloaded, or the call failed. |
 | `boolean update(String id, List<String> lines)` | Replaces every line. `false` when no hologram this provider placed with this id stands, such as after its world unloaded or the hologram plugin dropped it: place it again with `create`. |
-| `boolean move(String id, Location location)` | Moves the hologram. |
+| `boolean move(String id, Location location)` | Moves the hologram, the bottom centre of its text to the location. |
 | `boolean remove(String id)` | Removes the hologram. `false` when it was refused, and it stays in `ids()`. |
 | `boolean exists(String id)` | A hologram with this id stands. |
 | `Set<String> ids()` | The ids this provider placed that still stand, for an orphan check. |
-| `int removeAll()` | Removes every hologram this provider placed, such as from `onDisable`. |
+| `int removeAll()` | Removes every hologram this provider placed that still stands, and returns how many. |
+| `void close()` | Removes every hologram this provider placed and stops the provider: its listener is unregistered, and every later call answers `false`, `0` or an empty set. A second call does nothing. |
 | `static String literal(String text)` | Writes text a player supplied so a line shows it as written. |
-| `boolean available()` | The hologram plugin is enabled. |
+| `@Nullable HologramPlugin plugin()` | The hologram plugin the provider places holograms through, or `null` for a provider bound to no hologram plugin. |
+| `boolean available()` | The provider is not closed and its hologram plugin is enabled. |
 
-Every call answers `false` (or an empty set) while the hologram plugin is disabled or the call fails; a failure is logged at most once a minute and reported under `hook.<plugin key>`.
+Every call answers `false`, `0` or an empty set while the provider is not available or when the call fails; a failure is logged at most once a minute and reported under `hook.<plugin key>`. A `true` from `create`, `update`, `move` or `remove` means the change was made, or was accepted to be made on the region thread of the location a little later. Code that takes any `HologramProvider` checks `plugin()` for `null` before it reads `placeholdersPerViewer()`.
 
 Behaviour to know:
 
 - An id is 1 to 48 of `a-z`, `0-9`, `_` and `-`; any other id throws `IllegalArgumentException`. The hologram plugin stores it after the owner's name in lower case, with every character outside `a-z`, `0-9` and `-` written as `-`, and a `_`, as in `slate_crate-1`. Two plugins share a prefix only when their names differ in nothing but characters written as `-`.
 - Every call but `create` reaches only a hologram this provider placed, and `create` refuses a name another hologram holds, such as one a server owner made with the hologram plugin's commands or another plugin placed under the same prefix.
+- On every hologram plugin, the location given to `create` and `move` is the bottom centre of the hologram's text, and the lines stack upward from it, the last line lowest.
 - Holograms are temporary: the hologram plugin never saves them, so place them again after a restart. A hologram is also removed when its world unloads, and the hologram plugin drops it on its own reload (DecentHolograms on `/dh reload`) or when it disables. Nothing tells the plugin: `update`, `move` and `exists` answer `false` and `ids()` no longer lists it. To keep one standing, keep its id, location and lines, call `create` when `update` answers `false`, and place a world's holograms again from a `WorldLoadEvent` listener with a location built on `event.getWorld()`. A `Location` kept from before the world unloaded can still point at the old world.
-- Lines are MiniMessage. A PlaceholderAPI placeholder such as `%player_name%` is filled in for each viewer when PlaceholderAPI is installed and `plugin.placeholdersPerViewer()` is `true`, which is every supported plugin. Text a player supplied, such as a display name or an item name, goes into a line only through `HologramProvider.literal(text)`, as in `"<gold>Opened by " + HologramProvider.literal(name)`: it then shows as written, with no tag, colour code or placeholder in it taking effect. Without it, a player can show any placeholder's value, such as `%server_online%`, to every viewer.
-- Call every method on the server's global thread: the main thread on Paper, the global region thread on Folia.
+- Lines are MiniMessage. A PlaceholderAPI placeholder such as `%player_name%` is filled in for each viewer when PlaceholderAPI is installed and `plugin.placeholdersPerViewer()` is `true`, which is every supported plugin. A line MiniMessage refuses, such as one holding a `§` colour code, makes `create` and `update` fail on DecentHolograms, FancyHolograms and HologramLib.
+- Text a player or another untrusted source supplied, such as a display name or an item name, goes into a line only through `HologramProvider.literal(text)`, as in `"<gold>Opened by " + HologramProvider.literal(name)`: it then shows as written, with no tag, colour code or placeholder in it taking effect. Without it, a player can show any placeholder's value, such as `%server_online%`, to every viewer. The result is for the text of a line, not for an argument inside a tag.
+- Call every method on the server's global thread: the main thread on Paper, the global region thread on Folia. The exception is `close()` at disable, which runs on the thread that disables the plugin, as `onDisable` does. The provider calls the hologram plugin on the calling thread, so the hologram plugin is called from the global thread except while the plugin disables. The provider's own records are concurrent, so the provider itself is thread-safe.
 
 ```java
 private Detected<HologramProvider> holograms;
 
 public void onEnable() {
+    holograms = detectHolograms();
+}
+
+private @Nullable Detected<HologramProvider> detectHolograms() {
     HologramPlugin chosen = HologramPlugin.byKey(getConfig().getString("holograms.plugin"));
-    holograms = chosen == null ? null : HologramProvider.detect(this, errors, true, chosen);
+    return chosen == null ? null : HologramProvider.detect(this, errors, true, chosen);
+}
+
+void reloadHolograms() {
+    HologramProvider held = holograms == null ? null : holograms.provider();
+    if (held != null) {
+        held.close();
+    }
+    reloadConfig();
+    holograms = detectHolograms();
 }
 
 boolean showDailyCrate(Location block) {
@@ -547,10 +564,14 @@ public void onWorldLoad(WorldLoadEvent event) {
 public void onDisable() {
     HologramProvider provider = holograms == null ? null : holograms.provider();
     if (provider != null) {
-        provider.removeAll();
+        Shutdown.closeQuietly("remove holograms", () -> provider.close(), getLogger(), errors);
     }
 }
 ```
+
+`reloadHolograms` closes the held provider before it detects again. `close()` removes the holograms that provider placed and unregisters its listener, so the plugin places its holograms again through the new provider.
+
+When the plugin disables, the provider removes its holograms by itself. Paper fires the plugin's `PluginDisableEvent` before `onDisable`, and the provider's listener removes every hologram it placed at that point. `close()` in `onDisable` then removes any hologram placed since, such as by a menu closed in `Menus.shutdown`, and stops the provider.
 
 ## Placeholders
 
@@ -617,7 +638,8 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 
 | Type | Thread |
 |---|---|
-| `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `HologramProvider.detect`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
+| `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
+| `HologramProvider.detect` | The server thread while the plugin is enabled, normally in `onEnable`, and again after the held provider is closed. |
 | `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
