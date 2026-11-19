@@ -571,7 +571,9 @@ public void onDisable() {
 
 `reloadHolograms` closes the held provider before it detects again. `close()` removes the holograms that provider placed and unregisters its listener, so the plugin places its holograms again through the new provider.
 
-When the plugin disables, the provider removes its holograms by itself. Paper fires the plugin's `PluginDisableEvent` before `onDisable`, and the provider's listener removes every hologram it placed at that point. `close()` in `onDisable` then removes any hologram placed since, such as by a menu closed in `Menus.shutdown`, and stops the provider.
+When the plugin disables, the provider removes its holograms by itself. Paper fires the plugin's `PluginDisableEvent` before `onDisable`, and the provider's listener removes every hologram it placed at that point. `close()` in `onDisable` then removes any hologram placed since, such as by a menu closed in `Menus.shutdown`, and stops the provider. It comes after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
+
+Both removals run on the thread that disables the plugin. On Paper that is the main thread. On Folia it is the thread that called `disablePlugin`, and while the server stops it is Folia's shutdown thread, not the global region thread. If a hologram plugin refuses a call from that thread, the removal fails like any other call: one warning and a report under `hook.<plugin key>`. The hologram then stays until the hologram plugin drops it, at the latest when the server stops, since it never saves it. A plugin that disables itself on Folia does so through `scheduler.global(() -> getServer().getPluginManager().disablePlugin(this))`, as [storage](/docs/modules/storage#starting-storage) does, so the removal runs on the global region thread.
 
 ## Placeholders
 
@@ -647,5 +649,6 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `PermissionProvider` writes | Off the server thread; they block until saved. |
 | `RegionProvider.regionsAt` | Any thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
+| `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |

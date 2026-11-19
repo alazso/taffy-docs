@@ -335,6 +335,7 @@ The shutdown classes assume this order, with each step run through `Shutdown.clo
   <Step>`ComfiConfConnection.close` of [taffy-comficonf](/docs/modules/comficonf), which unregisters the plugin's settings from the bridge.</Step>
   <Step>`PlaceholderRegistration.unregister` of [taffy-hooks](/docs/modules/hooks), which unregisters the plugin's placeholders.</Step>
   <Step>`Menus.shutdown` of [taffy-gui](/docs/modules/gui), which ends every prompt and then closes the open menus of the players the disabling thread owns.</Step>
+  <Step>`HologramProvider.close` of [taffy-hooks](/docs/modules/hooks#holograms), which removes the holograms the plugin placed and stops the provider. It runs on the thread that disables the plugin; on Folia, while the server stops, that is Folia's shutdown thread and not the global region thread.</Step>
   <Step>`Scheduler.close()`, which stops the repeating tasks.</Step>
   <Step>`TaskGate.close`, which refuses new async tasks and waits for the admitted ones.</Step>
   <Step>`PendingSettlements.settleAll`, which settles the work no callback started.</Step>
