@@ -55,6 +55,21 @@ A breaking change removes or changes, incompatibly, any of:
 
 Before `1.0.0`, a patch upgrade (`0.1.0` to `0.1.1`) is safe to take without code changes, and a minor upgrade (`0.1.x` to `0.2.0`) can need them. Read the `Changed` and `Deprecated` groups of the [changelog](#reading-the-changelog) before a minor upgrade.
 
+### What a patch changes
+
+A patch release leaves a plugin's build as it was, apart from these changes:
+
+- It adds catalog entries and repositories only for a new integration, and each new repository is filtered to that integration's group.
+- It changes no existing version except FastStats, bStats and a library whose new version fixes a security issue.
+- It changes a convention of the Gradle plugins only to fix a defect in it, such as a jar Paper cannot load or a license that is not the plugin's, and the changelog lists the fix under `Fixed`.
+- It never changes the `paper-api` pin. The pin and the oldest supported server change only in a minor release.
+
+Each release names the FastStats and bStats versions it was tested with. A plugin that declares other versions of either SDK runs a pairing that was not tested.
+
+### Backported fixes
+
+Once `0.5.0` exists, security, item-loss, money and data fixes are backported to the last `0.4.x` line while a plugin in production runs it.
+
 ### What is and is not a contract
 
 Log lines and exception messages are written for the server owner or for the developer reading the log, and their wording can change in any release. Only text that a Javadoc spells out is part of the API, such as:
@@ -68,7 +83,7 @@ Log lines and exception messages are written for the server owner or for the dev
 
 Plugin code branches on exception types, statuses and return values, never on a message. A test that pins one of Taffy's own log lines (for example through `CapturedLog`) can break on any upgrade.
 
-The conventions the Gradle plugins add are published behaviour: the `tr-TR` test locale and `Pacific/Auckland` test zone, the Mockito agent on test tasks, the javadoc flags `-Xdoclint:all,-missing` and `--no-fonts`, and the root project's `LICENSE` file, when it has one, in `META-INF`. A change to one is listed in the changelog as a change to plugin builds, and a plugin build meets it only when it moves to that Taffy version.
+The conventions the Gradle plugins add are published behaviour: the `tr-TR` test locale and `Pacific/Auckland` test zone, the Mockito agent on test tasks, the javadoc flags `-Xdoclint:all,-missing` and `--no-fonts`, and the root project's `LICENSE` file, when it has one, in `META-INF`. A change to one is listed in the changelog as a change to plugin builds, and a plugin build meets it only when it moves to that Taffy version. A patch release changes one only to fix a defect in it.
 
 ## Deprecation and removal
 
@@ -143,7 +158,7 @@ dependencies {
 }
 ```
 
-The catalog pins the versions of the rest of the stack the same way (HikariCP, the JDBC drivers, bStats, FastStats, the integration APIs, JUnit, AssertJ, Mockito), so a Taffy upgrade can also move those versions.
+The catalog pins the versions of the rest of the stack the same way (HikariCP, the JDBC drivers, bStats, FastStats, the integration APIs, JUnit, AssertJ, Mockito), so a minor upgrade can move any of those versions. A patch moves only FastStats, bStats and a library whose new version fixes a security issue, as [What a patch changes](#what-a-patch-changes) states.
 
 ### Servers
 
