@@ -33,7 +33,7 @@ dependencies {
 }
 ```
 
-Moving to another Taffy release is a change of that one version string. Declaring a module with its own coordinates and a different version mixes Taffy releases in one plugin; use the catalog aliases instead.
+Moving to another Taffy release is a change of that one version string. Declaring a module with its own coordinates and a different version mixes Taffy releases in one plugin; use the catalog aliases instead. A build without the Taffy Gradle plugins declares every module at one version from its own catalog, as [Without the Gradle plugins](/docs/consuming-by-coordinates) shows.
 
 `so.alaz.taffy.paper-plugin` relocates `so.alaz.taffy` to `<group>.libs.taffy`, where `<group>` is the plugin project's group, so each plugin carries its own copy of Taffy under its own package.
 
@@ -64,7 +64,7 @@ A patch release leaves a plugin's build as it was, apart from these changes:
 - It changes a convention of the Gradle plugins only to fix a defect in it, such as a jar Paper cannot load or a license that is not the plugin's, and the changelog lists the fix under `Fixed`.
 - It never changes the `paper-api` pin. The pin and the oldest supported server change only in a minor release.
 
-Each release names the FastStats and bStats versions it was tested with. A plugin that declares other versions of either SDK runs a pairing that was not tested.
+Each release names the FastStats and bStats versions it was tested with, and [Without the Gradle plugins](/docs/consuming-by-coordinates#faststats-and-bstats-versions) lists them. A plugin that declares other versions of either SDK runs a pairing that was not tested.
 
 ### Backported fixes
 

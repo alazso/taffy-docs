@@ -15,7 +15,7 @@ Taffy ships Gradle plugins, published together as `so.alaz.taffy:taffy-gradle`, 
 | `so.alaz.taffy.paper-api` | a published API module | `so.alaz.taffy.java`, `maven-publish` | Sources and javadoc jars, the `library` publication and the `alazso` repository |
 | `so.alaz.taffy.library` | a published, tested library module | `so.alaz.taffy.paper-api`, `so.alaz.taffy.coverage` | A per-class coverage floor of 0.50 |
 
-A Paper plugin usually needs only two of them: `so.alaz.taffy.settings` in `settings.gradle.kts` and `so.alaz.taffy.paper-plugin` in `build.gradle.kts`.
+A Paper plugin usually needs only two of them: `so.alaz.taffy.settings` in `settings.gradle.kts` and `so.alaz.taffy.paper-plugin` in `build.gradle.kts`. A plugin can also keep its own Gradle build and declare the modules by their coordinates, without any of these plugins, as [Without the Gradle plugins](/docs/consuming-by-coordinates) describes.
 
 ## Applying the plugins
 
@@ -203,7 +203,7 @@ Three packages are relocated under `<group>.libs`, where `<group>` is the projec
 | `dev.faststats` | `<group>.libs.faststats` |
 | `so.alaz.taffy` | `<group>.libs.taffy` |
 
-With `group=com.example.myplugin`, Taffy's `so.alaz.taffy.platform.Scheduler` ships as `com.example.myplugin.libs.taffy.platform.Scheduler`. Each plugin carries its own copy of Taffy, so plugins built on different Taffy versions share no Taffy classes on one server. bStats refuses to start from classes that were not relocated, so a build that shades `taffy-metrics` without this plugin relocates the same three packages itself and keeps `META-INF/faststats.properties` in its shadow jar ([metrics](/docs/modules/metrics) has the details).
+With `group=com.example.myplugin`, Taffy's `so.alaz.taffy.platform.Scheduler` ships as `com.example.myplugin.libs.taffy.platform.Scheduler`. Each plugin carries its own copy of Taffy, so plugins built on different Taffy versions share no Taffy classes on one server. bStats refuses to start from classes that were not relocated, so a build that shades `taffy-metrics` without this plugin relocates the same three packages itself and keeps `META-INF/faststats.properties` in its shadow jar ([metrics](/docs/modules/metrics) has the details, and [Without the Gradle plugins](/docs/consuming-by-coordinates#the-shadow-jar) the whole shadow jar setup).
 
 `com.comficonf` is never relocated: the ComfiConf API comes from the installed bridge, and a plugin declares it `compileOnly(alaz.comficonf.api)` ([ComfiConf](/docs/modules/comficonf)). Any other library a plugin adds with `implementation` is shaded unrelocated unless the build adds its own `relocate` call:
 
@@ -452,5 +452,8 @@ dependencies {
   </Card>
   <Card title="Versioning" href="/docs/versioning">
     How the plugins, the catalog and the modules share one version.
+  </Card>
+  <Card title="Without the Gradle plugins" href="/docs/consuming-by-coordinates">
+    The modules by coordinates in a plugin's own Gradle build.
   </Card>
 </Cards>

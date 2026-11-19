@@ -1,0 +1,270 @@
+---
+title: Without the Gradle plugins
+description: Use the Taffy modules in a plugin that keeps its own Gradle build, with the repository, the catalog entries, the relocations, the jar contents and the Dependabot setup that build needs.
+---
+
+The Taffy Gradle plugins are optional. A plugin that keeps its own Gradle build declares the Taffy modules by their Maven coordinates, like any other library, and sets up the few things the conventions would otherwise do for it: a filtered repository, one Taffy version, three relocations and two files in the shadow jar. This page covers each of them, then the FastStats and bStats versions each release is tested with, and what a build that applies a Taffy convention plugin anyway needs: Gradle on Java 25, a duplicates strategy for `META-INF/LICENSE`, and the javadoc and test defaults it may override.
+
+## Repository
+
+Taffy is published to `https://repo.alaz.so/releases`. Declare that repository for Taffy's group only, so Gradle never looks up another dependency there:
+
+```kotlin title="settings.gradle.kts"
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+        maven("https://repo.papermc.io/repository/maven-public/") { name = "papermc" }
+        maven("https://repo.faststats.dev/releases") { name = "faststats" }
+        maven("https://repo.alaz.so/releases") {
+            name = "alazso"
+            mavenContent { releasesOnly() }
+            content { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
+    }
+}
+
+rootProject.name = "myplugin"
+```
+
+- `releasesOnly()` makes Gradle ask this repository for release versions only.
+- `includeGroupAndSubgroups("so.alaz.taffy")` makes Gradle ask it for the `so.alaz.taffy` group and its subgroups only. `so.alaz.taffy.repositories` filters its own `alazso` repository the same way, to the wider `so.alaz` group.
+- `https://repo.faststats.dev/releases` serves the FastStats SDK that `taffy-metrics` depends on, and Paper's repository serves `paper-api`. Maven Central serves the rest, bStats included.
+
+A build that declares its repositories in `build.gradle.kts` puts the same entries in its `repositories` block.
+
+## Modules at one release
+
+Every Taffy module is published under the group `so.alaz.taffy`, with its module name as the artifact id:
+
+| Module | Coordinates | Page |
+|---|---|---|
+| `taffy-platform` | `so.alaz.taffy:taffy-platform` | [platform](/docs/modules/platform) |
+| `taffy-config` | `so.alaz.taffy:taffy-config` | [config](/docs/modules/config) |
+| `taffy-storage` | `so.alaz.taffy:taffy-storage` | [storage](/docs/modules/storage) |
+| `taffy-hooks` | `so.alaz.taffy:taffy-hooks` | [hooks](/docs/modules/hooks) |
+| `taffy-gui` | `so.alaz.taffy:taffy-gui` | [gui](/docs/modules/gui) |
+| `taffy-metrics` | `so.alaz.taffy:taffy-metrics` | [metrics](/docs/modules/metrics) |
+| `taffy-comficonf` | `so.alaz.taffy:taffy-comficonf` | [comficonf](/docs/modules/comficonf) |
+| `taffy-test` | `so.alaz.taffy:taffy-test` | [test](/docs/modules/test) |
+
+Declare the modules in the plugin's own version catalog, beside its third-party APIs, with one `taffy` version that names an exact release:
+
+```toml title="gradle/libs.versions.toml"
+[versions]
+paper = "26.1.2.build.66-stable"
+taffy = "0.1.0"
+shadow = "9.6.1"
+
+[libraries]
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper" }
+taffy-config = { module = "so.alaz.taffy:taffy-config", version.ref = "taffy" }
+taffy-metrics = { module = "so.alaz.taffy:taffy-metrics", version.ref = "taffy" }
+
+[plugins]
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+```
+
+Every module entry refers to the same `taffy` version, so moving to another release is a change of that one line, and the plugin never mixes two Taffy releases. A version range or a `-SNAPSHOT` here lets two builds of the same source pick up different Taffy code. [Versions and compatibility](/docs/versioning) covers what each kind of release may change. `paper` is the `paper-api` version Taffy is built against, and `shadow` is the Shadow version the Taffy conventions apply.
+
+```kotlin title="build.gradle.kts"
+plugins {
+    java
+    alias(libs.plugins.shadow)
+}
+
+group = "com.example.myplugin"
+version = "1.0.0"
+
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(25))
+    }
+}
+
+dependencies {
+    compileOnly(libs.paper.api)
+    implementation(libs.taffy.config)
+    implementation(libs.taffy.metrics)
+}
+```
+
+The modules are Java 25 class files, so the plugin compiles with a Java 25 toolchain. A module goes on `implementation` so the shadow jar carries it. Each runtime module other than `taffy-platform` brings `taffy-platform` with it, and `taffy-metrics` brings bStats and FastStats as runtime dependencies. `taffy-test` depends on no Taffy module and goes on `testImplementation`.
+
+`taffy-storage` ships neither HikariCP nor a JDBC driver. Without `so.alaz.taffy.paper-plugin` there is no generated `RuntimeLibraries` class, so the plugin's own `PluginLoader` lists the coordinates of HikariCP and each driver itself. [Storage](/docs/modules/storage) covers the loader.
+
+## The shadow jar
+
+```kotlin title="build.gradle.kts"
+tasks.shadowJar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    relocate("org.bstats", "com.example.myplugin.libs.bstats")
+    relocate("dev.faststats", "com.example.myplugin.libs.faststats")
+    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy")
+}
+
+tasks.processResources {
+    from("LICENSE") {
+        into("META-INF")
+    }
+}
+```
+
+### Relocation
+
+`relocate("so.alaz.taffy", "<group>.libs.taffy")` moves Taffy under the plugin's own package, here `com.example.myplugin.libs.taffy`, so two plugins built on different Taffy versions share no Taffy classes on one server. It sits next to the bStats and FastStats lines that [metrics](/docs/modules/metrics#relocation) requires: bStats refuses to start from classes that were not relocated. These are the same three relocations `so.alaz.taffy.paper-plugin` makes.
+
+### META-INF/faststats.properties
+
+FastStats cannot create its context without `META-INF/faststats.properties`. Each of the FastStats jars `taffy-metrics` brings carries a copy, and `DuplicatesStrategy.EXCLUDE` keeps the first one. An `exclude` on the shadow jar that matches the file, such as `exclude("META-INF/*.properties")`, leaves FastStats off: `start()` logs one warning and FastStats never starts.
+
+### META-INF/LICENSE
+
+Every Taffy jar carries Taffy's MIT `LICENSE` in `META-INF`. Shadow 9.6.1 copies the plugin's own classes and resources first, then the dependency jars, then files added on the `shadowJar` task itself, and `DuplicatesStrategy.EXCLUDE` keeps the first copy of each path. The plugin's own `LICENSE`, copied into `META-INF` by `processResources` as above or kept at `src/main/resources/META-INF/LICENSE`, therefore wins. A `from("LICENSE") { into("META-INF") }` on `shadowJar` loses to Taffy's copy.
+
+### Checking the jar
+
+`./gradlew build` runs both `jar` and `shadowJar`, so `build/libs` holds the server jar `myplugin-1.0.0-all.jar` beside the plain `myplugin-1.0.0.jar`, which carries none of Taffy and is not the one to install. `./gradlew shadowJar` writes only the `-all` jar. List the shadow jar with `jar tf build/libs/myplugin-1.0.0-all.jar`. It holds:
+
+- Taffy under `com/example/myplugin/libs/taffy/`, bStats under `com/example/myplugin/libs/bstats/` and FastStats under `com/example/myplugin/libs/faststats/`, and nothing under `so/alaz/taffy/`, `org/bstats/` or `dev/faststats/`,
+- one `META-INF/faststats.properties`,
+- one `META-INF/LICENSE`, the plugin's own.
+
+`unzip -p build/libs/myplugin-1.0.0-all.jar META-INF/LICENSE` prints the license the jar ships.
+
+## Dependabot
+
+Dependabot reads the plugin's version catalog. Give it `repo.alaz.so` as a registry and reference that registry from the `gradle` update entry:
+
+```yaml title=".github/dependabot.yml"
+version: 2
+
+registries:
+  papermc:
+    type: maven-repository
+    url: https://repo.papermc.io/repository/maven-public
+  faststats:
+    type: maven-repository
+    url: https://repo.faststats.dev/releases
+  alazso:
+    type: maven-repository
+    url: https://repo.alaz.so/releases
+
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    registries:
+      - papermc
+      - faststats
+      - alazso
+    schedule:
+      interval: daily
+    ignore:
+      - dependency-name: "io.papermc.paper:paper-api"
+    groups:
+      taffy:
+        patterns:
+          - "so.alaz.taffy:*"
+```
+
+The `ignore` entry stops Dependabot proposing `paper-api` bumps: the `paper` version follows the Taffy minor, since Taffy changes its `paper-api` pin only in a minor release ([What a patch changes](/docs/versioning#what-a-patch-changes)), so it moves by hand with a minor upgrade. The `taffy` group puts the bump of every Taffy module in one pull request, which keeps the modules at one version. Before `1.0.0`, a bump of the minor version can need code changes; read the changelog sections between the two versions before merging one.
+
+## FastStats and bStats versions
+
+`taffy-metrics` publishes the FastStats and bStats SDKs as runtime dependencies at the versions its release was tested with:
+
+| Taffy | FastStats (`dev.faststats.metrics:bukkit`) | bStats (`org.bstats:bstats-bukkit`) |
+|---|---|---|
+| `0.1.0` | `0.32.2` | `3.2.1` |
+| `0.1.1` | `0.32.2` | `3.2.1` |
+
+A patch release may raise either version, since FastStats and bStats are two of the few versions a patch changes ([What a patch changes](/docs/versioning#what-a-patch-changes)), and each release names the pair it was tested with. A plugin that declares either SDK in its own build at another version runs a pairing that was not tested. Gradle resolves the two requests to the higher version, so a newer SDK the plugin declares replaces the tested one.
+
+## A build that applies the conventions anyway
+
+A build can take the modules by coordinates and still apply a Taffy convention plugin, at the same version as the modules, for example `so.alaz.taffy.java` for the Java 25 toolchain and the compiler flags. The Gradle plugin resolves through `pluginManagement`, next to the `dependencyResolutionManagement` block above, and its catalog entry refers to the same `taffy` version as the modules:
+
+```kotlin title="settings.gradle.kts"
+pluginManagement {
+    repositories {
+        maven("https://repo.alaz.so/releases")
+        gradlePluginPortal()
+    }
+}
+```
+
+```toml title="gradle/libs.versions.toml"
+[plugins]
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+taffy-java = { id = "so.alaz.taffy.java", version.ref = "taffy" }
+```
+
+```kotlin title="build.gradle.kts"
+plugins {
+    java
+    alias(libs.plugins.shadow)
+    alias(libs.plugins.taffy.java)
+}
+
+tasks.withType<Jar>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+```
+
+Each convention plugin brings the defaults of `so.alaz.taffy.java`, which [Gradle plugins](/docs/gradle-plugins) lists. Its javadoc and test defaults are overridden per task.
+
+### Gradle on Java 25
+
+The Taffy Gradle plugins are Java 25 class files loaded into Gradle's own JVM, so a build that applies one runs Gradle itself on Java 25. The rest of this page has no such need: without the Taffy Gradle plugins, Gradle runs on any JVM it supports, and the Java 25 toolchain compiles the plugin's code. This file makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to:
+
+```properties title="gradle/gradle-daemon-jvm.properties"
+toolchainVersion=25
+```
+
+On an older JVM, Gradle stops while it configures the build, with `Dependency requires at least JVM runtime version 25`. [Getting started](/docs/getting-started#run-gradle-on-java-25) shows the same file.
+
+### LICENSE in every jar
+
+`so.alaz.taffy.java` copies the root project's `LICENSE` into `META-INF` of every `Jar` task, the shadow jar included. In the plain jar that copy meets the one `processResources` puts in the main output, and Gradle fails the `jar` task with `Entry META-INF/LICENSE is a duplicate` unless the task sets a duplicates strategy. `DuplicatesStrategy.EXCLUDE` on every `Jar` task keeps one copy, and both copies are the plugin's own file. In the shadow jar the convention's copy is added on the task itself, so it loses to Taffy's MIT `LICENSE`, as [META-INF/LICENSE](#meta-inflicense) describes. The `processResources` copy stays: it is the one that puts the plugin's own license in the shadow jar.
+
+### Javadoc doclint
+
+`so.alaz.taffy.java` passes `-Xdoclint:all,-missing` and `-quiet` to every `Javadoc` task, so a broken comment, such as an `@param` that names no parameter, fails the task. `so.alaz.taffy.paper-api` and `so.alaz.taffy.library` build a javadoc jar, so `build` runs `javadoc` in those modules. A module turns doclint off on its own javadoc task:
+
+```kotlin title="build.gradle.kts"
+tasks.javadoc {
+    (options as StandardJavadocDocletOptions).addBooleanOption("Xdoclint:none", true)
+}
+```
+
+The convention configures every `Javadoc` task before the build script does, so `-Xdoclint:none` comes after the convention's option, and javadoc applies the later one. `addBooleanOption("Xdoclint:-reference", true)` turns off a single group, here `reference`, and keeps the others.
+
+### Test locale and time zone
+
+Every `Test` task runs under the `tr-TR` locale and the `Pacific/Auckland` time zone, through these system properties:
+
+| Property | Value |
+|---|---|
+| `user.language` | `tr` |
+| `user.country` | `TR` |
+| `user.timezone` | `Pacific/Auckland` |
+
+As [Gradle plugins](/docs/gradle-plugins#test-locale-and-time-zone) describes, a test task replaces a default with `systemProperty`:
+
+```kotlin title="build.gradle.kts"
+tasks.test {
+    systemProperty("user.language", "en")
+    systemProperty("user.country", "US")
+    systemProperty("user.timezone", "UTC")
+}
+```
+
+The convention sets the properties before the build script configures the task, so the script's values win. They apply to that task only: another test task keeps the convention's values until it sets its own, and `tasks.withType<Test>().configureEach { ... }` sets them on every test task.
+
+<Cards>
+  <Card title="Gradle plugins" href="/docs/gradle-plugins">
+    What each Taffy Gradle plugin applies and configures, for a build that uses them.
+  </Card>
+  <Card title="Versions and compatibility" href="/docs/versioning">
+    What a patch or a minor release may change, and the servers each release line supports.
+  </Card>
+</Cards>
