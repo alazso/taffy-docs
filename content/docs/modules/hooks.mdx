@@ -485,17 +485,18 @@ boolean inMarket = wg != null
 | `DECENTHOLOGRAMS` | `DecentHolograms` | 2.10 or newer; Folia from 2.10.2. Lines are converted to `&` colour codes with `&#RRGGBB` hex, so MiniMessage that colour codes cannot hold, such as hover and click, is dropped. |
 | `FANCYHOLOGRAMS` | `FancyHolograms` | FancyHolograms 2. FancyHolograms 3 has another API and reads as `API_MISSING`. A hologram with a placeholder in a line is drawn again every second. Each removal rewrites `plugins/FancyHolograms/holograms.yml`, except while the server stops, and drops any saved hologram of the same name from it. |
 | `HOLOGRAMS` | `Holograms` | Holograms by TheNextLvl. A move runs on the location's region thread a little later. |
-| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text and shows PlaceholderAPI placeholders as written. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
+| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text. Fills PlaceholderAPI placeholders for each viewer when a player starts seeing the hologram and when its lines are replaced, not on a timer. HologramLib parses the filled text as MiniMessage, so a placeholder whose value holds `§` colour codes leaves that viewer's text unfilled and PacketEvents logs the failure. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
 
 | Method | Behaviour |
 |---|---|
 | `boolean create(String id, Location location, List<String> lines)` | Places a hologram. `false` when any hologram holds the prefixed name, the location has no world or its world unloaded, or the call failed. |
-| `boolean update(String id, List<String> lines)` | Replaces every line. |
+| `boolean update(String id, List<String> lines)` | Replaces every line. `false` when no hologram this provider placed with this id stands, such as after its world unloaded or the hologram plugin dropped it: place it again with `create`. |
 | `boolean move(String id, Location location)` | Moves the hologram. |
 | `boolean remove(String id)` | Removes the hologram. `false` when it was refused, and it stays in `ids()`. |
 | `boolean exists(String id)` | A hologram with this id stands. |
 | `Set<String> ids()` | The ids this provider placed that still stand, for an orphan check. |
 | `int removeAll()` | Removes every hologram this provider placed, such as from `onDisable`. |
+| `static String literal(String text)` | Writes text a player supplied so a line shows it as written. |
 | `boolean available()` | The hologram plugin is enabled. |
 
 Every call answers `false` (or an empty set) while the hologram plugin is disabled or the call fails; a failure is logged at most once a minute and reported under `hook.<plugin key>`.
@@ -504,8 +505,8 @@ Behaviour to know:
 
 - An id is 1 to 48 of `a-z`, `0-9`, `_` and `-`; any other id throws `IllegalArgumentException`. The hologram plugin stores it after the owner's name in lower case, with every character outside `a-z`, `0-9` and `-` written as `-`, and a `_`, as in `slate_crate-1`. Two plugins share a prefix only when their names differ in nothing but characters written as `-`.
 - Every call but `create` reaches only a hologram this provider placed, and `create` refuses a name another hologram holds, such as one a server owner made with the hologram plugin's commands or another plugin placed under the same prefix.
-- Holograms are temporary: the hologram plugin never saves them, so place them again after a restart. A hologram is also removed when its world unloads.
-- Lines are MiniMessage. A PlaceholderAPI placeholder such as `%player_name%` is filled in for each viewer when `plugin.placeholdersPerViewer()` is `true`, which is every plugin but HologramLib.
+- Holograms are temporary: the hologram plugin never saves them, so place them again after a restart. A hologram is also removed when its world unloads, and the hologram plugin drops it on its own reload (DecentHolograms on `/dh reload`) or when it disables. Nothing tells the plugin: `update`, `move` and `exists` answer `false` and `ids()` no longer lists it. To keep one standing, keep its id, location and lines, call `create` when `update` answers `false`, and place a world's holograms again from a `WorldLoadEvent` listener with a location built on `event.getWorld()`. A `Location` kept from before the world unloaded can still point at the old world.
+- Lines are MiniMessage. A PlaceholderAPI placeholder such as `%player_name%` is filled in for each viewer when PlaceholderAPI is installed and `plugin.placeholdersPerViewer()` is `true`, which is every supported plugin. Text a player supplied, such as a display name or an item name, goes into a line only through `HologramProvider.literal(text)`, as in `"<gold>Opened by " + HologramProvider.literal(name)`: it then shows as written, with no tag, colour code or placeholder in it taking effect. Without it, a player can show any placeholder's value, such as `%server_online%`, to every viewer.
 - Call every method on the server's global thread: the main thread on Paper, the global region thread on Folia.
 
 ```java
@@ -520,6 +521,21 @@ boolean showDailyCrate(Location block) {
     HologramProvider provider = holograms == null ? null : holograms.provider();
     return provider != null && provider.create("daily-crate", block.clone().add(0.5, 1.6, 0.5),
         List.of("<gold>Daily crate", "<gray>%slate_keys_daily% keys"));
+}
+
+void refreshDailyCrate(Location block, List<String> lines) {
+    HologramProvider provider = holograms == null ? null : holograms.provider();
+    if (provider != null && !provider.update("daily-crate", lines)) {
+        provider.create("daily-crate", block.clone().add(0.5, 1.6, 0.5), lines);
+    }
+}
+
+@EventHandler
+public void onWorldLoad(WorldLoadEvent event) {
+    World world = event.getWorld();
+    if (world.getName().equals(crateWorld)) {
+        showDailyCrate(new Location(world, crateX, crateY, crateZ));
+    }
 }
 
 public void onDisable() {
