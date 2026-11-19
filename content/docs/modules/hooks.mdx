@@ -50,6 +50,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
 | HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 
+The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
+
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
 ### Declaring the integrations in paper-plugin.yml
@@ -477,6 +479,10 @@ boolean inMarket = wg != null
 ```
 
 ## Holograms
+
+<Callout type="info" title="From 0.1.2">
+`HologramProvider`, `HologramPlugin` and the hologram catalog aliases are available from Taffy `0.1.2`. Earlier versions have no hologram hooks.
+</Callout>
 
 `HologramProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn, HologramPlugin plugin)` detects one hologram plugin the same way, reporting a detection failure under `hook.<plugin key>`. Call it once, on the server thread in `onEnable`: the provider registers a listener for the plugin that removes a hologram when its world unloads. `HologramPlugin.byKey` reads the plugin from a config value such as `fancyholograms`.
 
