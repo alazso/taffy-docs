@@ -24,12 +24,14 @@ The library keeps no static plugin, logger, executor or thread and ships no reso
 |---|---|
 | Java | 25, for the plugin and for the JVM Gradle runs on |
 | Paper API | `io.papermc.paper:paper-api` `26.1.2.build.66-stable` (catalog alias `alaz.paper.api`) |
+| Server, `0.1.x` | Built against `paper-api` `26.1.2.build.66-stable` and links statically against the `paper-api` of 26.2 and 26.3. Untested on a server, Paper or Folia. |
+| Server, from `0.2.0` | Paper 26.2 build 135 (the final 26.2 build) or newer, and Folia 26.3 build 8 or newer, since Folia 26.2 has no stable build. Taffy compiles against the newest 26.3 stable `paper-api`. |
 | Plugin descriptor | `paper-plugin.yml` |
-| Folia | Supported |
+| Folia | `Scheduler` schedules only through the schedulers Folia provides, as [Folia](#folia) describes. |
 
 Gradle itself runs on Java 25, because the Taffy Gradle plugins are Java 25 class files loaded into Gradle's JVM. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to. The `so.alaz.taffy.java` convention sets the Java 25 toolchain for compilation and tests.
 
-The conventions write no `api-version` or other descriptor key: the plugin's own `paper-plugin.yml` sets them. The only change the build makes to that file is expanding `${version}` to the project version.
+The conventions write no `api-version` or other descriptor key: the plugin's own `paper-plugin.yml` sets them. The only change the build makes to that file is expanding `${version}` to the project version. [Versions and compatibility](/docs/versioning#servers) lists the servers for each release line.
 
 ### Folia
 

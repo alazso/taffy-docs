@@ -126,7 +126,7 @@ A snapshot carries changes that the `[Unreleased]` section of the changelog desc
 |---|---|
 | Java | 25. `so.alaz.taffy.java` sets the Java 25 toolchain on each module that applies it, directly or through another Taffy convention plugin. |
 | Gradle's own JVM | Java 25, because the Taffy Gradle plugins are Java 25 class files. |
-| Server | Paper. `Scheduler` runs on Paper and on Folia. |
+| Server | Paper and Folia, at the builds [Servers](#servers) gives for each release line. `Scheduler` uses only schedulers that both provide. |
 | Paper API | `io.papermc.paper:paper-api` `26.1.2.build.66-stable`, the `paper` version of the `alaz` catalog (`alaz.paper.api`). |
 
 Gradle picks a Java 25 JVM whatever `JAVA_HOME` is when the plugin project holds this file:
@@ -144,6 +144,15 @@ dependencies {
 ```
 
 The catalog pins the versions of the rest of the stack the same way (HikariCP, the JDBC drivers, bStats, FastStats, the integration APIs, JUnit, AssertJ, Mockito), so a Taffy upgrade can also move those versions.
+
+### Servers
+
+| Release line | Compiled against | Servers |
+|---|---|---|
+| `0.1.x` | `paper-api` `26.1.2.build.66-stable` | Links statically against the `paper-api` of 26.2 and 26.3. Untested on a server, Paper or Folia. |
+| From `0.2.0` | the newest 26.3 stable `paper-api` | Paper 26.2 build 135 (the final 26.2 build) or newer, and Folia 26.3 build 8 or newer, since Folia 26.2 has no stable build. |
+
+The `paper-api` pin and the oldest supported server stay the same for every patch of a release line.
 
 ## Reading the changelog
 
