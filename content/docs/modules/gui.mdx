@@ -460,7 +460,18 @@ frame.action("balance", Frame.Spec.display()
     .glint(coins > 0));
 ```
 
-`Frame.Entry` is one list row: `Entry.display(icon)`, `Entry.click(icon, handler)` and `exclusively()`, or the canonical constructor `new Frame.Entry(icon, handler, clicks, exclusive)` for other click types.
+`Frame.Entry` is one list row: `Entry.display(icon)`, `Entry.click(icon, handler)` and `exclusively()`, or the constructor `new Frame.Entry(icon, handler, clicks, exclusive)` for other click types.
+
+From `0.3.0`, `key(String)` gives a row a stable key: what names the thing the row acts on among the entries of the menu, the same on every render that shows it, such as the id of a listing. The key tells the menus whether a redraw put another row in a slot, as [Click safety](#click-safety) describes, and the click debounce of a keyed row follows the key when the row moves to another slot. `key()` reads it and is `null` for a row with none, which is what `Entry.click`, `Entry.display` and the four-argument constructor give; the record's fifth component is the key.
+
+```java
+frame.list(listings.size(), frame.state(), index -> {
+    Listing listing = listings.get(index);
+    return Frame.Entry.click(icon(listing), click -> buy(click, listing))
+        .exclusively()
+        .key(listing.id().toString());
+});
+```
 
 ## Icons
 
@@ -678,6 +689,7 @@ The menu listener keeps menu views safe. From `0.3.0` the menus register it them
 - From `0.3.0`, a session belongs to the `Menus` that opened it. A plugin with two `Menus`, such as one for player menus and one for admin menus, has two listeners: each cancels the clicks and drags in a menu of either, and only the listener of the owning `Menus` runs the button's handler, plays `Cue.CLICK` and `Cue.FAIL` and ends the session, so a click runs its handler once and `closed` is called once. Before `0.3.0` both listeners dispatched every click and a handler ran twice.
 - Only a click of a type in `ClickGuard.ANY_PLAIN` (`LEFT`, `SHIFT_LEFT`, `RIGHT`, `SHIFT_RIGHT`), by the session's own viewer, on a slot of the menu inventory whose button accepts that type, reaches a button. Number keys, drops, double clicks and creative clicks never do. `ClickGuard.LEFT_ONLY` is a plain left click alone.
 - A click within the click debounce window after the menu opened is dropped, an exclusive button is dropped while the session is busy (see [Exclusive buttons](#exclusive-buttons)), and a second click on the same button within the debounce window is dropped. Slots of one layout item share one debounce. From `0.3.0`, these windows and the deadline of a prompt are measured with `System.nanoTime()`, so a step of the server's wall clock neither drops clicks nor lets one through early.
+- From `0.3.0`, a click on a slot is also dropped for the click debounce window after a redraw (`rerender`, or a load that applied) put another button in that slot. Before `0.3.0` the click ran the handler of whatever the slot showed by then, so when a sold listing shifted the rows up, a viewer aiming at one listing bought the next. Another button is a list row with another `Frame.Entry.key`, for a row with no key a row with another icon, a button of another layout item, or any button in a slot that had none. A layout action that redraws with other text or another icon keeps taking clicks, and so does a keyed row that stays in its slot, whatever its icon shows. A row with no key whose icon changes on every redraw, such as a countdown, drops the clicks of the window after each redraw, so give each clickable row a key. From `0.3.0` the click debounce of a keyed row follows its key, and that of a row with no key its slot.
 - An accepted click plays `Cue.CLICK`. A handler that throws a `RuntimeException` leaves the event cancelled, is logged and reported under `gui.click`, clears `busy` and plays `Cue.FAIL`.
 - In any view that is neither a menu nor a prompt anvil, a stack carrying the preview key on the clicked slot, the cursor, a number key's hotbar slot or the offhand is deleted, the click is cancelled and a `preview.leak` warning naming the player is logged. A drag outside menus with a marked cursor is cancelled and the cursor cleared on the next tick.
 - A close ends the session (watched at `MONITOR`), and a quit forgets the player's debounce, view memory, session and pending prompt.

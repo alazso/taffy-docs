@@ -346,6 +346,7 @@ plugins {
 | [Menu settings, layouts and parts are built through factories](#menu-settings-layouts-and-parts-are-built-through-factories) | every plugin that builds a `MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` or `Menus.Parts` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
 | [MenuLayout takes its items as a collection](#menulayout-takes-its-items-as-a-collection) | a plugin that passed a map of items to `MenuLayout` | pass `map.values()` or a list |
 | [Menus and Prompts register their own listeners](#menus-and-prompts-register-their-own-listeners) | every plugin that builds a `Menus` | pass the plugin to `Menus.Parts.of` and delete both `registerEvents` calls |
+| [A click just after a redraw is dropped](#a-click-just-after-a-redraw-is-dropped) | a menu whose list rows change their icon on a redraw, such as an animated row, and a plugin with a record pattern over `Frame.Entry` | give each clickable row a `key`, and add a fifth component to the pattern |
 | [Menus and Prompts check the calling thread](#menus-and-prompts-check-the-calling-thread) | a plugin that calls `Menus.open`, `Menus.rerender`, `Menus.load` or `Prompts.ask` from a thread that does not own the viewer, such as a storage callback | call `openLater`, `rerenderLater` or `askLater`, and hop to the viewer's thread before `load` |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
 | [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
@@ -434,6 +435,24 @@ once `Menus.shutdown` ran.
 `Menus.openLater`, `Menus.rerenderLater` or `Prompts.askLater`, which schedule the work on the viewer's entity
 thread. Call `Menus.load` from `Menu.opened` or a click handler, or hop to the viewer's thread first through
 `EntityThread.call`.
+
+### A click just after a redraw is dropped
+
+A click on a menu slot is dropped for the click debounce window (250 ms by default) after a redraw put another
+button in that slot, as a click within that window of the menu opening already is. In `0.2` a click that arrived
+just after `Menus.rerender` or a load redrew the menu ran the handler of whatever the slot showed by then, so a
+viewer aiming at one listing bought the one that had moved into its slot. Another button is a list row with
+another `Frame.Entry.key`, for a row with no key a row with another icon, a button of another layout item, or any
+button in a slot that had none. A layout action that redraws with other text keeps taking clicks.
+
+`Frame.Entry` has `key` as a fifth record component. `Entry.click`, `Entry.display` and the four-argument
+constructor still compile and give a row with no key; a record pattern over `Frame.Entry` needs a fifth
+component.
+
+**Migration:** give each clickable row a key that stays the same while the row shows the same thing, as in
+`Frame.Entry.click(icon, handler).key(listing.id().toString())`. A row with no key whose icon changes on every
+redraw, such as an animated one, otherwise drops the clicks of the window after each redraw.
+[Frame](/docs/modules/gui#frame) shows a keyed list.
 
 ### Menus read their text through a TextSource
 
