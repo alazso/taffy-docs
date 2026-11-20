@@ -321,7 +321,7 @@ Every FastStats error tracker of this module applies these rules to the messages
 | | Hidden | Sent as |
 |---|---|---|
 | 1 | A whole jdbc URL. | `jdbc:[redacted]` |
-| 2 | The user name and password before the `@` of a URI of any scheme, when both are present. | `redis://[credentials hidden]@cache:6379` |
+| 2 | The user name and password before the `@` of a URI of any scheme, when both are present. The password runs to the last `@` before the next `/` or whitespace, so a password that holds a `/` stays. | `redis://[credentials hidden]@cache:6379` |
 | 3 | An email address. | `[email hidden]` |
 | 4 | A bearer token. | `Bearer [token hidden]` |
 | 5 | An AWS access key id. | `[aws-key hidden]` |
