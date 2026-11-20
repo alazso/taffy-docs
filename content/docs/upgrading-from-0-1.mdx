@@ -275,3 +275,57 @@ Three additions are there for a plugin that wants them:
   error, as in `0.2.0`. To send it as unhandled, install two handlers and pass the second one's reports to
   `Metrics.reportUnhandled`, as [The error sink has one target](/docs/modules/metrics#the-error-sink-has-one-target)
   shows.
+
+## 0.2.2
+
+`0.2.2` needs no action from a plugin: change the version of the settings plugin and rebuild. Every signature of
+`0.2.1` is still there and no call needs a change. Every change is in [taffy-comficonf](/docs/modules/comficonf),
+and each addition is unused until a plugin calls it.
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.2.2"
+}
+```
+
+A server owner who edits a plugin's settings through a `YamlFileProvider` sees one difference in the ComfiConf
+editor:
+
+| Change | What the owner sees |
+|---|---|
+| [Every waiting restart-only field is reported](/docs/modules/comficonf#restart-only-fields) | A save that changes only live fields is answered as saved with a restart required, with the paths that wait, for as long as a field declared `restartRequired()` differs from the value the file held when the provider was built. It was answered as applied, although a restart-only change of an earlier save, or of an edit of the file by hand, still waited. Once the file holds the startup values again, the answer is applied. |
+
+A plugin's own test that expects `applied` from a live-only apply after a restart-only change now receives
+`savedRestartRequired` with the waiting paths.
+
+Three more changes are visible on the server and none of them needs a change in the plugin:
+
+- `ComfiConfRegistration.register` refuses a bridge whose `ComfiConfApi.apiVersion()` is lower than the
+  `ComfiConfApi.API_VERSION` Taffy is compiled against. `ComfiConfConnection.connect` then gives `API_MISSING` and
+  logs the one warning that asks the owner to update ComfiConf, with both versions in it. Such a bridge was noticed
+  only when a call reached a class or method it lacks. [At enable](/docs/modules/comficonf#at-enable) lists the
+  checks.
+- `ComfiConfConnection.connect` reads the link's `resourceId()` once, and `ComfiConfConnection.resourceId()` returns
+  that id. A `ComfiConfLink` of the plugin's own that throws from `resourceId()` gives `FAILED` with one warning and
+  a report under `hook.comficonf`, where the error left `connect`. The link `ComfiConfRegistration.register`
+  returns never throws there.
+- `YamlFileProvider.read()`, the first read of `apply` and the read of `build` hold the lock
+  `ComfiConfConnection.lockFor(file)` gives while a resource is registered, so none of them sees a file the plugin
+  has written in part. A plugin that holds that lock around its own writes, as
+  [Reloads and the plugin's own writes](/docs/modules/comficonf#reloads-and-the-plugins-own-writes) shows, changes
+  nothing.
+
+Two additions are there for a plugin that wants them:
+
+- `YamlFileProvider.Builder.notLoadedMessage(String)` sets the message the editor shows when the file was saved and
+  the plugin could not load it, so it can name the plugin's reload command.
+  [The apply result](/docs/modules/comficonf#the-apply-result) shows it.
+- `YamlFileProvider.Builder.backups(BackupPolicy)` sets the folder that receives the backups of the file and the
+  number kept. Without it the 10 newest stay in the `backups` folder beside the file, as before. Each backup is a
+  full copy of the file, secrets included, as [What the bridge calls](/docs/modules/comficonf#what-the-bridge-calls)
+  states.
+
+The release also documents a move that needs no new Taffy version: a plugin that still reads
+`JavaPlugin.getConfig()` beside a `ConfigHolder` keeps old values after a reload and after a save in the editor.
+[Moving a plugin off getConfig()](/docs/modules/config#moving-a-plugin-off-getconfig) describes the move and what
+the server owner sees after it.
