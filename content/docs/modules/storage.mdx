@@ -88,7 +88,7 @@ public static StorageSettings server(Dialect dialect, Server server)
 
 Each database thread uses one connection at a time, so `asyncThreads` must not be above `Pool.maxSize()`, and connections above `asyncThreads` are never used. The two are set by separate methods, so `Storage.start` checks them together and throws `IllegalArgumentException` for more threads than connections. Before `0.4.0` such settings started, and the threads beyond the pool's size failed with a connection timeout under load.
 
-`StorageSettings.Server.of(String host, int port, String database, String user, String password, SslMode sslMode)` gives a server with no table prefix, and `tablePrefix(String)` gives a copy with one:
+`StorageSettings.Server.of(String host, int port, String database, String user, String password, SslMode sslMode)` gives a server with no table prefix, a socket timeout of 30 seconds and no driver properties. `tablePrefix(String)`, and from `0.4.0` `socketTimeout(Duration)` and `properties(Map<String, String>)`, each give a copy with that value replaced:
 
 | Value | Rule |
 |---|---|
@@ -96,8 +96,10 @@ Each database thread uses one connection at a time, so `asyncThreads` must not b
 | `port` | 1 to 65535. |
 | `database` | 1 to 64 letters, digits, underscores, dollar signs and hyphens. |
 | `user`, `password` | The credentials. The password is empty for none. `Server.toString()` shows `(set)` instead of the password. |
-| `sslMode` | `DISABLE`, `TRUST` or `VERIFY_FULL`. |
+| `sslMode` | `DISABLE`, `PREFER`, `TRUST` or `VERIFY_FULL`. [SSL modes](#ssl-modes) describes each. |
 | `tablePrefix` | Empty, or up to 32 lowercase letters, digits and underscores starting with a letter or underscore. |
+| `socketTimeout` | How long a connection waits for the server to answer during normal work: a whole number of seconds from 1 to 2147483, 30 seconds unless set. [The socket timeout](#the-socket-timeout) describes what it ends. |
+| `properties` | Properties handed to the JDBC driver with every connection, empty unless set. [Driver properties](#driver-properties) lists the names storage refuses. |
 
 `StorageSettings.tablePrefix()` returns the server's prefix, or an empty string for SQLite: a SQLite database has no table prefix.
 
@@ -128,15 +130,49 @@ A factory or a method that takes a value throws `NullPointerException` for a `nu
 | `SslMode` | Meaning | MySQL | MariaDB | PostgreSQL |
 |---|---|---|---|---|
 | `DISABLE` | Not encrypted. | `sslMode=DISABLED` | `sslMode=disable` | `sslmode=disable` |
+| `PREFER` (from `0.4.0`) | Encrypted when the server offers TLS, not encrypted when it does not. The server's certificate is not checked. | `sslMode=PREFERRED` | `sslMode=disable`: not encrypted | `sslmode=prefer` |
 | `TRUST` | Encrypted, the server's certificate is not checked. | `sslMode=REQUIRED` | `sslMode=trust` | `sslmode=require` |
 | `VERIFY_FULL` | Encrypted, the certificate and the host name are checked. | `sslMode=VERIFY_IDENTITY` | `sslMode=verify-full` | `sslmode=verify-full` with `sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory` |
 
-- With `DISABLE`, MySQL and MariaDB URLs also carry `allowPublicKeyRetrieval=true`, so an unencrypted login with MySQL 8's `caching_sha2_password` can fetch the server key.
+- With `DISABLE` and `PREFER`, MySQL and MariaDB URLs also carry `allowPublicKeyRetrieval=true`, so an unencrypted login with MySQL 8's `caching_sha2_password` can fetch the server key.
+- `PREFER` is what the MySQL and PostgreSQL drivers do for a JDBC URL that names no mode, so a plugin that connected with a bare URL before it used Taffy keeps the encryption its owners have. Someone who can change the traffic between the two machines can make such a connection fall back to no encryption, so `PREFER` protects only against someone who reads the traffic. `TRUST` fails on a server without TLS, and `VERIFY_FULL` also checks who the server is.
+- The MariaDB driver has no mode that encrypts only when the server offers TLS without checking the certificate, so on MariaDB `PREFER` is `DISABLE`, that driver's own default: the connection is not encrypted, whether or not the server offers TLS. Use `TRUST` or `VERIFY_FULL` to encrypt a MariaDB connection.
 - With `VERIFY_FULL`, the certificate is checked against the JVM's default trust store on every server dialect. On PostgreSQL that is what `DefaultJavaSSLFactory` does; the driver's default socket factory would check only a `root.crt` file in the user's home. A server whose certificate comes from a private authority needs that authority in the trust store of the JVM that runs Paper.
 - `VERIFY_FULL` checks the host name against the certificate, so `host` must be a name the certificate holds. A certificate for `localhost` is accepted with host `localhost` and refused with host `127.0.0.1`.
 - With `TRUST`, PostgreSQL uses `sslmode=require` with the driver's default socket factory.
 
-Every server URL also sets a socket timeout of 30 seconds (`socketTimeout=30000` on MySQL and MariaDB, `socketTimeout=30` on PostgreSQL), and MySQL and MariaDB URLs set `useAffectedRows=true`.
+MySQL and MariaDB URLs also set `useAffectedRows=true`. `SslMode` may gain a constant in a later release, so a `switch` over it needs a `default` branch.
+
+### The socket timeout
+
+Every server URL sets a socket timeout: `socketTimeout` in milliseconds on MySQL and MariaDB and in seconds on PostgreSQL. It is 30 seconds (`socketTimeout=30000`, or `socketTimeout=30` on PostgreSQL) unless the plugin sets another, which it can from `0.4.0` with `Server.socketTimeout(Duration)`. Before `0.4.0` it was always 30 seconds.
+
+A statement that waits longer than the timeout for the server, a wait for a row lock included, fails with an `SQLException` and its connection is closed. Whether the server still ran the statement is then unknown, and `asyncRetrying` does not run the work again. A plugin whose statements or lock waits may pass 30 seconds sets a longer timeout. Migrations run without the timeout.
+
+```java
+StorageSettings.Server server = StorageSettings.Server
+    .of("db.example.net", 3306, "minecraft", "plugin", "secret", StorageSettings.SslMode.PREFER)
+    .socketTimeout(Duration.ofMinutes(2));
+```
+
+### Driver properties
+
+From `0.4.0`, `Server.properties(Map<String, String>)` hands properties to the JDBC driver with every connection, under the names and with the values the driver documents. The map replaces the properties the server had and is copied. Storage does not check a name or a value the driver does not know, and `Server.toString()` shows the names and never the values.
+
+```java
+StorageSettings.Server server = StorageSettings.Server
+    .of("db.example.net", 5432, "minecraft", "plugin", "secret", StorageSettings.SslMode.VERIFY_FULL)
+    .properties(Map.of("ApplicationName", "MyPlugin", "connectTimeout", "5"));
+```
+
+A name that would replace a value storage sets itself throws `IllegalArgumentException`, in any letter case, because a driver would let the property win:
+
+| Refused | Set instead through |
+|---|---|
+| `user`, `password` | `Server.of` |
+| `sslMode`, `ssl`, `useSSL`, `requireSSL`, `verifyServerCertificate`, `trustServerCertificate`, `disableSslHostnameVerification`, `sslfactory`, `allowPublicKeyRetrieval` | the `SslMode` of `Server.of` |
+| `socketTimeout` | `Server.socketTimeout(Duration)` |
+| `useAffectedRows` | nothing: storage always sets it on MySQL and MariaDB, and [row counts](#row-counts-differ-per-dialect) depend on it |
 
 ## Starting storage
 
@@ -359,6 +395,27 @@ storage.async(tx -> tx.update(
     params -> params.uuid(player).money(balance).time(tx.now())));
 ```
 
+`forUpdate()` is for work that reads a row and then writes a value computed from what it read. On MySQL, MariaDB and PostgreSQL writes run at the same time (see [Threads](#threads)), so without the clause another transaction can change the row between the two statements and one of the two updates is lost. With it, the row is held until the transaction ends, and another transaction that selects the row the same way, or writes it, waits. On SQLite the clause is empty and writes run one at a time.
+
+```java
+public CompletableFuture<Boolean> withdraw(UUID player, BigDecimal amount) {
+    return storage.asyncRetrying(tx -> {
+        BigDecimal balance = tx.queryOne(
+            "SELECT balance FROM " + tx.table("accounts") + " WHERE player = ?" + tx.dialect().forUpdate(),
+            params -> params.uuid(player),
+            row -> row.money("balance")).orElse(BigDecimal.ZERO);
+        if (balance.compareTo(amount) < 0) {
+            return false;
+        }
+        tx.update("UPDATE " + tx.table("accounts") + " SET balance = ?, updated_at = ? WHERE player = ?",
+            params -> params.money(balance.subtract(amount)).time(tx.now()).uuid(player));
+        return true;
+    });
+}
+```
+
+Where one statement can do the work, it needs no lock: `UPDATE ... SET balance = balance - ? WHERE player = ? AND balance >= ?` is a relative, conditional update, and its row count tells whether it applied. Two transactions that lock the same rows in another order can deadlock; the database then rolls one back, and `asyncRetrying` runs it again.
+
 ### Row counts differ per dialect
 
 MySQL and MariaDB connections are opened with `useAffectedRows=true`. An `UPDATE` there counts only the rows whose values it changed, so a matched row written with its current values counts 0. SQLite and PostgreSQL count every matched row. A conditional update that must report success on MySQL and MariaDB changes a column, for example a timestamp.
@@ -393,7 +450,13 @@ MySQL and MariaDB connections are opened with `useAffectedRows=true`. An `UPDATE
 | SQLite | One extra thread `<name>-db-writer`, one write at a time in submission order, through a pool of one connection named `<name>-writer`. | The `<name>-db-N` threads, through read-only connections from the pool `<name>-reader` (`Pool.maxSize` connections). | Two |
 | MySQL, MariaDB, PostgreSQL | The `<name>-db-N` threads. | The same threads. | One, named `<name>` |
 
-Every SQLite connection opens with `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000` and `foreign_keys=true`, so foreign keys are enforced. Read connections also run `PRAGMA query_only = ON`, and from `0.4.0` the writer connection opens with `transaction_mode=IMMEDIATE`. On a server, every connection has a socket timeout of 30 seconds during normal work: a statement that waits longer for the server, a lock wait included, fails and its connection is closed. Migrations run without that timeout.
+Every SQLite connection opens with `journal_mode=WAL`, `synchronous=FULL`, `busy_timeout=5000` and `foreign_keys=true`, so foreign keys are enforced. Read connections also run `PRAGMA query_only = ON`, and from `0.4.0` the writer connection opens with `transaction_mode=IMMEDIATE`. On a server, every connection has [the socket timeout](#the-socket-timeout) of its `Server` during normal work, 30 seconds unless set: a statement that waits longer for the server, a lock wait included, fails and its connection is closed. Migrations run without that timeout.
+
+<Callout type="warn" title="Writes run at the same time on a server">
+On SQLite every write runs one at a time on the writer thread, so work that reads a row and then writes a value computed from it is correct there. On MySQL, MariaDB and PostgreSQL writes run in parallel on up to `asyncThreads` threads, each in a transaction on a connection of its own, in no order relative to each other, and the same work loses an update. Such work writes with a single conditional or relative `UPDATE` (`SET balance = balance + ?`, `WHERE id = ? AND state = ?`), or selects the row with [`Dialect.forUpdate()`](#dialect-sql).
+
+On MySQL and MariaDB a transaction reads from the snapshot its first select took (`REPEATABLE READ`). A select without `forUpdate()` that runs again inside one `TxWork` sees the same rows however often it runs, whatever other transactions committed meanwhile. A loop that reads, computes and writes with a condition until its write counts a row therefore runs one `TxWork` per attempt, or reads with `forUpdate()`, which reads the newest committed row.
+</Callout>
 
 ### Where stages run
 

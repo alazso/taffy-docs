@@ -878,6 +878,7 @@ plugins {
 | Change | Affects | Action |
 |---|---|---|
 | [Storage settings are built through factories](#storage-settings-are-built-through-factories) | every plugin that builds a `StorageSettings`, `StorageSettings.Server` or `StorageSettings.Pool` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
+| [SslMode has a fourth constant](#sslmode-has-a-fourth-constant) | a plugin with a `switch` over `StorageSettings.SslMode`, or one that stores a mode by its ordinal | add a `default` branch, and store the mode by its name |
 | [The version table is named after the plugin](#the-version-table-is-named-after-the-plugin) | a plugin on MySQL, MariaDB or PostgreSQL: its history moves to a table of its own on the first start, with no change in the plugin; a plugin, test or query that reads `<prefix>schema_version` | read the new name, or keep the earlier one with `StorageSettings.versionTable`; update every server that shares the database before the next migration ships |
 | [More database threads than connections stop the start](#more-database-threads-than-connections-stop-the-start) | a plugin whose `asyncThreads` can be above its `Pool.maxSize`, such as one that reads both from its config | set `maxSize` to `asyncThreads` or more, and show the owner the message |
 | [A script the splitter cannot read stops the start](#a-script-the-splitter-cannot-read-stops-the-start) | a plugin with a migration that has not run everywhere yet and holds a block comment, `$$`, a quoted string over several lines or a quote after a backslash | rewrite the script by the script rules |
@@ -922,6 +923,39 @@ StorageSettings settings = StorageSettings.server(Dialect.MARIADB, server)
 ```
 
 [Settings](/docs/modules/storage#settings) lists every value with its default and its rule.
+
+### SslMode has a fourth constant
+
+`StorageSettings.SslMode.PREFER` stands between `DISABLE` and `TRUST`. It encrypts the connection when the server
+offers TLS and connects without encryption when it does not, which is what the MySQL and PostgreSQL drivers do for
+a JDBC URL that names no mode; on MariaDB it is `DISABLE`. A `switch` expression over the three earlier constants no
+longer compiles, a `switch` statement runs no branch for `PREFER`, and the ordinals of `TRUST` and `VERIFY_FULL`
+are one higher. `SslMode` may gain a constant in a later release.
+
+**Migration:** add a `default` branch to each `switch` over `SslMode`, and store a mode by its name, not its
+ordinal. A plugin that reads the mode from its config with `SslMode.valueOf` needs no change.
+
+```java title="0.3"
+String label = switch (server.sslMode()) {
+    case DISABLE -> "not encrypted";
+    case TRUST -> "encrypted";
+    case VERIFY_FULL -> "encrypted and verified";
+};
+```
+
+```java title="0.4.0"
+String label = switch (server.sslMode()) {
+    case DISABLE -> "not encrypted";
+    case TRUST -> "encrypted";
+    case VERIFY_FULL -> "encrypted and verified";
+    default -> "encrypted where the server offers it";
+};
+```
+
+A plugin that built its JDBC URL itself, with no SSL setting, moves its owners to `PREFER` and they keep the
+encryption they have. `StorageSettings.Server` also takes a socket timeout and driver properties from `0.4.0`:
+[SSL modes](/docs/modules/storage#ssl-modes), [The socket timeout](/docs/modules/storage#the-socket-timeout) and
+[Driver properties](/docs/modules/storage#driver-properties) describe them.
 
 ### The version table is named after the plugin
 
