@@ -300,7 +300,7 @@ The constants run in resolution order:
 
 ### Ids and references
 
-An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`).
+An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`, and from `0.3.1` also `gems:ruby`).
 
 `CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config:
 
@@ -313,12 +313,16 @@ try {
     return;
 }
 if (!ref.hasKnownProvider()) {
-    getLogger().warning("reward " + text + " names an unknown item plugin " + ref.providerHint());
+    getLogger().info("reward " + text + " names no item plugin, so every item plugin is asked for it");
 }
 ```
 
-<Callout type="warn" title="ItemsAdder ids need their key">
-The text before the first colon is always read as a hint. `gems:ruby` has the hint `gems`, which names no plugin, so `create("gems:ruby")` returns `null`. Write `itemsadder:gems:ruby` or `ia:gems:ruby`.
+`CustomItemRef.parse` always reads the text before the first colon as a hint, so the ItemsAdder id `gems:ruby` parses to the hint `gems`, which names no plugin, and `hasKnownProvider()` is `false` for it.
+
+From `0.3.1`, `create` treats a reference whose hint names no plugin as unqualified: it offers the whole reference, hint and colon included, to each plugin in order, so `create("gems:ruby")` builds the ItemsAdder item `gems:ruby`. A reference that starts with a plugin's key or alias still goes only to that plugin, and a reference without a colon is offered as before.
+
+<Callout type="warn" title="Before 0.3.1, ItemsAdder ids need their key">
+Before `0.3.1`, `create("gems:ruby")` returns `null` without asking any plugin. Write `itemsadder:gems:ruby` or `ia:gems:ruby`, which every version builds and which asks ItemsAdder only.
 </Callout>
 
 ### Building and reading items
@@ -339,7 +343,7 @@ if (found.id() != null) {
 
 | Method | Behaviour |
 |---|---|
-| `create(String reference)` | With a hint, asks only the plugin the hint names. Without one, asks each plugin in order and returns the first item built. Each plugin gets the id without the hint. Returns `null` when nothing is built. Throws `IllegalArgumentException` for `null` or a blank id. |
+| `create(String reference)` | With a hint that names a plugin, asks only that plugin, with the id without the hint. Without a hint, asks each plugin in order and returns the first item built. From `0.3.1`, a reference whose hint names no plugin is offered whole to each plugin in order. Returns `null` when nothing is built. Throws `IllegalArgumentException` for `null` or a blank id. |
 | `resolve(@Nullable ItemStack item)` | Asks each plugin that reads ids in order and returns the first id as `Resolution(id, failed)`. A `null` or empty item gives no id and no failure. |
 | `idOrNull(@Nullable ItemStack item)` | `resolve(item).id()`. |
 | `ready()` | `true` when no enabled plugin is still loading its items. |
