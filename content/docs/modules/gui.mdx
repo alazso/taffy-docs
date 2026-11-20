@@ -311,6 +311,7 @@ A `Menu<S>` is the code side of one menu, where `S` is the state it shows (a pag
 |---|---|
 | `MenuKind kind()` | The kind whose id names the menu and its layout. |
 | `S initial(Player viewer)` | The state the menu opens with when no route names one. Never `null`. |
+| `Class<? super S> stateType()` | From `0.3.0`: a type every state of the menu is an instance of, such as `Integer.class` for a `Menu<Integer>`. `Menus.open(viewer, route)` and `openLater(viewer, route)` refuse a route whose state is no instance of it. By default `Object.class`, which accepts every state. |
 | `Component title(Frame<S> frame)` | Once, when the menu opens. By default the layout's title, or the lang key `gui.<id>.title`. A redraw keeps the title, so a new title takes a new open. |
 | `void render(Frame<S> frame)` | On every draw. Places the actions, list rows and states. |
 | `void opened(MenuSession<S> session, Player viewer)` | After the inventory opened. The place to start loads. Does nothing by default. |
@@ -609,9 +610,9 @@ A menu opens, draws and handles clicks on the viewer's entity thread, the region
 | `rerenderLater(session)` | Draws again on the next tick unless the session closed by then. |
 | `closeLater(viewer)` | Closes the viewer's menu on the next tick when one is open then. |
 
-Each `open` and `openLater` throws `IllegalArgumentException` when no menu is registered under the id. A `ClickHandler` runs inside the click event, so it opens, closes and redraws only through the `*Later` methods and asks for text through `Prompts.askLater`. A command opens with `menus.openLater(player, WarpsMenu.KIND.id(), null)`.
+Each `open` and `openLater` throws `IllegalArgumentException` when no menu is registered under the id. From `0.3.0`, `open(viewer, route)` and `openLater(viewer, route)` also throw it, naming the menu, the expected type and the type given, when `route.state()` is no instance of the menu's `stateType()`, before anything opens or is scheduled. A menu that keeps the default `stateType()` accepts every state, and a state of the wrong type then fails inside `render` with a `ClassCastException`. A `ClickHandler` runs inside the click event, so it opens, closes and redraws only through the `*Later` methods and asks for text through `Prompts.askLater`. A command opens with `menus.openLater(player, WarpsMenu.KIND.id(), null)`.
 
-A `Route(menu, state, back)` is a menu with the state it shows and the route its back button returns to. The menu registered under `menu` must accept the type of `state`. `MenuSession.route()` gives the open menu with its current state, for a back route or a prompt to return to.
+A `Route(menu, state, back)` is a menu with the state it shows and the route its back button returns to. The menu registered under `menu` must accept the type of `state`, which a menu that overrides `stateType()` checks when the route opens. `MenuSession.route()` gives the open menu with its current state, for a back route or a prompt to return to.
 
 Opening a menu while the viewer has another open is a hand-off: the previous session's `closed` gets `left = false`. Opening a menu also ends a pending prompt for that viewer.
 
