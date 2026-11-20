@@ -288,12 +288,12 @@ There is no error service when the switch is off, no token is set, FastStats fai
 - **Chart failures.** A chart supplier that throws, on every read that throws.
 - **Paper's exception events.** Each exception Paper reports for the plugin in a `ServerExceptionEvent`, such as one thrown from one of its event handlers, sent without a source.
 
-Reports of one kind from one source merge into one error with a count, and each error carries its source as the `source` attribute. Two reports are of one kind when their exception classes, stack frames and messages match through the whole cause chain, once the anonymize rules have hidden addresses, UUIDs and the like. A scheduled error submission runs every 30 minutes. Once the first report has arrived, every scheduled error submission and the final send post an `errors` array, even when it is empty.
+Reports of one kind from one source merge into one error with a count, and each error carries its source as the `source` attribute. Two reports are of one kind when their exception classes, stack frames and messages match through the whole cause chain, once the anonymize rules have hidden addresses, UUIDs and the like. From `0.2.1`, an IPv4 address, an IPv6 address and a run of digits in a message each count as the same whatever their value, so `timeout after 5003ms` and `timeout after 71ms` are one kind, sent with the message of the first report. Messages that differ in a name or other text are still separate kinds. A scheduled error submission runs every 30 minutes. Once the first report has arrived, every scheduled error submission and the final send post an `errors` array, even when it is empty.
 
 | Limit | Value |
 |---|---|
 | Sources with a tracker of their own | The first 64. Reports from any further source are sent without a source, and those sources share one limit of kinds. |
-| Kinds per source | 32 for the life of the handle. A report of any further kind from that source is dropped. A handle from a new `start()` starts with none. |
+| Kinds per source | 32 for the life of the handle. A report of any further kind from that source is dropped. From `0.2.1`, one warning that names the source is logged on the plugin's logger when the source holds its 32nd kind, and one for the sources past the first 64 together. A handle from a new `start()` starts with none. |
 | Reports held before `start()` | 16, the first of each source. |
 
 FastStats clears every report it holds once a scheduled error submission is accepted, so a report made while that send is in flight is lost. A later report of the same kind is sent as usual, with its count starting again. The final send in `shutdown()` has no such window, because the error sink is cleared before it.
