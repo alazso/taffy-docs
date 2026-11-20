@@ -13,7 +13,7 @@ description: Strict YAML loading, typed reading that reports every problem at on
 - `StrictYaml`, the one way a file becomes a `YamlConfiguration`: a file that is missing, not UTF-8 or not valid YAML fails instead of reading as empty.
 - `ConfigLoadException`, the one checked exception of the module, whose message is written for the server owner.
 
-All classes are in the package `so.alaz.taffy.config`. No class takes a `Plugin`, keeps a thread or calls `JavaPlugin.getConfig` or `reloadConfig`. A logger is used only where the plugin passes one in.
+All classes are in the package `so.alaz.taffy.config`. No class takes a `Plugin`, keeps a thread or calls `JavaPlugin.getConfig` or `reloadConfig`. A logger is used only where the plugin passes one in. A plugin that reads `getConfig()` today moves every read onto the holder, as [Moving a plugin off getConfig()](#moving-a-plugin-off-getconfig) describes.
 
 ## Setup
 
@@ -184,6 +184,51 @@ reader.unreadKeys().stream()
 ```
 
 Only the path a method is called with is recorded. The leaves beneath a group read whole through `value` or `children` are listed as unread, and a plugin that reads a group that way leaves those paths out itself.
+
+## Moving a plugin off getConfig()
+
+A plugin that reads `config.yml` through `JavaPlugin.getConfig()` and then adds a `ConfigHolder` has two copies of its settings: Bukkit's, which `reloadConfig()` replaces, and the holder's, which `ConfigHolder.reload()` replaces. `reload()` replaces only the holder's settings and never Bukkit's copy. A site left on `getConfig()` keeps its old value after every reload of the holder, and a value saved in the ComfiConf editor is answered as applied while that site still acts on the old one ([taffy-comficonf](/docs/modules/comficonf#a-plugin-that-reads-getconfig)). The move therefore covers every site in one change:
+
+- **One reader for every site.** Each value the plugin reads from `config.yml` becomes a component of the settings record, read by one `ConfigReader` call in its factory. No class reads the file another way, the classes for metrics, commands and diagnostics included.
+- **Live values from `get()`.** Code that follows a reload calls `settings.get()` each time it needs the value and keeps no copy of it in a field.
+- **Enable-time values from `startup()`.** A value the plugin uses once while it enables, such as the storage backend, the metrics switch or the aliases of a command it registers, is read from `settings.startup()`, which holds what the running plugin started with.
+- **`getConfig`, `reloadConfig` and `saveConfig` throw.** The plugin overrides the three, so a site that was missed fails the first time it runs, in a test or on a test server, instead of reading a value no reload refreshes:
+
+```java title="MyPlugin.java"
+@Override
+public FileConfiguration getConfig() {
+    throw new UnsupportedOperationException("Read settings.get() or settings.startup() instead of getConfig()");
+}
+
+@Override
+public void reloadConfig() {
+    throw new UnsupportedOperationException("Call settings.reload() instead of reloadConfig()");
+}
+
+@Override
+public void saveConfig() {
+    throw new UnsupportedOperationException("config.yml is written by ConfigLoader, not by saveConfig()");
+}
+```
+
+A call to `saveDefaultConfig()` is removed as well: `ConfigLoader.load()` writes the shipped file when none is there.
+
+### What the server owner sees
+
+Two things differ from Bukkit's copy, and both belong in the plugin's own changelog:
+
+- **The first load is strict.** With `getConfig()`, a `config.yml` that is not valid YAML is logged and the plugin starts on the values shipped in its jar, and bytes that are not UTF-8 are read as replacement characters. `ConfigHolder.load` passes on the `ConfigLoadException` that `StrictYaml` throws for both, so a plugin that follows the `onEnable` above logs the reason and stays disabled until the owner corrects the file. On a reload, such a file keeps the settings in effect.
+- **No value comes from the jar unasked.** `getConfig()` attaches the `config.yml` inside the jar as defaults, so `getConfig().getStringList("aliases")` gives the shipped list when the owner's file has no `aliases` key. The configurations `StrictYaml` and `ConfigLoader` return have no defaults attached, and `ConfigLoader` adds a missing shipped key only when it upgrades a file with an older `config-version`. An absent key gives the fallback of the reader call and nothing else.
+
+A list read is where the second one is easy to miss, because `getStringList` without defaults gives an empty list. The fallback passed to `ConfigReader.strings(path, fallback)` is the shipped list, not `List.of()`, or the entries disappear on every `config.yml` that omits the key:
+
+```java
+static final List<String> ALIASES = List.of("home", "h");
+
+List<String> aliases = reader.strings("aliases", ALIASES);
+```
+
+A list the owner wrote as empty (`aliases: []`) stays empty: only an absent or blank key gives the fallback.
 
 ## ConfigLoader
 

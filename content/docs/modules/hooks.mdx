@@ -527,16 +527,18 @@ public void onEnable() {
 }
 
 private @Nullable Detected<HologramProvider> detectHolograms() {
-    HologramPlugin chosen = HologramPlugin.byKey(getConfig().getString("holograms.plugin"));
+    HologramPlugin chosen = HologramPlugin.byKey(settings.get().hologramPlugin());
     return chosen == null ? null : HologramProvider.detect(this, errors, true, chosen);
 }
 
 void reloadHolograms() {
+    if (!settings.reload()) {
+        return;
+    }
     HologramProvider held = holograms == null ? null : holograms.provider();
     if (held != null) {
         held.close();
     }
-    reloadConfig();
     holograms = detectHolograms();
 }
 
@@ -569,7 +571,7 @@ public void onDisable() {
 }
 ```
 
-`reloadHolograms` closes the held provider before it detects again. `close()` removes the holograms that provider placed and unregisters its listener, so the plugin places its holograms again through the new provider.
+`settings` is the plugin's `ConfigHolder` of [taffy-config](/docs/modules/config), and `hologramPlugin()` is the component of its record read from `holograms.plugin`. A reload that fails keeps the settings in effect, and `reloadHolograms` then keeps the provider it holds. After a reload that succeeds, `reloadHolograms` closes the held provider before it detects again. `close()` removes the holograms that provider placed and unregisters its listener, so the plugin places its holograms again through the new provider.
 
 When the plugin disables, the provider removes its holograms by itself. Paper fires the plugin's `PluginDisableEvent` before `onDisable`, and the provider's listener removes every hologram it placed at that point. `close()` in `onDisable` then removes any hologram placed since, such as by a menu closed in `Menus.shutdown`, and stops the provider. It comes after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
 

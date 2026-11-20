@@ -325,6 +325,18 @@ A field declared `restartRequired()` that holds other fields is reported under i
 
 The report is true only when the code using a restart-only value reads `ConfigHolder.startup()`; code reading `ConfigHolder.get()` sees the new value at once, and the `savedRestartRequired` result is then untrue.
 
+### A plugin that reads getConfig()
+
+`holder::reload` as the activation replaces the settings of the `ConfigHolder` and nothing else. It does not call `JavaPlugin.reloadConfig()`, so code that reads `getConfig()` keeps the value from before the save: the file holds the new value, the result is `applied`, and the plugin still acts on the old one. For a field the schema declares live, the `applied` result is then untrue.
+
+A plugin that reads `getConfig()` moves every read of the file onto the holder before it registers a provider, as [Moving a plugin off getConfig()](/docs/modules/config#moving-a-plugin-off-getconfig) describes:
+
+- One reader serves every site: each value is a component of the settings record the holder keeps.
+- A live field is read from `ConfigHolder.get()` each time it is used, and a field declared `restartRequired()`, like every value used once at enable, from `ConfigHolder.startup()`.
+- `getConfig`, `reloadConfig` and `saveConfig` are overridden to throw, so a site that was missed fails in a test instead of answering with a value no save reaches.
+
+The move changes what the server owner sees, apart from the editor: the first load is strict, so a `config.yml` that is not UTF-8 or not valid YAML stops the start where `getConfig()` started the plugin on the values shipped in the jar, and an absent key no longer reads the shipped value. A list read therefore names its fallback, through `ConfigReader.strings(path, fallback)`.
+
 ## Reloads and the plugin's own writes
 
 After each successful reload by the plugin's own command, and after each write of the file outside ComfiConf, the plugin calls `notifyChanged()` so open editors read the new values. It never calls it after an apply, and the provider never calls it.

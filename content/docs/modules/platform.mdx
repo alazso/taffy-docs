@@ -803,12 +803,15 @@ closed jar, counts as absent and is logged as a warning; an absent class is not 
 | `close(Duration wait)` | From `0.2.0`. The same, waiting at most `wait`. |
 
 ```java
-String url = getConfig().getString("webhook-url");
+String url = settings.get().webhookUrl();
 if (DiscordWebhook.isWebhookUrl(url)) {
     webhook.post(url, buyer.getName() + " bought a voucher",
         reason -> getLogger().warning("Discord webhook failed: " + reason));
 }
 ```
+
+`settings` is the plugin's `ConfigHolder` of [taffy-config](/docs/modules/config), so the post uses the URL of the last
+reload that succeeded.
 
 Failures are never thrown. Each one reaches `onError` as a one-line reason for the server owner's log, such as
 `invalid webhook URL` or `Discord returned HTTP 404`, and nothing is reported to `ErrorReports`. The callback runs at
@@ -878,8 +881,11 @@ such as `embeds[0].timestamp`. A `Double` or `Float` that is `NaN` or infinite i
 it can go to `render` as read:
 
 ```java
-Map<String, Object> template = getConfig().getConfigurationSection("payload").getValues(false);
+Map<String, Object> template = settings.get().source().getConfigurationSection("payload").getValues(false);
 ```
+
+`source()` is the section the settings record was read from, kept as a component as in
+[taffy-config](/docs/modules/config#the-settings-model).
 
 In `0.1` a section and every other type went to the JSON serializer as they were, which did not write a section as
 the object the config held.

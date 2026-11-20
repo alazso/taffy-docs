@@ -84,6 +84,10 @@ Calls `start()` as the last step of enable, once the state the charts read exist
 
 ```java title="MyPlugin.java"
 import org.bukkit.plugin.java.JavaPlugin;
+import so.alaz.taffy.config.ConfigHolder;
+import so.alaz.taffy.config.ConfigLoadException;
+import so.alaz.taffy.config.ConfigLoader;
+import so.alaz.taffy.config.ConfigReader;
 import so.alaz.taffy.metrics.MetricChart;
 import so.alaz.taffy.metrics.Metrics;
 import so.alaz.taffy.metrics.MetricsBuilder;
@@ -100,11 +104,26 @@ public final class MyPlugin extends JavaPlugin {
     private final ErrorReports errors = new ErrorReports();
     private final LongAdder commandsRun = new LongAdder();
     private volatile String storageType = "sqlite";
+    private ConfigHolder<Settings> settings;
     private Metrics metrics;
+
+    record Settings(boolean metrics) {
+    }
 
     @Override
     public void onEnable() {
-        boolean metricsOn = getConfig().getBoolean("metrics", true);
+        ConfigLoader files = new ConfigLoader(
+            getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger());
+        try {
+            settings = ConfigHolder.load(
+                () -> new Settings(new ConfigReader(files.load(), getLogger()::warning).bool("metrics", true)),
+                getLogger()::warning);
+        } catch (ConfigLoadException failure) {
+            getLogger().severe("The settings could not be loaded: " + failure.getMessage());
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        boolean metricsOn = settings.startup().metrics();
         MetricsBuilder builder = new MetricsBuilder(this, errors, metricsOn)
             .bStats(BSTATS_SERVICE_ID)
             .fastStats(FASTSTATS_TOKEN);
@@ -131,6 +150,8 @@ public final class MyPlugin extends JavaPlugin {
     }
 }
 ```
+
+The switch is a component of the settings record a `ConfigHolder` of [taffy-config](/docs/modules/config) keeps, and it is read from `startup()`, because metrics start once per enable. A plugin reads it there and not through `getConfig()`, which no reload of the holder refreshes ([Moving a plugin off getConfig()](/docs/modules/config#moving-a-plugin-off-getconfig)). An enable whose settings do not load has no switch to read, so it starts no metrics.
 
 An enable that gives up after the switch is read, such as when storage fails to start, still calls `start()` before it returns, without the charts whose state never came up. Its disable then shuts the metrics down, and the reports raised during enable go out in the final send. Without that call they are lost.
 
@@ -400,10 +421,10 @@ From `0.2.1`, `usageChart(false)` on the builder leaves the chart off for that p
 A plugin whose config lists every value it collects either names the `taffy_version` chart beside its metrics switch or gives the chart a key of its own:
 
 ```java
-metrics = new MetricsBuilder(this, errors, getConfig().getBoolean("metrics", true))
+metrics = new MetricsBuilder(this, errors, settings.startup().metrics())
     .bStats(BSTATS_SERVICE_ID)
     .fastStats(FASTSTATS_TOKEN)
-    .usageChart(getConfig().getBoolean("metrics-taffy-version", true))
+    .usageChart(settings.startup().metricsTaffyVersion())
     .start();
 ```
 
