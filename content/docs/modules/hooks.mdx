@@ -82,6 +82,9 @@ dependencies:
     WorldGuard:
       load: BEFORE
       required: false
+    WorldEdit:
+      load: BEFORE
+      required: false
     PlaceholderAPI:
       load: BEFORE
       required: false
@@ -103,6 +106,8 @@ dependencies:
 ```
 
 Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+
+A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
 <Callout type="warn" title="An installed integration that is not listed stays off">
 An integration that is installed but missing from `dependencies.server` is `HookState.NOT_VISIBLE`. Detection logs one warning naming the missing entry, and the status's reason tells the server owner the same.
@@ -232,7 +237,7 @@ Detection stops at the first check that fails and gives its state. The checks ru
 | `SWITCHED_OFF` | `<plugin> switched off` | The owner switched the integration off, so its plugin was not looked at. |
 | `NOT_INSTALLED` | `<plugin> not installed` | The integration plugin is not installed, or was no longer installed by the time the integration was built. |
 | `NOT_ENABLED` | `<plugin> installed but not enabled` | Installed but not enabled at detection, or disabled since. Also read while the plugin runs as another instance than the one detected, with a reason from `0.3.1`. |
-| `NOT_VISIBLE` | `<plugin> <version> not visible to this plugin` | Installed with the API, but missing from `dependencies.server`. |
+| `NOT_VISIBLE` | `<plugin> <version> not visible to this plugin` | Installed with the API, but missing from `dependencies.server`. From `0.3.1`, also WorldGuard while `WorldEdit` is missing from it. |
 | `API_MISSING` | `<plugin> <version> lacks the API that is read` | The installed version does not hold the API class that is read. |
 | `NOT_REGISTERED` | `<plugin> <version> has nothing registered with it` | Vault is there, but no economy has registered with it. A later registration can turn it on. |
 | `FAILED` | `<plugin> <version> could not be hooked` | The API is present, but building or registering the integration threw or a method it calls is missing. |
@@ -484,6 +489,14 @@ A write returns `true` only when the data changed and was saved, and `false` whe
 ## Regions
 
 `RegionProvider.worldGuard(Plugin owner, ErrorReports errors, boolean switchedOn)` detects WorldGuard the same way, reporting a detection failure under `hook.worldguard`.
+
+The plugin lists both `WorldGuard` and `WorldEdit` under `dependencies.server`. From `0.3.1`, detection also checks that WorldEdit's `BukkitAdapter` is visible. When WorldGuard is visible and that class is not, the status is `NOT_VISIBLE` with one warning and this reason, and nothing is reported:
+
+```text
+WorldGuard is installed, but this plugin cannot see WorldEdit, which WorldGuard is read through, because its paper-plugin.yml does not list WorldEdit under dependencies.server.
+```
+
+Before `0.3.1` the same setup is `FAILED`, with a report under `hook.worldguard` and no reason.
 
 | Method | Behaviour |
 |---|---|
