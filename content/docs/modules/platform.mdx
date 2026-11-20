@@ -505,9 +505,15 @@ during `reload()` sees either all the old files or all the new ones.
 | `sectionToMiniMessage(String)` | only codes written with `§`, leaving every `&` as written |
 
 ```java
-String mini = LegacyText.toMiniMessage("&6Gold &l&#ff8800bold");
-// "<gold>Gold <bold><#ff8800>bold"
+String mini = LegacyText.toMiniMessage("&#ff8800&lADMIN &7Steve");
+// "<#ff8800><bold>ADMIN <gray><!bold>Steve"
 ```
+
+From `0.2.0`, a colour code ends the format codes before it, as it does in legacy text: the colour tag is followed
+by the negation of each decoration (`<!bold>`, `<!italic>`, `<!underlined>`, `<!strikethrough>`, `<!obfuscated>`)
+that a format code earlier in the same call opened, and `&r` becomes `<reset>`. In `0.1`, `<bold>` stayed open, so
+`Steve` above was bold. Only format codes count: a decoration opened by a tag in the input, or by a format code in
+a string converted by another call, such as a `Placeholder.parsed` value, stays open after a colour code.
 
 The input is scanned without regard to MiniMessage tags, so a code inside a tag, such as a query string in a
 click URL, is converted too. The paired hex form `§x§R§R§G§G§B§B` is read; the `&x&R&R&G&G&B&B` form is not, and
