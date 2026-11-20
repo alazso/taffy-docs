@@ -231,7 +231,7 @@ Detection stops at the first check that fails and gives its state. The checks ru
 |---|---|---|
 | `SWITCHED_OFF` | `<plugin> switched off` | The owner switched the integration off, so its plugin was not looked at. |
 | `NOT_INSTALLED` | `<plugin> not installed` | The integration plugin is not installed, or was no longer installed by the time the integration was built. |
-| `NOT_ENABLED` | `<plugin> installed but not enabled` | Installed but not enabled at detection, or disabled since. |
+| `NOT_ENABLED` | `<plugin> installed but not enabled` | Installed but not enabled at detection, or disabled since. Also read while the plugin runs as another instance than the one detected, with a reason from `0.3.1`. |
 | `NOT_VISIBLE` | `<plugin> <version> not visible to this plugin` | Installed with the API, but missing from `dependencies.server`. |
 | `API_MISSING` | `<plugin> <version> lacks the API that is read` | The installed version does not hold the API class that is read. |
 | `NOT_REGISTERED` | `<plugin> <version> has nothing registered with it` | Vault is there, but no economy has registered with it. A later registration can turn it on. |
@@ -247,7 +247,7 @@ A version that was not read shows as `unknown`.
 
 - `plugin()` is the integration plugin's name, such as `Vault`.
 - `version()` is `null` for `SWITCHED_OFF`, `NOT_INSTALLED` and `NOT_ENABLED`, and set (possibly to `unknown`) for every other state.
-- `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, and for a placeholder backend's `FAILED`.
+- `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, for a placeholder backend's `FAILED`, and from `0.3.1` for a `NOT_ENABLED` read while the plugin runs as another instance than the one detected.
 - `describe()` never includes the reason. `describe()` plus `reason()` is the owner's line.
 
 The constructor throws `NullPointerException` for a `null` plugin or state, and `IllegalArgumentException` for a blank reason.
@@ -256,7 +256,15 @@ The constructor throws `NullPointerException` for a `null` plugin or state, and 
 
 `Detected<T>` holds one integration's result: `status()` and `provider()`. `provider()` is non-null exactly when detection turned the integration on (`ON` or `LOADING`).
 
-Every status is read when asked. An integration bound to its plugin reads `NOT_ENABLED` (no version, no reason) while that plugin is disabled, and the status found at detection again once it is enabled. `provider()` stays set after the plugin disables; its calls then give their empty answers. The Vault economy is the exception: its status is fixed and changes only through a new lookup.
+Every status is read when asked. An integration bound to its plugin reads `NOT_ENABLED` (no version) while that plugin is disabled, and the status found at detection again once it is enabled. `provider()` stays set after the plugin disables; its calls then give their empty answers. The Vault economy is the exception: its status is fixed and changes only through a new lookup.
+
+An integration stays bound to the plugin instance found at detection. When a plugin manager unloads an integration plugin and loads it again, the server holds a new instance under the same name, and the integration keeps the old, disabled one: it stays off and its status stays `NOT_ENABLED` until the plugin detects again. From `0.3.1`, that `NOT_ENABLED` status carries a reason, which `describe()` plus `reason()` shows to the owner:
+
+```text
+ItemsAdder installed but not enabled. ItemsAdder was loaded again as a new plugin instance after this plugin detected it, and this plugin still holds the old one. Restart the server to use ItemsAdder again, or run this plugin's reload command if it detects ItemsAdder again.
+```
+
+`CustomItems.statuses()` gives the same reason. Before `0.3.1` the status has no reason in this case. A `NOT_ENABLED` whose plugin is simply disabled has no reason in any version.
 
 `Detected` is immutable and safe to read from any thread. Its public constructor `Detected(HookStatus status, @Nullable T provider)` gives a fixed status, which suits tests:
 
