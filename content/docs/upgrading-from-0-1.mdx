@@ -306,9 +306,9 @@ Three more changes are visible on the server and none of them needs a change in 
   only when a call reached a class or method it lacks. [At enable](/docs/modules/comficonf#at-enable) lists the
   checks.
 - `ComfiConfConnection.connect` reads the link's `resourceId()` once, and `ComfiConfConnection.resourceId()` returns
-  that id. A `ComfiConfLink` of the plugin's own that throws from `resourceId()` gives `FAILED` with one warning and
-  a report under `hook.comficonf`, where the error left `connect`. The link `ComfiConfRegistration.register`
-  returns never throws there.
+  that id. A `ComfiConfLink` of the plugin's own that throws from `resourceId()` is closed and gives `FAILED` with
+  one warning and a report under `hook.comficonf`, where the error left `connect`. The link
+  `ComfiConfRegistration.register` returns never throws there.
 - `YamlFileProvider.read()`, the first read of `apply` and the read of `build` hold the lock
   `ComfiConfConnection.lockFor(file)` gives while a resource is registered, so none of them sees a file the plugin
   has written in part. A plugin that holds that lock around its own writes, as
