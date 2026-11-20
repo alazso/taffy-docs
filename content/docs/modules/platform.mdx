@@ -239,6 +239,10 @@ The scheduler never waits for work and never runs leftover work on its own. Once
 - `asyncExecutor()` rejects,
 - `asyncOrRun` runs the task on the calling thread.
 
+The same holds before the plugin is enabled, in its constructor or `onLoad`: every method above refuses whenever
+`Plugin.isEnabled()` is `false`, so an `asyncOrRun` call made before `onEnable` runs the task on the calling
+thread.
+
 A task Paper accepted but has not run when the plugin disables may never run: an entity task then runs neither its
 task nor its `retired` callback, and a delayed task is cancelled. From `0.2.0`, `close()` completes the future of
 a `dispatch` whose task has not started. Work that must settle is tracked in `PendingSettlements` before it is
@@ -290,9 +294,10 @@ public static void closeQuietly(String what, Shutdown.ShutdownStep step, Logger 
 ```
 
 Runs one step and catches anything it throws, an `Error` included, so the steps after it still run. The failure is
-logged as one plain-text warning that reads "Failed to `what` during shutdown" followed by the failure's
-`toString()`, without a stack trace, and reported to
-`errors` under the source `shutdown`. An `InterruptedException` sets the thread's interrupt flag again.
+logged as one warning that reads "Failed to `what` during shutdown" and reported to `errors` under the source
+`shutdown`. From `0.2.0`, the warning carries the failure as its thrown, so the log shows the stack trace; in `0.1`
+the failure's `toString()` followed the message and no trace was logged. An `InterruptedException` sets the
+thread's interrupt flag again.
 `ShutdownStep` is a functional interface whose `run()` may throw `Exception`. `what` completes the phrase
 "Failed to", for example `close storage`.
 
@@ -313,6 +318,9 @@ scheduler.async(() -> {
     }
 });
 ```
+
+Call `exit()` exactly once for each `enter()` that returned `true`. A call with no task admitted does nothing, and
+an unmatched call while tasks run releases one of them, so `close` can return before that task has exited.
 
 `close(Duration wait)` refuses every later entry, then waits up to `wait` for admitted tasks to exit. It returns how
 many are still running, `0` once all have exited. An interrupt ends the wait early and stays set. A result above
@@ -508,7 +516,9 @@ both. Loading:
 
 1. writes the bundled file to `lang/en.yml` when that file is absent,
 2. reads every `.yml` file in `lang`, skipping an unreadable file with a warning and listing the keys each file
-   lacks in one warning per file,
+   lacks in one warning per file. From `0.2.0`, two files whose names read as one locale, such as `pt-BR.yml` and
+   `pt_br.yml`, give a warning that names both and the one used (the one the folder listing gives last); in `0.1`
+   one replaced the other without a warning,
 3. falls back to the bundled English text when the folder cannot be written or listed, with a warning,
 4. warns when a default locale other than `en` has no file, and uses the bundled English text in its place.
 
@@ -680,6 +690,12 @@ an `r,g,b` triple of whole numbers from 0 to 255. It throws `IllegalArgumentExce
 is read in lower case; a missing or non-numeric volume or pitch is `1`; a `null` or blank spec does nothing. A key
 that does not parse throws Adventure's `InvalidKeyException`, and `Sounds.isValid(String)` checks for that
 beforehand, for example while loading config.
+
+A key that parses may still name no sound: the Bukkit enum form `ENTITY_PLAYER_LEVELUP` is valid and plays
+nothing. From `0.2.0`, `Sounds.isKnown(String)` tells, so config loading can warn. It looks a `minecraft` key up in
+the server's sound registry, and returns `true` for a `null` or blank spec and for a key of another namespace,
+which only a resource pack defines. A sound a resource pack adds under the `minecraft` namespace reads as unknown,
+so treat `false` as a reason to warn, not to refuse. It reads the registry of the running server.
 
 ```java
 Sounds.play(player, "minecraft:entity.player.levelup 0.8 1.2");
