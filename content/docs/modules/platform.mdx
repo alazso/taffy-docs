@@ -367,12 +367,13 @@ is absent, its pass is skipped.
 | Method | Returns |
 |---|---|
 | `render(String input)` | MiniMessage with MiniPlaceholders' global tags, no PlaceholderAPI |
-| `render(String input, Player viewer)` | PlaceholderAPI against the viewer (when non-null and present), then MiniMessage with MiniPlaceholders' global and audience tags |
+| `render(String input, Player viewer)` | MiniMessage with MiniPlaceholders' global and audience tags, and PlaceholderAPI placeholders filled in against the viewer (when non-null and present) |
 | `render(String template, Player viewer, TagResolver... values)` | the same, with values filled in |
 | `render(List<String> lines, Player viewer)` | each line as `render(String, Player)` |
 | `send(Player player, String miniMessage)` | renders with the player as viewer and sends it |
 | `resolve(String input, Player viewer)` | PlaceholderAPI only, no MiniMessage |
 | `plain(String input, Player viewer)` | the rendered text flattened to plain text |
+| `withPlaceholderFormatting()` | from `0.2.0`, a `Text` that also parses formatting tags in placeholder output |
 
 The viewer parameters accept `null`.
 
@@ -389,12 +390,45 @@ player.sendMessage(text.render(
     Placeholder.unparsed("price", "250")));
 ```
 
+### Placeholder output
+
+From `0.2.0`, what a PlaceholderAPI placeholder returns is inserted as text and is never parsed as MiniMessage. A
+nickname, clan tag or item name a player set to `<click:run_command:'/pay Mallory 100000'>Click me`, or to the
+`<name>` of a supplied value, is shown exactly as written. In `0.1` that output was parsed with the template, so
+such a value could add a click or hover event to a message.
+
+- Each run of text between two `%` signs is given to PlaceholderAPI on its own. A run PlaceholderAPI returns
+  unchanged, such as the middle of `50% off, 20% more`, stays as written.
+- Section-sign colour and format codes in the output still apply, to that output only. A placeholder that returns
+  `§c` and nothing else no longer colours the template after it: write the colour in the template.
+- A placeholder inside a tag argument MiniMessage does not parse, such as the value of
+  `<click:run_command:'/msg %player_name%'>`, is not filled in. One inside hover text is.
+- `resolve` is unchanged: it returns what PlaceholderAPI gave, tags included. Supply its result as
+  `Placeholder.unparsed` unless every tag in it is meant to be parsed.
+
+`withPlaceholderFormatting()` returns a `Text` that parses a restricted set of tags in placeholder output: the
+colour tags (`<red>`, `<#ff8800>`, `<color:...>`), the decoration tags (`<bold>`, `<!italic>` and the like),
+`<gradient>`, `<rainbow>` and `<reset>`. Every other tag, `<click>`, `<hover>` and `<name>` included, is still
+shown as written, and the formatting applies to that output only. Nothing turns the full `0.1` parse back on. The
+instance it is called on is not changed, and the two share their integrations and log, so one plugin keeps both:
+
+```java
+Text text = new Text(getLogger());
+Text ownerText = text.withPlaceholderFormatting();
+
+// %luckperms_prefix% returns "<gradient:gold:yellow>Admin</gradient>": shown as written here,
+player.sendMessage(text.render("%luckperms_prefix% %player_name% joined", player));
+// and as a gradient here.
+meta.displayName(ownerText.render("%luckperms_prefix% <white>voucher", player));
+```
+
 ### Values in a template
 
 - A value is written as `<name>`, or as `{name}`, which reads as `<name>` for every name the call supplies. A
   `{name}` nothing supplies stays as written. Only names of lower-case letters, digits, `_` and `-` are rewritten.
 - The order is: `{name}` rewrite, PlaceholderAPI on the template, then MiniMessage with the values. PlaceholderAPI
-  never sees a supplied value; a value with placeholders of its own goes through `resolve` first. A supplied
+  never sees a supplied value; a value with placeholders of its own goes through `resolve` first, and is then
+  supplied as `Placeholder.unparsed` unless the tags its placeholders return are meant to be parsed. A supplied
   `{name}` inside a `%...%` placeholder is rewritten to `<name>` as well, so that placeholder does not receive the
   value.
 - `Placeholder.unparsed` and `Placeholder.component` insert player-typed text as it is. `Placeholder.parsed` is for a
@@ -406,10 +440,12 @@ player.sendMessage(text.render(
 
 ### Legacy codes
 
-MiniMessage refuses a section sign followed by a legacy code character, which many PlaceholderAPI expansions
-return. Every render converts such codes to tags, as `LegacyText.sectionToMiniMessage` does: in the input, in what
-PlaceholderAPI returned and in each `Placeholder.parsed` value. A converted code such as `<red>` in a parsed value
-is an open tag, so it colours the rest of the template after the value, as the legacy code would. Values supplied
+MiniMessage refuses a section sign followed by a legacy code character. Every render converts such codes to tags,
+as `LegacyText.sectionToMiniMessage` does: in the input and in each `Placeholder.parsed` value. A converted code
+such as `<red>` in a parsed value is an open tag, so it colours the rest of the template after the value, as the
+legacy code would. From `0.2.0`, the codes in what PlaceholderAPI returned apply to that output only, as
+[Placeholder output](#placeholder-output) describes; in `0.1` they were converted with the input and coloured the
+rest of the template too. Values supplied
 as `Placeholder.unparsed` or `Placeholder.component` are inserted unchanged, section sign included. `render(String, Player, TagResolver...)` throws MiniMessage's
 `ParsingException` when the text still holds a section sign followed by a code character once the values are in.
 
@@ -490,7 +526,9 @@ A `null` locale or viewer is for the console and other output without a viewer. 
 - The prefix is the template under the key `prefix`. It is never put in front of a message: it appears only where a
   template writes `<prefix>` or `{prefix}`, and is empty when no file has the key. A value named `prefix` in the
   call replaces it.
-- With `render(Text, Player, ...)`, PlaceholderAPI runs on the template and the prefix, never on the values.
+- With `render(Text, Player, ...)`, PlaceholderAPI runs on the template and the prefix, never on the values. From
+  `0.2.0`, what a placeholder returns is inserted as text in both, as [Placeholder output](#placeholder-output)
+  describes; pass `text.withPlaceholderFormatting()` to parse formatting tags in it.
 
 Methods without a viewer may be called from any thread; those with one follow the thread rule of `Text`. A render
 during `reload()` sees either all the old files or all the new ones.
