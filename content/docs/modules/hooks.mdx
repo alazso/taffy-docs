@@ -222,7 +222,7 @@ public final class ShopPlugin extends JavaPlugin {
 
 PlaceholderAPI may call `balanceText` from any thread, so it reads a cached balance and asks for a fresh one on the thread `thread(UUID)` names through `Scheduler.dispatch`, with at most one refresh per player in flight. The first request for a player gives no value.
 
-In a real plugin each `true` comes from the plugin's own config, so the owner can switch an integration off. Register the `EconomyWatcher` and the first-tick lookup only while the economy is switched on. Detection runs once, on the server thread, in `onEnable`. An integration plugin that is not enabled by then stays off until the plugin detects again. There is no listener for an integration enabled later, except the Vault economy through `EconomyWatcher`.
+In a real plugin each `true` comes from the plugin's own config, so the owner can switch an integration off. Register the `EconomyWatcher` and the first-tick lookup only while the economy is switched on. Detection runs once, on the server thread, in `onEnable`. An integration plugin that is not enabled by then stays off until the plugin detects again. There is no listener for an integration enabled later, except the Vault economy through `EconomyWatcher`. [Detecting again](#detecting-again) shows a second detection of the custom item plugins.
 
 At disable, call `PlaceholderRegistration.unregister()` before `Scheduler.close()`, so no placeholder request reaches the plugin while it shuts down. It is the first step of `onDisable`, or the second, after `ComfiConfConnection.close`, when the plugin also uses [taffy-comficonf](/docs/modules/comficonf). The full order is in [taffy-platform](/docs/modules/platform).
 

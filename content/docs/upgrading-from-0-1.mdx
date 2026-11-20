@@ -673,3 +673,45 @@ Detected<EconomyProvider> economy = EconomyProvider.vault(this, errors, true, sc
 Detected<EconomyProvider> economy =
     EconomyProvider.vault(this, errors, true, scheduler.mode() == Scheduler.Mode.FOLIA, null);
 ```
+
+## 0.3.1
+
+`0.3.1` needs no action from a plugin: change the version of the settings plugin and rebuild. Every signature of
+`0.3.0` is still there and no call needs a change. Every change but one is in
+[taffy-hooks](/docs/modules/hooks), and each addition is unused until a plugin calls it.
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.3.1"
+}
+```
+
+A plugin that uses `CustomItems`, `Detected` or `RegionProvider` reads four things differently after the upgrade:
+
+| Change | What the plugin reads |
+|---|---|
+| [Nexo, Oraxen and HeadDatabase have a loading state](/docs/modules/hooks#per-plugin) | Each of the three is `LOADING` in `statuses()` and makes `ready()` `false` until it has loaded its items, where it read `ON` and `ready()` read `true` during the load. `create` returns `null` for their ids during the load, as before. `resolve` and `idOrNull` read Nexo and Oraxen ids during the load, as before. |
+| [A reference whose hint names no plugin is offered to each plugin](/docs/modules/hooks#ids-and-references) | `create("gems:ruby")` builds the ItemsAdder item `gems:ruby`, where it returned `null` without asking any plugin. A reference that starts with a plugin's key or alias goes only to that plugin, as before. |
+| [A replaced plugin instance has a reason](/docs/modules/hooks#detected) | The `NOT_ENABLED` status of an integration whose plugin was loaded again as a new instance carries a reason for the owner, where it had none. The state and the provider are unchanged. |
+| [WorldGuard without WorldEdit is not visible](/docs/modules/hooks#regions) | `RegionProvider.worldGuard` gives `NOT_VISIBLE` with a reason that names the missing `WorldEdit` entry and reports nothing, where it gave `FAILED` with a report under `hook.worldguard`. The integration was off in both versions, and a plugin that lists `WorldEdit` beside `WorldGuard` under `dependencies.server` reads `ON`. |
+
+The Nexo, Oraxen and HeadDatabase integrations each register a listener for the plugin, as the ItemsAdder one
+already did, so `CustomItems.detect` still runs while the plugin is enabled, normally in `onEnable`.
+
+Three additions let a plugin deliver custom items it could only guess at before:
+
+- **Wait for item plugins to load.** `ready()` is `true` only once ItemsAdder, Nexo, Oraxen and HeadDatabase have
+  each loaded their items, so a plugin that builds its menus or rewards once `ready()` is `true` no longer builds
+  them while one of the four knows no item. [Per plugin](/docs/modules/hooks#per-plugin) names the event that ends
+  each load.
+- **Read why an item did not build.** `CustomItems.build(String reference)` returns the item or a `Built.Reason`:
+  `UNKNOWN_PLUGIN`, `PLUGIN_OFF`, `NOT_READY`, `UNKNOWN_ID` or `FAILED`. `create` still returns `null` for each of
+  them. [Why no item was built](/docs/modules/hooks#why-no-item-was-built) lists the reasons.
+- **Close `CustomItems` on reload.** `CustomItems.close()` unregisters every listener `detect` registered, so a
+  reload command that detects again calls it first on the `CustomItems` it holds, as
+  [Detecting again](/docs/modules/hooks#detecting-again) shows. A plugin that detects once needs no `close()`.
+
+One addition is in [taffy-platform](/docs/modules/platform#itembuilder):
+`ItemBuilder.deserializeOrThrow(String reference)` rebuilds the item of a `serialized:<base64>` reference or throws
+`IllegalArgumentException` with the cause, so a plugin that stores items can log why a stored item is gone.
+`ItemBuilder.deserialize` still returns `null` for every failure.
