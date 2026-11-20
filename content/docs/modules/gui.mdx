@@ -687,6 +687,23 @@ Building the prompts links them to the menus. A second `Prompts` over the same m
 
 A `PromptRequest(question, initial, origin, answer)` is one question: the `Component` shown, the text an anvil's name field starts with, the `Route` a cancel or timeout opens again, and a `Function<String, Answer>` that judges the typed text on the player's entity thread. The function returns `new Answer.Accept(route)` to take the answer and open `route`, or `new Answer.Retry(reason)` to tell the player `reason` and keep waiting.
 
+From `0.3.0`, a function whose decision needs storage or an economy returns `new Answer.Later(future)` instead of blocking the player's entity thread. The `CompletableFuture<Answer>` completes on any thread, and its result is applied on the player's entity thread as a result the function returned: an `Accept` opens its menu, a `Retry` tells the player and waits for the next answer, and another `Later` waits again.
+
+```java
+new PromptRequest(question, "100", session.route(), text -> {
+    long price = Long.parseLong(text);
+    return new Answer.Later(economy.balance(player.getUniqueId())      // completes on any thread
+        .thenApply(balance -> balance >= price
+            ? new Answer.Accept(new Route("shop", price, null))
+            : new Answer.Retry(Component.text("You cannot afford that."))));
+});
+```
+
+- While the future runs the ask takes no chat line and no anvil submit, and an anvil stays open. A chat line typed then is ordinary chat.
+- The ask's first deadline, the cancel link, a closed anvil, another menu, a newer ask, a quit and `Menus.shutdown()` still end the ask. The result of a future that completes after that is dropped, and nothing runs for a player who left the server, so the future itself must not take money or items.
+- A future that fails or completes with `null` is handled as an answer function that throws. A cancelled future opens `origin` again with no message, and nothing is logged or reported.
+- `Answer` is sealed and a later release may add a result, so a plugin's own `switch` over it keeps a `default` branch.
+
 `ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message, and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls.
 
 Behaviour of an ask:
@@ -763,6 +780,6 @@ Every handled failure is logged with its stack through the plugin's logger and r
 | `gui.load` | A load's `source` or `apply` failed. |
 | `gui.render` | A menu failed to draw in a task `openLater` or `rerenderLater` scheduled. |
 | `gui.close` | A menu's `closed` threw. |
-| `gui.prompt` | A prompt's answer function threw or returned `null`, or prompt work on the player's entity thread failed. |
+| `gui.prompt` | A prompt's answer function threw or returned `null`, the future of an `Answer.Later` failed or completed with `null`, or prompt work on the player's entity thread failed. |
 
 A menu that throws from `render` or `initial` during a direct `open` or `rerender` passes the exception to the caller.
