@@ -344,6 +344,7 @@ if (found.id() != null) {
 | Method | Behaviour |
 |---|---|
 | `create(String reference)` | With a hint that names a plugin, asks only that plugin, with the id without the hint. Without a hint, asks each plugin in order and returns the first item built. From `0.3.1`, a reference whose hint names no plugin is offered whole to each plugin in order. Returns `null` when nothing is built. Throws `IllegalArgumentException` for `null` or a blank id. |
+| `build(String reference)` | From `0.3.1`. Builds as `create` does and returns a `CustomItems.Built`: the item, or the reason there is none. Throws as `create` does. |
 | `resolve(@Nullable ItemStack item)` | Asks each plugin that reads ids in order and returns the first id as `Resolution(id, failed)`. A `null` or empty item gives no id and no failure. |
 | `idOrNull(@Nullable ItemStack item)` | `resolve(item).id()`. |
 | `ready()` | `true` when no enabled plugin is still loading its items. |
@@ -353,6 +354,36 @@ if (found.id() != null) {
 | `close()` | From `0.3.1`. Unregisters every listener `detect` registered for the owner. A second call does nothing. |
 
 A plugin that is on but no longer enabled, or still loading its items, is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
+
+### Why no item was built
+
+`create` returns `null` for every cause. From `0.3.1`, `build(String reference)` returns a `CustomItems.Built(@Nullable ItemStack item, @Nullable Built.Reason reason)` with exactly one of the two set, and `create(reference)` is `build(reference).item()`.
+
+| `Built.Reason` | Meaning |
+|---|---|
+| `UNKNOWN_PLUGIN` | The text before the first colon names no `CustomItemPlugin`, and no plugin knows the whole reference as its own id. |
+| `PLUGIN_OFF` | The plugin the reference names has no integration on, or is no longer enabled. For a reference without a hint, no plugin is on and enabled. |
+| `NOT_READY` | The plugin the reference names is still loading its items. The same call can build the item once `ready()` is `true`. |
+| `UNKNOWN_ID` | Every plugin that was asked answered that it does not know the id. |
+| `FAILED` | A plugin threw. The failure is logged and reported under `hook.<key>`. |
+
+A reference that names no plugin is offered to several plugins. When none builds it, the reason is the first of these that holds: `NOT_READY` when a plugin is still loading its items, `FAILED` when a plugin threw, `UNKNOWN_PLUGIN` when the reference has a hint, `UNKNOWN_ID` when a plugin was asked, and `PLUGIN_OFF`.
+
+```java
+CustomItems.Built built = items.build(text);
+if (built.item() != null) {
+    give(player, built.item());
+    return;
+}
+switch (built.reason()) {
+    case NOT_READY -> retryLater(text);
+    case UNKNOWN_PLUGIN, UNKNOWN_ID -> getLogger().warning("reward " + text + " names no item");
+    case PLUGIN_OFF -> getLogger().warning("reward " + text + " needs an item plugin that is off");
+    default -> getLogger().warning("reward " + text + " could not be built");
+}
+```
+
+A later version may add reasons, so a `switch` over `Built.Reason` keeps a `default` branch. The record's constructor throws `IllegalArgumentException` when the item and the reason are both `null` or both set.
 
 ### Per plugin
 
@@ -677,7 +708,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 
 Reading an item's id and resolving a placeholder log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
 
-A `null` argument throws `NullPointerException`, except where a parameter is marked `@Nullable`, and except a reference given to `CustomItemRef.parse` or `CustomItems.create`, which throws `IllegalArgumentException`.
+A `null` argument throws `NullPointerException`, except where a parameter is marked `@Nullable`, and except a reference given to `CustomItemRef.parse`, `CustomItems.create` or `CustomItems.build`, which throws `IllegalArgumentException`.
 
 | Type | Thread |
 |---|---|
