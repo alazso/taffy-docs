@@ -293,7 +293,7 @@ editor:
 
 | Change | What the owner sees |
 |---|---|
-| [Every waiting restart-only field is reported](/docs/modules/comficonf#restart-only-fields) | A save that changes only live fields is answered as saved with a restart required, with the paths that wait, for as long as a field declared `restartRequired()` differs from the value the file held when the provider was built. It was answered as applied, although a restart-only change of an earlier save, or of an edit of the file by hand, still waited. Once the file holds the startup values again, the answer is applied. |
+| [Every waiting restart-only field is reported](/docs/modules/comficonf#restart-only-fields) | A save that changes only live fields is answered as saved with a restart required, with the paths that wait, for as long as a field declared `restartRequired()` differs from the value the file held when the provider was built. It was answered as applied, although a restart-only change of an earlier save, or of an edit of the file by hand, still waited. Once the file holds the startup values again, the answer is applied. A change of the save itself inside an object list is still reported as waiting even when its new value equals the startup value, as before. |
 
 A plugin's own test that expects `applied` from a live-only apply after a restart-only change now receives
 `savedRestartRequired` with the waiting paths.
