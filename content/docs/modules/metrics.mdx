@@ -284,7 +284,8 @@ There is no error service when the switch is off, no token is set, FastStats fai
 
 ### What FastStats receives
 
-- **Handled reports.** Each report made through `ErrorReports`, including those `Scheduler` makes for a task Paper's region, async or entity scheduler runs that throws (those schedulers fire no `ServerExceptionEvent`).
+- **Handled reports.** Each report made through `ErrorReports.report`.
+- **Unhandled reports.** Each kind of report made through `ErrorReports.reportUnhandled`, which is how `Scheduler` reports a task Paper's region, async or entity scheduler runs that throws (those schedulers fire no `ServerExceptionEvent`). From `0.2.1`, such a report is sent with `handled` set to `false`, as an exception FastStats catches itself is. Before, it was sent as a handled report.
 - **Chart failures.** A chart supplier that throws, on every read that throws.
 - **Paper's exception events.** Each exception Paper reports for the plugin in a `ServerExceptionEvent`, such as one thrown from one of its event handlers, sent without a source.
 
@@ -295,6 +296,8 @@ Reports of one kind from one source merge into one error with a count, and each 
 | Sources with a tracker of their own | The first 64. Reports from any further source are sent without a source, and those sources share one limit of kinds. |
 | Kinds per source | 32 for the life of the handle. A report of any further kind from that source is dropped. From `0.2.1`, one warning that names the source is logged on the plugin's logger when the source holds its 32nd kind, and one for the sources past the first 64 together. A handle from a new `start()` starts with none. |
 | Reports held before `start()` | 16, the first of each source. |
+
+FastStats does not merge unhandled errors into one with a count. The first unhandled report of a kind from a source is therefore sent, and a later unhandled report of that kind from that source is not sent for the life of the handle: a repeating task that throws the same exception on every run is sent once. A handled report of the same kind is sent as a handled error beside it, with its count.
 
 FastStats clears every report it holds once a scheduled error submission is accepted, so a report made while that send is in flight is lost. A later report of the same kind is sent as usual, with its count starting again. The final send in `shutdown()` has no such window, because the error sink is cleared before it.
 
@@ -345,17 +348,20 @@ worker.start();
 
 Each `ErrorReports.install` replaces the target before it, and only the first install receives the held reports. A plugin using this module therefore installs no target of its own before `start()`: such a target would take the held reports, and `start()` would then replace it. A target installed after `start()` replaces the handle in turn, and FastStats receives no further report through the sink.
 
-A plugin that also wants its reports elsewhere installs, after `start()`, one target that passes each report to `Metrics.report` and to its own handler:
+A plugin that also wants its reports elsewhere installs, after `start()`, one target that passes each report to `Metrics.report` or `Metrics.reportUnhandled` and to its own handler:
 
 ```java
 metrics = builder.start();
 errors.install((source, error) -> {
     metrics.report(source, error);
     getLogger().warning("Handled error in " + source + ": " + error);
+}, (source, error) -> {
+    metrics.reportUnhandled(source, error);
+    getLogger().warning("Unhandled error in " + source + ": " + error);
 });
 ```
 
-`Metrics.report(String source, Throwable error)` does nothing on a handle without a FastStats error service and after `shutdown()`, and never throws.
+`Metrics.report(String source, Throwable error)` and, from `0.2.1`, `Metrics.reportUnhandled(String source, Throwable error)` do nothing on a handle without a FastStats error service and after `shutdown()`, and never throw. A target installed with the one-handler `install` that passes every report to `Metrics.report` sends a `Scheduler` failure as a handled error, as before `0.2.1`.
 
 `shutdown()` clears the sink, which holds nothing after its first install or clear: a plugin that restarts its metrics on reload with the same sink loses the reports raised between the shutdown and the next `start()`.
 

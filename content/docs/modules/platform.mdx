@@ -217,7 +217,9 @@ tag is always an `EntityUnavailableException`, also when the cause is the plugin
 Paper's region, async and entity schedulers log a task that throws but fire no `ServerExceptionEvent`, so nothing
 that watches the plugin's errors sees it. `Scheduler` therefore catches anything a task Paper runs throws (a
 checked exception thrown without being declared included), reports it to its `ErrorReports`, then rethrows it
-unchanged so Paper logs and handles it as usual.
+unchanged so Paper logs and handles it as usual. From `0.2.1`, the report is made through
+`ErrorReports.reportUnhandled`, since nothing handles the error, and [taffy-metrics](/docs/modules/metrics) sends it
+to FastStats with `handled` set to `false`. Before, it was made through `report` and sent as a handled error.
 
 | Source | Tasks |
 |---|---|
@@ -256,8 +258,10 @@ the classes that report (`Scheduler`, `Shutdown`, and the hooks, storage, gui, m
 
 | Method | Behaviour |
 |---|---|
-| `report(String source, Throwable error)` | Reports an error under a short stable source key such as `shutdown`. Never throws: anything the target throws, an `Error` included, is discarded. |
-| `install(BiConsumer<String, Throwable> handle)` | Routes later reports to `handle`, on the thread that reported each one, or nowhere when `handle` is `null`. |
+| `report(String source, Throwable error)` | Reports a handled error under a short stable source key such as `shutdown`. Never throws: anything the target throws, an `Error` included, is discarded. |
+| `reportUnhandled(String source, Throwable error)` | From `0.2.1`. Reports an error the caller does not deal with and rethrows or lets escape, as `Scheduler` does for a task that throws. Held, dropped and delivered as `report` does it. Never throws. |
+| `install(BiConsumer<String, Throwable> handle)` | Routes later reports, handled and unhandled alike, to `handle`, on the thread that reported each one, or nowhere when `handle` is `null`. |
+| `install(BiConsumer<String, Throwable> handle, BiConsumer<String, Throwable> unhandled)` | From `0.2.1`. Routes later reports made through `report` to `handle` and those made through `reportUnhandled` to `unhandled`. Throws `NullPointerException` when either is `null`. |
 | `clear()` | Drops every later report until the next `install`. |
 
 ```java
@@ -269,7 +273,8 @@ The sink has one target. Each `install` replaces the one before it; to send each
 target that passes it to both.
 
 Until `install` or `clear` first runs, reports are held: the first one of each source, at most 16 in all. The first
-`install` of a non-null target delivers them, in order, on the installing thread. A first `clear()` or
+`install` of a non-null target delivers them, in order, on the installing thread, each to the handler that takes
+it. A first `clear()` or
 `install(null)` discards them, and a plugin that calls neither keeps them for its lifetime. After the first
 `install` or `clear`, a report made while no target is installed is dropped.
 
