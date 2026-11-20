@@ -345,6 +345,7 @@ plugins {
 | [Menus refuse a material that is not an item](#menus-refuse-a-material-that-is-not-an-item) | a plugin whose menu layouts or `MenuSettings` name a material that is not an item, or air | give an item material, and catch the exception where layouts are read |
 | [Menu settings, layouts and parts are built through factories](#menu-settings-layouts-and-parts-are-built-through-factories) | every plugin that builds a `MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` or `Menus.Parts` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
 | [MenuLayout takes its items as a collection](#menulayout-takes-its-items-as-a-collection) | a plugin that passed a map of items to `MenuLayout` | pass `map.values()` or a list |
+| [Menus and Prompts register their own listeners](#menus-and-prompts-register-their-own-listeners) | every plugin that builds a `Menus` | pass the plugin to `Menus.Parts.of` and delete both `registerEvents` calls |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
 | [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
 
@@ -378,7 +379,7 @@ default.
 | `new ItemLayout(id, slots, material, action, permission, enabled, name, lore)` | `ItemLayout.of(id, slots, material).action(action).permission(permission).enabled(enabled).name(name).lore(lore)` | no action, permission, name or lore, and shown |
 | `new PagerLayout(slots, emptySlot, emptyMaterial)` | `PagerLayout.of(slots).emptySlot(emptySlot).emptyMaterial(emptyMaterial)` | no empty state |
 | `new MenuLayout(menu, rows, filler, pager, items, title)` | `MenuLayout.of(menu, rows).filler(filler).pager(pager).items(items.values()).title(title)` | no filler, list, items or title |
-| `new Menus.Parts(layouts, settings, messages, locales, server, preview, tasks, entity, sounds, home, logger, errors)` | `Menus.Parts.of(server, preview, logger, messages, tasks, entity, errors).layouts(layouts).settings(settings).locales(locales).sounds(sounds).home(home)` | no layouts, `MenuSettings.DEFAULTS`, `Player::locale`, no sounds, no home menu |
+| `new Menus.Parts(layouts, settings, messages, locales, server, preview, tasks, entity, sounds, home, logger, errors)` | `Menus.Parts.of(plugin, messages, tasks, entity, errors).layouts(layouts).settings(settings).locales(locales).sounds(sounds).home(home)` | no layouts, `MenuSettings.DEFAULTS`, `Player::locale`, no sounds, no home menu, and the plugin's own server, logger and `new NamespacedKey(plugin, "preview")` |
 
 [Building a layout in code](/docs/modules/gui#building-a-layout-in-code) and
 [Enable and disable](/docs/modules/gui#enable-and-disable) show each in a plugin.
@@ -392,6 +393,32 @@ twice". `MenuLayout.item(ItemLayout)` adds one item, or replaces the item of the
 `MenuLayout.items()` still returns the map.
 
 **Migration:** pass `map.values()` where the plugin built a map, or build a list.
+
+### Menus and Prompts register their own listeners
+
+`Menus.Parts.of` takes the owning `Plugin` first. `new Menus(parts)` registers the menu listener with the plugin
+manager of `Parts.server()` as a listener of that plugin, and `new Prompts(menus, ...)` registers the prompt
+listener the same way before it links to the menus. In `0.2` the plugin registered `menus.listener()` and
+`prompts.listener()` itself, and a plugin that forgot the call opened menus whose icons players could take.
+
+The server, the logger and the preview key are no longer required: they default to `plugin.getServer()`,
+`plugin.getLogger()` and `new NamespacedKey(plugin, "preview")`, and `Parts.server(Server)`,
+`Parts.logger(Logger)` and `Parts.preview(NamespacedKey)` replace them. The server refuses a listener of a plugin
+that is not enabled with an `IllegalPluginAccessException`, so the menus are built while the plugin is enabled,
+such as in `onEnable`.
+
+`Menus.listener()` and `Prompts.listener()` are deprecated and a later release removes them. Each returns a
+listener with no event handler, so a `registerEvents` call left in a plugin registers nothing and cannot register
+the menus or the prompts twice.
+
+**Migration:** pass the plugin to `Menus.Parts.of`, add `.preview(key)` when the plugin's preview key is not
+`new NamespacedKey(plugin, "preview")`, and delete both `registerEvents` calls.
+
+```java
+menus = new Menus(Menus.Parts.of(this, messages, scheduler::entity, EntityThread.on(scheduler, getServer()), errors)
+    .layouts(layouts));
+Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
+```
 
 ### Menus read their text through a TextSource
 

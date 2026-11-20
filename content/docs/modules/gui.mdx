@@ -33,15 +33,15 @@ dependencies {
 
 ## Enable and disable
 
-The plugin builds one `Menus` at enable from a `Menus.Parts`, builds its `Prompts` over it when it asks for text, registers each `Menu`, and registers both listeners.
+The plugin builds one `Menus` at enable from a `Menus.Parts`, builds its `Prompts` over it when it asks for text, and registers each `Menu`. From `0.3.0`, `new Menus(parts)` registers the menu listener and `new Prompts(menus, ...)` the prompt listener, each as a listener of the plugin in `Menus.Parts`, so a menu cannot open with nothing to cancel its clicks and the plugin registers no listener itself. Before `0.3.0` the plugin passed `menus.listener()` and `prompts.listener()` to `registerEvents`, and a plugin that forgot the call opened menus whose icons players could take.
 
-From `0.3.0`, `Menus.Parts` is built through `Menus.Parts.of(server, preview, logger, text, tasks, entity, errors)`, which takes what has no default, and a method per other value, each of which gives a copy with that value replaced. Before `0.3.0` it was a record built with `new Menus.Parts(...)` and all twelve values by position. The methods that read a value (`layouts()`, `settings()` and the rest) keep their names.
+Build the menus while the plugin is enabled, such as in `onEnable`. The server refuses a listener of a plugin that is not enabled with an `IllegalPluginAccessException`, which leaves `new Menus(parts)`, so no menus exist then.
+
+From `0.3.0`, `Menus.Parts` is built through `Menus.Parts.of(plugin, text, tasks, entity, errors)`, which takes what has no default, and a method per other value, each of which gives a copy with that value replaced. Before `0.3.0` it was a record built with `new Menus.Parts(...)` and all twelve values by position. The methods that read a value (`layouts()`, `settings()` and the rest) keep their names.
 
 | Argument of `Menus.Parts.of` | Type | What to pass |
 |---|---|---|
-| `server` | `Server` | `getServer()`. It creates each menu inventory and tells whether the calling thread owns a player. |
-| `preview` | `NamespacedKey` | The key every shown stack carries: `new NamespacedKey(plugin, "preview")`. |
-| `logger` | `Logger` | `getLogger()`. |
+| `plugin` | `Plugin` | The plugin that owns the menus, `this` in `onEnable`. The menus and their prompts register their listeners as its listeners. |
 | `text` | `TextSource`, or `Messages` | The text of each lang key: the plugin's `Messages`, or its own [`TextSource`](#text-source). |
 | `tasks` | `BiConsumer<Player, Runnable>` | Runs work on a player's entity thread on the next tick: `scheduler::entity`. |
 | `entity` | `EntityThread` | Runs load results and prompt answers on the player's entity thread: `EntityThread.on(scheduler, getServer())`. |
@@ -54,11 +54,13 @@ From `0.3.0`, `Menus.Parts` is built through `Menus.Parts.of(server, preview, lo
 | `locales` | `Function<Player, Locale>` | The locale menu and prompt text renders in. | `Player::locale` |
 | `sounds` | `Supplier<Map<Cue, Sound>>` | The Adventure `Sound` of each `Cue`, read every time one plays. | no sounds |
 | `home` | `String`, nullable | The id of the menu the back button opens when a menu has no back route, or `null`. | `null` |
+| `server` | `Server` | The server, which creates each menu inventory, tells whether the calling thread owns a player and registers the listeners. | `plugin.getServer()` |
+| `preview` | `NamespacedKey` | The key every shown stack carries. | `new NamespacedKey(plugin, "preview")` |
+| `logger` | `Logger` | The logger handled failures are logged through. | `plugin.getLogger()` |
 
 ```java title="WarpsPlugin.java"
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.sound.Sound;
-import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.java.JavaPlugin;
 import so.alaz.taffy.gui.BedrockPlayers;
 import so.alaz.taffy.gui.Cue;
@@ -103,14 +105,12 @@ public final class WarpsPlugin extends JavaPlugin {
     public void onEnable() {
         scheduler = new Scheduler(this, errors);
         messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger());
-        menus = new Menus(Menus.Parts.of(getServer(), new NamespacedKey(this, "preview"), getLogger(), messages,
-                scheduler::entity, EntityThread.on(scheduler, getServer()), errors)
+        menus = new Menus(Menus.Parts.of(this, messages, scheduler::entity,
+                EntityThread.on(scheduler, getServer()), errors)
             .layouts(Map.of(WarpsMenu.KIND.id(), MenuLayouts.warps()))
             .sounds(() -> sounds));
         Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
         menus.register(new WarpsMenu(menus, prompts, warps));
-        getServer().getPluginManager().registerEvents(menus.listener(), this);
-        getServer().getPluginManager().registerEvents(prompts.listener(), this);
     }
 
     @Override
@@ -482,7 +482,7 @@ Icon forSale = new Icon.Real(stack.clone(), stack.getAmount(),
 
 An amount shows from 1 to the smaller of the item's maximum stack size and 99. `Icon.Real` draws on a clone of its base and never changes it, but it holds the base itself and compares by it, so a stack that changes (one in a player's inventory) is passed as a copy. Contents such as a shulker box's items or a bundle's stacks are the caller's to strip before building the icon.
 
-Every stack a menu or prompt anvil shows carries the plugin's preview key (`Menus.Parts.preview()`) in its persistent data, so a copy that leaves a menu can be told apart from a real item. A plugin that checks items in its own code (a sell command, a trade) keeps the key and refuses stacks that carry it.
+Every stack a menu or prompt anvil shows carries the plugin's preview key (`Menus.Parts.preview()`, from `0.3.0` `new NamespacedKey(plugin, "preview")` unless the plugin sets another) in its persistent data, so a copy that leaves a menu can be told apart from a real item. A plugin that checks items in its own code (a sell command, a trade) keeps the key and refuses stacks that carry it.
 
 ## Text
 
@@ -667,7 +667,7 @@ A `MenuSession<S>` is one open menu for one viewer and is its inventory's `Inven
 
 ## Click safety
 
-The listener from `menus.listener()` keeps menu views safe. The plugin registers it once at enable.
+The menu listener keeps menu views safe. From `0.3.0` the menus register it themselves when they are built, as [Enable and disable](#enable-and-disable) states. `menus.listener()` and `prompts.listener()` are deprecated and a later release removes them: each returns a listener with no event handler, so a `registerEvents` call left in a plugin registers nothing and cannot register the menus or the prompts twice.
 
 - Every click and drag in a menu view is cancelled at `LOWEST`, and again at `HIGHEST` in case another plugin uncancelled it.
 - Only a click of a type in `ClickGuard.ANY_PLAIN` (`LEFT`, `SHIFT_LEFT`, `RIGHT`, `SHIFT_RIGHT`), by the session's own viewer, on a slot of the menu inventory whose button accepts that type, reaches a button. Number keys, drops, double clicks and creative clicks never do. `ClickGuard.LEFT_ONLY` is a plain left click alone.
@@ -707,7 +707,7 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, sche
 | `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat. |
 | `timer` | Runs a task on any thread after a delay: `scheduler::delayedAsync`. |
 
-Building the prompts links them to the menus. A second `Prompts` over the same menus, or prompts over menus that were shut down, throws `IllegalStateException`. The plugin registers `prompts.listener()` at enable.
+Building the prompts links them to the menus. A second `Prompts` over the same menus, or prompts over menus that were shut down, throws `IllegalStateException`. From `0.3.0`, building the prompts also registers their listener as a listener of the menus' plugin, before the prompts link to the menus; prompts that are refused register nothing.
 
 A `PromptRequest(question, initial, origin, answer)` is one question: the `Component` shown, the text an anvil's name field starts with, the `Route` a cancel or timeout opens again, and a `Function<String, Answer>` that judges the typed text on the player's entity thread. The function returns `new Answer.Accept(route)` to take the answer and open `route`, or `new Answer.Retry(reason)` to tell the player `reason` and keep waiting.
 
