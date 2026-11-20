@@ -327,19 +327,20 @@ Every FastStats error tracker of this module applies these rules to the messages
 | 5 | An AWS access key id. | `[aws-key hidden]` |
 | 6 | A UUID in either letter case, with its dashes, also inside a longer word such as `data_<uuid>`, or as 32 hex digits without them that no further hex digit touches. | `[uuid hidden]` |
 | 7 | The quoted user and host of a MySQL or MariaDB account, as in `'mc_prod'@'db.example.net'`. | `[user hidden]@[host hidden]` |
-| 8 | An `api_key`, `apikey`, `token` or `secret` query value. | `?token=[redacted]` |
-| 9 | The value after `=` or `:` of a key that holds `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `access_key` or `private_key`, in either letter case and with `-` or nothing in place of the `_`. The value `YES` or `NO` stays, so `(using password: YES)` reads as the driver wrote it. | `db_password=[redacted]` |
-| 10 | An SQL statement that starts with `SELECT ... FROM`, `INSERT INTO` (also `INSERT IGNORE INTO` and `INSERT OR REPLACE INTO`), `UPDATE ... SET`, `DELETE FROM`, `REPLACE INTO`, `MERGE INTO`, `CREATE TABLE`, `ALTER TABLE` or `DROP TABLE` in either letter case, with what follows that start on the line, up to 200 characters. | `[sql hidden]` |
-| 11 | A Windows path that starts with a drive letter and a backslash. | `[path hidden]` |
-| 12 | An absolute Unix path of two or more segments, such as `/home/mc/server/plugins`. | `[path hidden]` |
-| 13 | The id and token of a Discord webhook URL that starts with `https://` on `discord.com` or `discordapp.com`, also with a `canary` or `ptb` label or an API version, and its query. | `https://[host hidden]/api/webhooks/[id hidden]/[token hidden]` |
-| 14 | A host name of two or more labels that ends in `com`, `net`, `org`, `io`, `gg`, `dev`, `me`, `co`, `xyz`, `eu`, `de`, `uk`, `us`, `fr`, `nl`, `ca`, `au`, `ru`, `br`, `pl`, `internal`, `local` or `lan`. | `[host hidden]` |
+| 8 | The double-quoted name after the word `user` or `role` in either letter case, as in PostgreSQL's `password authentication failed for user "mc_prod"`, when the name is 1 to 64 characters without whitespace. | `user [user hidden]` |
+| 9 | An `api_key`, `apikey`, `token` or `secret` query value. | `?token=[redacted]` |
+| 10 | The value after `=` or `:` of a key that holds `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `access_key` or `private_key`, in either letter case and with `-` or nothing in place of the `_`. The value `YES` or `NO` stays, so `(using password: YES)` reads as the driver wrote it. | `db_password=[redacted]` |
+| 11 | An SQL statement that starts with `SELECT ... FROM`, `INSERT INTO` (also `INSERT IGNORE INTO` and `INSERT OR REPLACE INTO`), `UPDATE ... SET`, `DELETE FROM`, `REPLACE INTO`, `MERGE INTO`, `CREATE TABLE`, `ALTER TABLE` or `DROP TABLE` in either letter case, with what follows that start on the line, up to 200 characters. | `[sql hidden]` |
+| 12 | A Windows path that starts with a drive letter and a backslash. | `[path hidden]` |
+| 13 | An absolute Unix path of two or more segments, such as `/home/mc/server/plugins`. | `[path hidden]` |
+| 14 | The id and token of a Discord webhook URL that starts with `https://` on `discord.com` or `discordapp.com`, also with a `canary` or `ptb` label or an API version, and its query. | `https://[host hidden]/api/webhooks/[id hidden]/[token hidden]` |
+| 15 | A host name of two or more labels that ends in `com`, `net`, `org`, `io`, `gg`, `dev`, `me`, `co`, `xyz`, `eu`, `de`, `uk`, `us`, `fr`, `nl`, `ca`, `au`, `ru`, `br`, `pl`, `internal`, `local` or `lan`. | `[host hidden]` |
 
 A host name of one label, such as `cache` or `localhost`, stays as written, and so does a host name with another ending, a relative path, and a dotted name that a further label follows, such as the class name `org.apache.commons.io.FileUtils`.
 
-From `0.2.1`, rules 2, 7, 9, 12 and 14 are new, rule 13 hides what the SDK's own Discord webhook rule hid before (the SDK applies its rules after these, when rule 14 has replaced the host name), rule 6 also hides a UUID in upper case or without dashes, and the jdbc rule runs first: before, a jdbc URL with a user name before an `@` kept its path and query behind the email placeholder. Reports whose messages differ only in a value these rules hide now merge into one kind.
+From `0.2.1`, rules 2, 7, 8, 10, 13 and 15 are new, rule 14 hides what the SDK's own Discord webhook rule hid before (the SDK applies its rules after these, when rule 15 has replaced the host name), rule 6 also hides a UUID in upper case or without dashes, and the jdbc rule runs first: before, a jdbc URL with a user name before an `@` kept its path and query behind the email placeholder. Reports whose messages differ only in a value these rules hide now merge into one kind.
 
-From `0.2.1`, rule 10 needs the start of a statement. Before, it matched the bare words `select`, `insert`, `update` and `delete` and hid the rest of the line, so `Failed to update balance for shop 12: timeout after 5003ms` was sent as `Failed to [sql hidden]`. Such a message is now sent as written, and so is a statement of another shape, such as `SELECT 1`.
+From `0.2.1`, rule 11 needs the start of a statement. Before, it matched the bare words `select`, `insert`, `update` and `delete` and hid the rest of the line, so `Failed to update balance for shop 12: timeout after 5003ms` was sent as `Failed to [sql hidden]`. Such a message is now sent as written, and so is a statement of another shape, such as `SELECT 1`.
 
 From `0.2.1`, every rule runs in time linear in the length of the message. Before, the email rule took quadratic time on a long run of letters and overflowed the stack on a long dotted name after an `@`, when a report's message was compared with the kinds its source already holds.
 
