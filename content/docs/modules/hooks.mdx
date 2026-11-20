@@ -302,7 +302,7 @@ The constants run in resolution order:
 
 An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`, and from `0.3.1` also `gems:ruby`).
 
-`CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config:
+`CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config. The second message holds from `0.3.1`; before it, `create` returns `null` for such a reference without asking any plugin:
 
 ```java
 CustomItemRef ref;
