@@ -404,7 +404,7 @@ void reloadItems() {
 }
 ```
 
-Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo, Oraxen and HeadDatabase listeners. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
+Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo, Oraxen and HeadDatabase listeners, and a `detect` without it leaves one more listener for each of the four whose integration is on. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
 
 ## Economy
 
