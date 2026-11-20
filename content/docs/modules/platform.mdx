@@ -130,8 +130,10 @@ Delays and periods are passed to Paper in whole milliseconds. Paper throws `Ille
 negative delay or a period below one millisecond.
 
 `close()` cancels every task `repeatingAsync` started through this instance. A run already in progress finishes,
-and one-shot tasks are left to Paper. The instance stays usable after the call: a repeating task started later is
-cancelled by the next `close()`.
+and other one-shot tasks are left to Paper. From `0.2.0`, it also completes every future `dispatch` returned whose
+task has not started, as described under [Dispatcher, ThreadTag and EntityThread](#dispatcher-threadtag-and-entitythread).
+The instance stays usable after the call: a repeating task started later, or a dispatch made later, is handled by
+the next `close()`.
 
 ### Entity work
 
@@ -184,11 +186,19 @@ players.call(playerId, Player::getLevel)
 
 <Callout type="warn" title="Do not wait on a server thread">
   Every tag queues the task, also when the caller is already on that thread. Calling `join()` or `get()` on the
-  future from a server thread can block that thread for good. A future whose task Paper accepted may also stay
-  incomplete when the plugin disables before the task runs: bound it with `CompletableFuture.orTimeout`, or track
-  the work in `PendingSettlements`. When an `orTimeout` timeout fires, the future and every dependent stage added
-  to it without an executor complete on the JDK's timeout thread.
+  future from a server thread can block that thread for good. A `Dispatcher` other than `Scheduler` may also leave
+  a future incomplete when the plugin disables before the task runs: bound it with `CompletableFuture.orTimeout`.
+  When an `orTimeout` timeout fires, the future and every dependent stage added to it without an executor complete
+  on the JDK's timeout thread.
 </Callout>
+
+From `0.2.0`, `Scheduler.close()` completes every future `dispatch` returned whose task has not started, as a
+refused call does: with `RejectedExecutionException` for `GLOBAL` and `ASYNC`, and with
+`EntityUnavailableException` for an entity tag, so an `EntityThread.call` over a `Scheduler` completes too. Such a
+task never runs, also when Paper still runs what it accepted, and a task that has started completes its future
+with its own result. A dispatch Paper accepts as the plugin stops being enabled is refused the same way. In `0.1`
+the future of a task Paper accepted and dropped at disable stayed incomplete for good. Work that must settle is
+still tracked in `PendingSettlements`.
 
 `dispatch` with an entity tag looks the player up on the server from the calling thread. A refusal for an entity
 tag is always an `EntityUnavailableException`, also when the cause is the plugin disabling.
@@ -221,8 +231,9 @@ The scheduler never waits for work and never runs leftover work on its own. Once
 - `asyncOrRun` runs the task on the calling thread.
 
 A task Paper accepted but has not run when the plugin disables may never run: an entity task then runs neither its
-task nor its `retired` callback, and a delayed task is cancelled. Work that must settle is tracked in
-`PendingSettlements` before it is scheduled.
+task nor its `retired` callback, and a delayed task is cancelled. From `0.2.0`, `close()` completes the future of
+a `dispatch` whose task has not started. Work that must settle is tracked in `PendingSettlements` before it is
+scheduled.
 
 ## ErrorReports
 
@@ -336,7 +347,7 @@ The shutdown classes assume this order, with each step run through `Shutdown.clo
   <Step>`PlaceholderRegistration.unregister` of [taffy-hooks](/docs/modules/hooks), which unregisters the plugin's placeholders.</Step>
   <Step>`Menus.shutdown` of [taffy-gui](/docs/modules/gui), which ends every prompt and then closes the open menus of the players the disabling thread owns.</Step>
   <Step>`HologramProvider.close` of [taffy-hooks](/docs/modules/hooks#holograms), which removes the holograms the plugin placed and stops the provider. It runs on the thread that disables the plugin; on Folia, while the server stops, that is Folia's shutdown thread and not the global region thread.</Step>
-  <Step>`Scheduler.close()`, which stops the repeating tasks.</Step>
+  <Step>`Scheduler.close()`, which stops the repeating tasks and, from `0.2.0`, completes the futures of the dispatches that have not started.</Step>
   <Step>`TaskGate.close`, which refuses new async tasks and waits for the admitted ones.</Step>
   <Step>`PendingSettlements.settleAll`, which settles the work no callback started.</Step>
   <Step>The close of whatever the settlements write to, such as [storage](/docs/modules/storage).</Step>
