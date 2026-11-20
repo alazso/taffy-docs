@@ -890,6 +890,7 @@ plugins {
 | [Read and write failures name the file, not its path](#read-and-write-failures-name-the-file-not-its-path) | code or a test that reads a path out of a `cannot read` or `cannot write` message of `taffy-config` | take the path from the `Path` passed, or from the cause |
 | [YamlFolder skips dot files and reports .yaml files](#yamlfolder-skips-dot-files-and-reports-yaml-files) | a plugin whose entry files start with a dot, or whose owners keep `.yaml` files in a `YamlFolder` folder | rename the files, or drop the line from `errors()` |
 | [Owner-keyed sections are checked](#owner-keyed-sections-are-checked) | a plugin that passes `ConfigLoader` a blank owner-keyed path or one section inside another | list each section once and none inside another |
+| [CustomItemPlugin may gain a constant](#customitemplugin-may-gain-a-constant) | a plugin with a `switch` over `CustomItemPlugin` | add a `default` branch |
 
 ### Storage settings are built through factories
 
@@ -1243,4 +1244,32 @@ Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"), "kits.sp
 ```java title="0.4.0"
 // "the owner-keyed section kits.special lies inside the owner-keyed section kits" for the map above
 Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"));
+```
+
+### CustomItemPlugin may gain a constant
+
+The Javadoc of `CustomItemPlugin` states that constants may be added in any release. `0.4.0` adds none, and the four
+constants keep their order. In the release that adds one, a `switch` expression over the four constants with no
+`default` branch no longer compiles, a `switch` statement runs no branch for the new constant, and a plugin that
+passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects the added plugin too.
+
+**Migration:** add a `default` branch to each `switch` over `CustomItemPlugin`.
+
+```java title="0.3"
+String label = switch (plugin) {
+    case ITEMSADDER -> "ItemsAdder item";
+    case NEXO -> "Nexo item";
+    case ORAXEN -> "Oraxen item";
+    case HEADDATABASE -> "head";
+};
+```
+
+```java title="0.4.0"
+String label = switch (plugin) {
+    case ITEMSADDER -> "ItemsAdder item";
+    case NEXO -> "Nexo item";
+    case ORAXEN -> "Oraxen item";
+    case HEADDATABASE -> "head";
+    default -> plugin.plugin() + " item";
+};
 ```

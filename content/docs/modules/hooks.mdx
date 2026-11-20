@@ -296,6 +296,8 @@ The constants run in resolution order:
 | `ORAXEN` | `Oraxen` | `oraxen` | |
 | `HEADDATABASE` | `HeadDatabase` | `headdatabase` | `hdb` |
 
+From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `CustomItemPlugin` needs a `default` branch. A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects an added plugin from the release that adds it. [Upgrading](/docs/upgrading-from-0-1#customitemplugin-may-gain-a-constant) shows the change to a `switch`.
+
 `CustomItemPlugin.byKey(String hint)` finds a plugin by key or alias, ignoring case and surrounding white space, and returns `null` for `null`, blank or unknown text.
 
 ### Ids and references
