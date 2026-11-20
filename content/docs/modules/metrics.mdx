@@ -11,7 +11,7 @@ A plugin names three types from the module: `MetricChart`, `MetricsBuilder` and 
 |---|---|
 | `MetricChart` | One custom metric: a string, number, bool, string list or counter chart. |
 | `MetricsBuilder` | Takes the owner plugin, its `ErrorReports` and the owner's switch, then the bStats service id, the FastStats token and the charts, and starts once. |
-| `Metrics` | The live handle: diagnostics readers, `report`, and `shutdown` for disable. |
+| `Metrics` | The live handle: diagnostics readers, `report`, from `0.2.1` `reportUnhandled`, and `shutdown` for disable. |
 
 ## Setup
 
@@ -142,6 +142,7 @@ An enable that gives up after the switch is read, such as when storage fails to 
 | `bStats(int serviceId)` | Reports to bStats under the plugin's service id. A value of 0 or below leaves bStats off. |
 | `fastStats(@Nullable String token)` | Reports to FastStats under the plugin's project token, with error tracking on. A `null` or blank token leaves FastStats off. |
 | `addChart(MetricChart chart)` | Adds a chart for every provider that starts. A second chart with the same id throws `IllegalArgumentException`; a null chart throws `NullPointerException`. |
+| `usageChart(boolean enabled)` | From `0.2.1`. `false` leaves [the Taffy usage chart](#the-taffy-usage-chart) off while the plugin's own metrics start as before. It is on when this is not called. |
 | `start()` | Starts every provider whose credential is set, when the switch is on, and returns the handle. Never returns `null`. |
 
 Every setter returns the builder. A builder starts once: after `start()`, every call on it, a second `start()` included, throws `IllegalStateException` (except `addChart(null)`, which throws `NullPointerException` first). The builder is not thread-safe; build and start it on one thread.
@@ -202,13 +203,19 @@ A null value from a string, number or bool supplier leaves that value out of the
 
 ### Counters
 
-A counter reads one monotonically increasing total, such as `LongAdder::sum`. Each provider keeps its own mark and reports the increase since its own last report, so the charts show activity per interval and no event is split between the providers or counted twice. A total that goes down reports 0 for that interval, and the next interval counts from the lower total.
+A counter reads one monotonically increasing total, such as `LongAdder::sum`. Each provider keeps its own mark and reports the increase since that mark, so the charts show activity per interval and no event is split between the providers. A total that goes down reports 0 for that interval, and the next interval counts from the lower total.
 
-On bStats the mark advances when bStats reads the chart, and an increase above `Integer.MAX_VALUE` is reported as `Integer.MAX_VALUE`. On FastStats it advances only after a submission is accepted, so a failed submission, or a read made while FastStats assembles an error report, leaves the count for the next report.
+On bStats the mark advances when bStats reads the chart, and an increase above `Integer.MAX_VALUE` is reported as `Integer.MAX_VALUE`. bStats gives no sign of a submission that failed, so the increase read for it is lost. On FastStats the mark advances only after a submission is accepted, so a failed submission, or a read made while FastStats assembles an error report, leaves the count for the next report. A submission that arrived without FastStats seeing it accepted is counted again in the next one.
 
 ### Ids
 
 Every id matches `^[a-z0-9_]+$` and is not one of the ids FastStats fills itself in every report: `client`, `core_count`, `java_vendor`, `java_version`, `os_arch`, `os_name`, `os_version`, `game_version`, `online_mode`, `player_count`, `plugin_version`, `server_type` and `platform_version`. A factory given another id throws `IllegalArgumentException` when the chart is declared, and a null id or supplier throws `NullPointerException`.
+
+### What a chart may report
+
+<Callout type="warn" title="Chart values leave the server unchanged">
+A chart's id and every value its supplier returns are sent as they are: the [anonymize rules](#anonymizing) apply to error reports only. A value is a constant of the plugin or a category from its configuration, such as a storage type or a language code, and never a player name, a UUID, an address, a world name or a server name.
+</Callout>
 
 ### The supplier contract
 
@@ -222,6 +229,8 @@ A supplier only reads in-memory state. It never resets what it reads, never bloc
 ## The Metrics handle
 
 `start()` returns a `Metrics` that wraps the providers that started. Keep it for the life of the plugin and call `shutdown()` on disable.
+
+Metrics start once per enable and are not restarted on a config reload. `shutdown()` does not unregister the `ServerExceptionEvent` listeners FastStats registered for the plugin, which stay registered until the plugin is disabled, so each further start in the same enable adds to them.
 
 ### Diagnostics
 
@@ -280,6 +289,8 @@ try {
 }
 ```
 
+The source key is sent unchanged as the `source` attribute of the error, and no anonymize rule applies to it. It is a constant of the plugin or a category from its configuration, and never holds a player name, a UUID, an address, a world name or a server name.
+
 `ErrorReports` holds the reports raised before its first install or clear, the first of each source and at most 16. When FastStats starts with its error service, `start()` installs the handle into the sink: the held reports are delivered to FastStats error tracking on the calling thread, and every later report goes there too, each under its source. Otherwise `start()` clears the sink, which discards the held reports, and nothing receives later reports.
 
 There is no error service when the switch is off, no token is set, FastStats fails to start, the server is on its first run, the server was started with `-Dfaststats.enabled=false`, or the server owner turned off `enabled` or `submitErrors` in `plugins/faststats/config.properties`.
@@ -329,6 +340,8 @@ From `0.2.1`, rules 2, 7, 9, 12 and 13 are new, rule 6 also hides a UUID in uppe
 
 From `0.2.1`, rule 10 needs the start of a statement. Before, it matched the bare words `select`, `insert`, `update` and `delete` and hid the rest of the line, so `Failed to update balance for shop 12: timeout after 5003ms` was sent as `Failed to [sql hidden]`. Such a message is now sent as written, and so is a statement of another shape, such as `SELECT 1`.
 
+From `0.2.1`, every rule runs in time linear in the length of the message. Before, the email rule took quadratic time on a long run of letters and overflowed the stack on a long dotted name after an `@`, when a report's message was compared with the kinds its source already holds.
+
 These rules come on top of what the SDK hides by itself in every report: IPv4 and IPv6 addresses, the user name in a home directory path, Discord webhook ids and tokens, the password in a jdbc URL, and the JVM's `user.name`. FastStats data is pseudonymous.
 
 ### Uncaught exceptions
@@ -369,12 +382,28 @@ errors.install((source, error) -> {
 
 ## The Taffy usage chart
 
-With the switch on, `start()` also starts Taffy's own usage metrics on the same plugin:
+With the switch on, `start()` also starts Taffy's own usage metrics on the same plugin, unless the plugin turned them off with `usageChart(false)` or another plugin on the server already reports them (see below):
 
 - a second bStats instance under Taffy's bStats service id, 35379, when the plugin's own bStats instance started;
 - a second FastStats context, with metrics only and no error tracking, under Taffy's FastStats token, when the plugin's own context started.
 
 Each reports one chart, `taffy_version`, the Taffy version the plugin was built with, beside what the SDK sends for any plugin. Taffy therefore adds no provider, configuration file or first-run notice that the plugin's own metrics do not. The server owner's opt-outs in `plugins/bStats/config.yml` and `plugins/faststats/config.properties` apply to it as to the plugin's own metrics. At disable it stops before the plugin's own providers, without a final send. A failed start logs one warning (`Taffy usage metrics failed to start on bStats` or `... on FastStats`) and is skipped.
+
+From `0.2.1`, one plugin per server reports the usage chart to each provider. The first plugin to start a provider's usage instance names itself in a system property, `taffy.usage.bstats` or `taffy.usage.faststats`, which every relocated copy of Taffy reads. A plugin that finds another plugin's name there starts no usage instance for that provider and logs nothing; its own metrics start as before. `shutdown()` of the plugin named there unsets the property, and no other plugin takes the chart over until it next starts its own metrics. A copy of Taffy older than `0.2.1` neither reads nor sets the properties, so a plugin built with one still starts the chart.
+
+### Turning the chart off
+
+From `0.2.1`, `usageChart(false)` on the builder leaves the chart off for that plugin alone. `start()` then starts no second bStats instance and no second FastStats context, and neither reads nor sets the two system properties, so another plugin on the server can still report the chart. The plugin's own bStats instance, FastStats context and error tracking start as before. The chart is on when the plugin does not call `usageChart`, as in `0.2.0`.
+
+A plugin whose config lists every value it collects either names the `taffy_version` chart beside its metrics switch or gives the chart a key of its own:
+
+```java
+metrics = new MetricsBuilder(this, errors, getConfig().getBoolean("metrics", true))
+    .bStats(BSTATS_SERVICE_ID)
+    .fastStats(FASTSTATS_TOKEN)
+    .usageChart(getConfig().getBoolean("metrics-taffy-version", true))
+    .start();
+```
 
 ## Server owner switches
 
@@ -391,7 +420,7 @@ Every plugin on the server shares the two SDK configuration files. The plugin's 
 
 ## Threads
 
-- A started bStats instance runs on its own `bStats-Metrics` daemon thread while bStats is enabled. The Taffy usage chart adds a second one beside the plugin's own.
+- A started bStats instance runs on its own `bStats-Metrics` daemon thread while bStats is enabled. The Taffy usage chart adds a second one beside the plugin's own, in the plugin that reports it.
 - FastStats runs its HTTP client with its tasks on Paper's async scheduler.
 - The final FastStats send at `shutdown()` runs on a daemon thread named `taffy-metrics-final-send`, started for that send, and the disabling thread waits at most 5 seconds for it. Through `0.2.0` it ran on the disabling thread.
 
