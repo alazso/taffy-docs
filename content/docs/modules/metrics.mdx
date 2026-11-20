@@ -216,7 +216,7 @@ Every id matches `^[a-z0-9_]+$` and is not one of the ids FastStats fills itself
 A supplier only reads in-memory state. It never resets what it reads, never blocks and never touches storage.
 </Callout>
 
-- A supplier may run on any thread. bStats reads it on the server's main thread (its own thread on Folia). FastStats reads it on its asynchronous submission task, again whenever it assembles an error report, and once more during the final send at disable, which may come after the plugin's storage has closed.
+- A supplier may run on any thread. bStats reads it on the server's main thread (its own thread on Folia). FastStats reads it on its asynchronous submission task, again whenever it assembles an error report, and once more during the final send at disable, on the thread of that send (from `0.2.1`, the `taffy-metrics-final-send` thread), which may come after the plugin's storage has closed.
 - A supplier that throws makes that value absent from that report. On FastStats the throwable is also reported to the plugin's global error tracker, when FastStats error tracking is on, on every read that throws.
 
 ## The Metrics handle
@@ -260,10 +260,12 @@ final class MetricsStatus {
 
 ### Shutdown
 
-`shutdown()` is the last step of disable, after the plugin's other shutdown steps, `DiscordWebhook.close()` included. In order, it clears the error sink, stops the Taffy usage chart without a final send, stops bStats, and has FastStats send its last errors and metrics on the calling thread and stop. A step that fails does not stop the next. It is idempotent and never throws. Because it runs last, the reports raised by the earlier shutdown steps go out in that final send.
+`shutdown()` is the last step of disable, after the plugin's other shutdown steps, `DiscordWebhook.close()` included. In order, it clears the error sink, stops the Taffy usage chart without a final send, stops bStats, and has FastStats send its last errors and metrics and stop. A step that fails does not stop the next. It is idempotent and never throws. Because it runs last, the reports raised by the earlier shutdown steps go out in that final send.
 
-<Callout type="warn" title="The final send blocks the disabling thread">
-The final send makes one request for errors and one for metrics on the calling thread. Each has 3 second connect and request timeouts, which do not cover a stalled name lookup or a response that never finishes, so on a stalled network `shutdown()` can block the disabling thread for tens of seconds. No thread is started to bound it, since such a thread would outlive the plugin's class loader.
+<Callout type="info" title="The final send holds the disabling thread for 5 seconds at most">
+From `0.2.1`, the final send runs on a daemon thread named `taffy-metrics-final-send`, and `shutdown()` waits at most 5 seconds for it, holding no lock. A send that finishes sooner ends the wait. The send makes one request for errors and one for metrics. Each has 3 second connect and request timeouts, which do not cover a stalled name lookup or a response that never finishes. When the 5 seconds pass first, `shutdown()` returns and the send goes on, on that thread, until it finishes or the JVM exits, which can be after the plugin's class loader was closed. An interrupt, also one already set on the calling thread when `shutdown()` is called, ends the wait at once and stays set.
+
+Through `0.2.0` the send ran on the calling thread with no limit, so on a stalled network `shutdown()` could block the disabling thread for tens of seconds.
 </Callout>
 
 ## Error tracking
@@ -391,7 +393,7 @@ Every plugin on the server shares the two SDK configuration files. The plugin's 
 
 - A started bStats instance runs on its own `bStats-Metrics` daemon thread while bStats is enabled. The Taffy usage chart adds a second one beside the plugin's own.
 - FastStats runs its HTTP client with its tasks on Paper's async scheduler.
-- The final FastStats send at `shutdown()` runs on the disabling thread.
+- The final FastStats send at `shutdown()` runs on a daemon thread named `taffy-metrics-final-send`, started for that send, and the disabling thread waits at most 5 seconds for it. Through `0.2.0` it ran on the disabling thread.
 
 ## Unit tests
 
