@@ -257,6 +257,7 @@ A status read after a connect that reached `ON` moves to `NOT_ENABLED` while the
 | `static YamlFileProvider.Builder builder(Path file, SectionMapper mapper, Callable<Boolean> activation)` | A builder with no plugin rules. |
 | `Builder rules(Function<ConfigValues, ValidationResult> rules)` | The same builder. |
 | `Builder notLoadedMessage(String message)` | The same builder. From `0.2.2`. |
+| `Builder backups(BackupPolicy policy)` | The same builder. From `0.2.2`. |
 | `YamlFileProvider build(Logger logger)` | The provider. |
 
 | Input | Meaning |
@@ -266,6 +267,7 @@ A status read after a connect that reached `ON` moves to `NOT_ENABLED` while the
 | `activation` | Reads the file into the plugin on the main thread and returns `true` when the new values are in effect. `holder::reload` of a `ConfigHolder` serves. It must not write the file. |
 | `rules` | Optional. The plugin's own checks, merged after the mapper's issues by `validate`. An error refuses the proposal. It runs on the bridge worker thread, must not touch the main thread, and returns a result for every proposal: a `null` result makes `validate` throw. |
 | `message` | Optional, from `0.2.2`. The message of the `savedRestartRequired` result when the file was saved and the activation did not put the values in effect. The editor shows it to the server owner, so it names what makes the plugin load the file, such as its reload command, and holds no configuration value. Without it the message is "The values were saved, but the plugin could not load them, so they are not in effect." |
+| `policy` | Optional, from `0.2.2`. A ComfiConf `BackupPolicy`: the folder that receives the backups of the file and the number kept. Without it the 10 newest backups are kept in a `backups` folder beside the file. |
 | `logger` | The plugin's logger. It receives the apply lines and the activation failures with their stacks. |
 
 `build` reads the file once for the values in effect since startup, so it is called after the plugin loaded the file in `onEnable`. A file that cannot be read then gives no startup values, and every later restart-only change is reported as waiting by the apply that makes it and by no later apply. The `Builder` is not thread-safe: build it on one thread.
@@ -276,7 +278,19 @@ The bridge calls `describe()`, `read()`, `validate(ConfigValues)` and `apply(App
 
 - `read()` takes the values and the revision from one read of the file, so edits by hand are detected. From `0.2.2`, it holds the lock of the file for that read. It throws `IOException` when the file cannot be read (a missing file included) and `ConfigLoadException` when the file is not UTF-8, not valid YAML or larger than 16 MiB. A YAML error names the line and column where the parser gives them and does not quote that line. It throws `IllegalStateException` when the mapper cannot read a stored value without losing data.
 - `validate` returns the text the file cannot store unchanged, then the issues of `rules`.
-- `apply` takes the lock of the file, reads the file, checks the base revision against the current bytes (a mismatch is a conflict), refuses a proposal the mapper rejects, merges the proposal into the document parsed from the current bytes, refuses a value the file cannot store unchanged, and writes through ComfiConf's `SafeFileWriter`, which keeps the 10 newest backups in a `backups` folder beside the file. It then releases the lock and runs the activation on the main thread through `ApplyContext.callSync`, with no lock held. `IOException` and `ConfigLoadException` from `apply` mean nothing was written.
+- `apply` takes the lock of the file, reads the file, checks the base revision against the current bytes (a mismatch is a conflict), refuses a proposal the mapper rejects, merges the proposal into the document parsed from the current bytes, refuses a value the file cannot store unchanged, and writes through ComfiConf's `SafeFileWriter`, which keeps the 10 newest backups in a `backups` folder beside the file unless `backups(BackupPolicy)` names another policy. It then releases the lock and runs the activation on the main thread through `ApplyContext.callSync`, with no lock held. `IOException` and `ConfigLoadException` from `apply` mean nothing was written.
+
+<Callout type="warn" title="Backups hold secrets">
+Each backup is a full copy of the file as it was before the write: every value in it, secrets included, in plain text, also the fields the schema declares `writeOnly()` or `sensitive()`. It stays until newer backups replace it. Keep the backup folder as private as the file, and leave it out of anything the plugin uploads or pastes for support.
+</Callout>
+
+From `0.2.2`, `backups(BackupPolicy)` moves the backups to another folder or keeps another number of them, 1 to 1000:
+
+```java
+YamlFileProvider.builder(file, mapper, holder::reload)
+    .backups(new BackupPolicy(plugin.getDataFolder().toPath().resolve("backups"), 3))
+    .build(plugin.getLogger());
+```
 
 Only the fields the mapper declares are read and written. Comments, keys the schema does not declare and the file's line endings are kept on every write. A file that is not UTF-8 or not valid YAML is never written.
 
