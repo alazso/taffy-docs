@@ -861,13 +861,14 @@ From `0.2.0`, a value in the template is one of these types, at any depth:
 | Value | Rendered as |
 |---|---|
 | `String` | the result of `resolve` |
-| `Number`, `Boolean`, `null` | itself |
+| `Number`, `Boolean` | itself |
+| `null` | `null` in a list; a key whose value is `null` is left out of its object |
 | `Map` | an object, with each key as `String.valueOf` gives it |
 | `List` | an array |
 | Bukkit `ConfigurationSection` | an object of the section's own keys |
 
 Any other type makes `render` throw `IllegalArgumentException`, and the message names the value by its key path,
-such as `embeds[0].timestamp`. A payload read from config holds a `ConfigurationSection` for each nested object, so
+such as `embeds[0].timestamp`. A `Double` or `Float` that is `NaN` or infinite is refused the same way. A payload read from config holds a `ConfigurationSection` for each nested object, so
 it can go to `render` as read:
 
 ```java
@@ -878,8 +879,8 @@ In `0.1` a section and every other type went to the JSON serializer as they were
 the object the config held.
 
 From `0.2.0`, `render` adds `"allowed_mentions": {"parse": []}` to the top level of a template that has no
-`allowed_mentions` key of its own, so a mention in a resolved value pings no one. A template that has the key keeps
-its value unchanged. That is how a server owner allows mentions from config:
+`allowed_mentions` key of its own, or sets the key to `null`, so a mention in a resolved value pings no one. A
+template that gives the key any other value keeps that value unchanged. That is how a server owner allows mentions from config:
 
 ```yaml title="config.yml"
 payload:

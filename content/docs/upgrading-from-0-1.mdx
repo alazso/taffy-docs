@@ -136,7 +136,7 @@ text.render("<msg>Reply</msg>", player,
 
 `DiscordWebhook.post(String, String, Consumer<String>)` sends `"allowed_mentions": {"parse": []}` with the content,
 and `WebhookPayload.render` adds the same key to the top level of a template that has no `allowed_mentions` key of
-its own. In `0.1` neither sent the key, so Discord's default applied and player text in a post, such as an item
+its own or sets it to `null`. In `0.1` neither sent the key, so Discord's default applied and player text in a post, such as an item
 renamed to `@everyone free nitro`, pinged the guild. Now `@everyone`, `@here`, role mentions and user mentions in
 such a post are shown as text and ping no one. A template with an `allowed_mentions` key keeps its value
 unchanged, and `DiscordWebhook.postBody` still sends its body as given and adds nothing.
