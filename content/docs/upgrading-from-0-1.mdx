@@ -24,7 +24,7 @@ plugins {
 |---|---|---|
 | [Paper 26.2 build 135 and paper-api 26.3](#paper-262-build-135-and-paper-api-263) | every plugin | run on a supported server and recompile |
 | [Filtered repositories](#filtered-repositories) | a build that took another group from a Taffy repository, or uses `mavenLocal()` for Taffy | declare the repository, or point `alazsoSnapshots` at the local repository |
-| [PlaceholderAPI output is inserted as text](#placeholderapi-output-is-inserted-as-text) | a plugin that renders placeholders whose output holds MiniMessage tags | render through `text.withPlaceholderFormatting()` |
+| [PlaceholderAPI output is inserted as text](#placeholderapi-output-is-inserted-as-text) | a plugin that renders placeholders whose output holds MiniMessage tags, or a template with a placeholder inside a click value or a tag argument | render through `text.withPlaceholderFormatting()`; supply a click or a colour as a `Placeholder.styling` value |
 | [Webhook mentions ping no one](#webhook-mentions-ping-no-one) | a post or payload that is meant to ping | pass `PostOptions`, or give the template `allowed_mentions` |
 | [DiscordWebhook.close waits at most 5 seconds](#discordwebhookclose-waits-at-most-5-seconds) | a plugin whose last posts need longer | call `close(Duration)` |
 | [WebhookPayload.render refuses unknown value types](#webhookpayloadrender-refuses-unknown-value-types) | a template holding another type of value | convert the value first |
@@ -102,7 +102,11 @@ prefix of `Messages.render(Text, ...)` and `Messages.renderTemplate`.
 - Section-sign colour and format codes in the output still apply, to that output only. A colour a placeholder
   returns no longer colours the template after it: write the colour in the template.
 - Each run between two `%` signs is given to PlaceholderAPI on its own, so a placeholder inside a tag argument
-  that MiniMessage does not parse, such as a click value, is no longer filled in.
+  that MiniMessage does not parse, such as a click value or an insertion, is no longer filled in and stays as
+  written: `<click:run_command:'/msg %player_name%'>` runs `/msg %player_name%`. A placeholder inside hover text
+  is still filled in.
+- A placeholder written as an unquoted tag argument, such as `<color:%team_color%>`, or inside the URL of
+  `<click:open_url:...>`, no longer forms the tag, which is then shown as text.
 - `Text.resolve` is unchanged and returns what PlaceholderAPI gave, tags included.
 
 **Opt-in:** where an expansion returns MiniMessage formatting on purpose, such as a rank prefix with a gradient,
@@ -115,7 +119,18 @@ Text ownerText = text.withPlaceholderFormatting();
 ```
 
 No option brings back click, hover or any other tag from placeholder output: write those in the template, around
-the placeholder. [Placeholder output](/docs/modules/platform#placeholder-output) has the details.
+the placeholder.
+
+**Click values and tag arguments:** a template that put a placeholder inside a click value or a tag argument
+builds that part in code and supplies it as a value, with `Text.resolve` where the value comes from PlaceholderAPI:
+
+```java
+String name = text.resolve("%player_name%", player);
+text.render("<msg>Reply</msg>", player,
+    Placeholder.styling("msg", ClickEvent.runCommand("/msg " + name)));
+```
+
+[Placeholder output](/docs/modules/platform#placeholder-output) has the details.
 
 ### Webhook mentions ping no one
 

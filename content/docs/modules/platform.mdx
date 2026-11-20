@@ -430,7 +430,15 @@ such a value could add a click or hover event to a message.
 - Section-sign colour and format codes in the output still apply, to that output only. A placeholder that returns
   `§c` and nothing else no longer colours the template after it: write the colour in the template.
 - A placeholder inside a tag argument MiniMessage does not parse, such as the value of
-  `<click:run_command:'/msg %player_name%'>`, is not filled in. One inside hover text is.
+  `<click:run_command:'/msg %player_name%'>` or an insertion, is not filled in and stays as written, `%` signs
+  included: that click runs `/msg %player_name%`. So does one after an escaping backslash. One inside hover text is
+  filled in.
+- A placeholder written as an unquoted tag argument, as in `<color:%team_color%>` or `<gradient:%a%:%b%>`, or
+  inside the URL of `<click:open_url:...>`, leaves a tag MiniMessage cannot read, which is then shown as text.
+- For a click or a colour that needs a placeholder's value, build that part in code and supply it as a value, as in
+  `text.render("<msg>Reply</msg>", player, Placeholder.styling("msg", ClickEvent.runCommand("/msg " + name)))`.
+  `resolve` gives the value where it comes from PlaceholderAPI.
+- Tag names that start with `taffy_papi_` are reserved for the render.
 - `resolve` is unchanged: it returns what PlaceholderAPI gave, tags included. Supply its result as
   `Placeholder.unparsed` unless every tag in it is meant to be parsed.
 
