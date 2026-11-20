@@ -196,7 +196,7 @@ The records do not check that a material is an item, since that needs a running 
 Behaviour of a layout:
 
 - An item with an action is a button the menu draws for that action. An item without one is decoration, drawn as written, with its tooltip hidden when it has no name.
-- An item with a `permission` shows only to viewers who have it, and one with `enabled` false never shows.
+- An item with a `permission` shows only to viewers who have it, and one with `enabled` false never shows. The permission decides only whether the item is drawn, each time the menu draws. A click is not checked against it, so a viewer who lost the permission since the last draw can still click the button: a handler whose action needs a permission checks it itself.
 - A `name`, `lore` or `title` written in the layout is trusted MiniMessage from the owner and replaces the lang text in every language.
 - `items` keeps its order. Decoration is placed first, then each action when the menu draws it. Where two items share a slot, the one placed later wins.
 - Every slot nothing fills shows the filler.
@@ -708,7 +708,7 @@ new PromptRequest(question, "100", session.route(), text -> {
 - A future that fails or completes with `null` is handled as an answer function that throws. A cancelled future opens `origin` again with no message, and nothing is logged or reported.
 - `Answer` is sealed and a later release may add a result, so a plugin's own `switch` over it keeps a `default` branch.
 
-`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message, and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls.
+`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message, and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls. Both throw `NullPointerException` for a `null` request; from `0.3.0`, `ask` does so before it closes the menu or replaces a pending ask.
 
 Behaviour of an ask:
 
