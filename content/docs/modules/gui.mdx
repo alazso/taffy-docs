@@ -635,6 +635,12 @@ A menu opens, draws and handles clicks on the viewer's entity thread, the region
 
 Each `open` and `openLater` throws `IllegalArgumentException` when no menu is registered under the id. From `0.3.0`, `open(viewer, route)` and `openLater(viewer, route)` also throw it, naming the menu, the expected type and the type given, when `route.state()` is no instance of the menu's `stateType()`, before anything opens or is scheduled. A menu that keeps the default `stateType()` accepts every state, and a state of the wrong type then fails inside `render` with a `ClassCastException`. A `ClickHandler` runs inside the click event, so it opens, closes and redraws only through the `*Later` methods and asks for text through `Prompts.askLater`. A command opens with `menus.openLater(player, WarpsMenu.KIND.id(), null)`.
 
+From `0.3.0`, `open`, `rerender`, `load` and `Prompts.ask` check the calling thread. On a thread that does not own the viewer, such as the thread that completed a storage future, each throws `IllegalStateException` before it changes anything, with a message that names the method and what to call instead, such as "Menus.open must run on the viewer's entity thread; use Menus.openLater". `rerender` still does nothing for a closed session, and `open` and `ask` still do nothing once `shutdown()` ran. `openLater`, `rerenderLater`, `closeLater` and `Prompts.askLater` are called from any thread, so a callback of a future opens or redraws through them:
+
+```java
+storage.save(warp).thenRun(() -> menus.rerenderLater(session));
+```
+
 A `Route(menu, state, back)` is a menu with the state it shows and the route its back button returns to. The menu registered under `menu` must accept the type of `state`, which a menu that overrides `stateType()` checks when the route opens. `MenuSession.route()` gives the open menu with its current state, for a back route or a prompt to return to.
 
 Opening a menu while the viewer has another open is a hand-off: the previous session's `closed` gets `left = false`. Opening a menu also ends a pending prompt for that viewer.
@@ -657,7 +663,7 @@ A `MenuSession<S>` is one open menu for one viewer and is its inventory's `Inven
 
 ### Loading data
 
-`menus.load(session, source, apply)` waits for a `CompletableFuture` that completes on any thread, runs `apply` with the value on the viewer's entity thread and draws the session again, unless the session closed or a later load started meanwhile. Call it on the viewer's entity thread, from `opened` or a click handler.
+`menus.load(session, source, apply)` waits for a `CompletableFuture` that completes on any thread, runs `apply` with the value on the viewer's entity thread and draws the session again, unless the session closed or a later load started meanwhile. Call it on the viewer's entity thread, from `opened` or a click handler. From `0.3.0` it throws `IllegalStateException` on a thread that does not own the viewer and starts no load; code on another thread hops to the viewer's thread first, through the `EntityThread` the menus were built with (`entity.call(viewer.getUniqueId(), player -> ...)`).
 
 - `busy` clears when the load applies, fails or is cancelled, unless a later load started.
 - A failure of `source` or `apply` is logged with its stack and reported under `gui.load`. While the session is open and no later load started, the viewer is told `gui.error` and hears `Cue.FAIL`.
@@ -729,7 +735,7 @@ new PromptRequest(question, "100", session.route(), text -> {
 - A future that fails or completes with `null` is handled as an answer function that throws. A cancelled future opens `origin` again with no message, and nothing is logged or reported.
 - `Answer` is sealed and a later release may add a result, so a plugin's own `switch` over it keeps a `default` branch.
 
-`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message, and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls. Both throw `NullPointerException` for a `null` request; from `0.3.0`, `ask` does so before it closes the menu or replaces a pending ask.
+`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message, and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls. Both throw `NullPointerException` for a `null` request; from `0.3.0`, `ask` does so before it closes the menu or replaces a pending ask. From `0.3.0`, `ask` also throws `IllegalStateException` on a thread that does not own the player, before it closes or replaces anything, with the message "Prompts.ask must run on the player's entity thread; use Prompts.askLater"; `askLater` is called from any thread.
 
 Behaviour of an ask:
 

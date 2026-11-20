@@ -346,6 +346,7 @@ plugins {
 | [Menu settings, layouts and parts are built through factories](#menu-settings-layouts-and-parts-are-built-through-factories) | every plugin that builds a `MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` or `Menus.Parts` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
 | [MenuLayout takes its items as a collection](#menulayout-takes-its-items-as-a-collection) | a plugin that passed a map of items to `MenuLayout` | pass `map.values()` or a list |
 | [Menus and Prompts register their own listeners](#menus-and-prompts-register-their-own-listeners) | every plugin that builds a `Menus` | pass the plugin to `Menus.Parts.of` and delete both `registerEvents` calls |
+| [Menus and Prompts check the calling thread](#menus-and-prompts-check-the-calling-thread) | a plugin that calls `Menus.open`, `Menus.rerender`, `Menus.load` or `Prompts.ask` from a thread that does not own the viewer, such as a storage callback | call `openLater`, `rerenderLater` or `askLater`, and hop to the viewer's thread before `load` |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
 | [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
 
@@ -419,6 +420,20 @@ menus = new Menus(Menus.Parts.of(this, messages, scheduler::entity, EntityThread
     .layouts(layouts));
 Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
 ```
+
+### Menus and Prompts check the calling thread
+
+`Menus.open`, `Menus.rerender`, `Menus.load` and `Prompts.ask` throw `IllegalStateException` on a thread that
+does not own the viewer, before they change anything. The message names the method and what to call instead,
+such as "Menus.open must run on the viewer's entity thread; use Menus.openLater". In `0.2` the call went on off
+the viewer's thread, where it changed the session and the inventory unguarded on Paper and failed part way inside
+the server on Folia. `rerender` still does nothing for a closed session, and `open` and `ask` still do nothing
+once `Menus.shutdown` ran.
+
+**Migration:** from a callback on another thread, such as `thenRun` of a storage future, call
+`Menus.openLater`, `Menus.rerenderLater` or `Prompts.askLater`, which schedule the work on the viewer's entity
+thread. Call `Menus.load` from `Menu.opened` or a click handler, or hop to the viewer's thread first through
+`EntityThread.call`.
 
 ### Menus read their text through a TextSource
 
