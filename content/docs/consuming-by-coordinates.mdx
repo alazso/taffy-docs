@@ -3,7 +3,7 @@ title: Without the Gradle plugins
 description: Use the Taffy modules in a plugin that keeps its own Gradle build, with the repository, the catalog entries, the relocations, the jar contents and the Dependabot setup that build needs.
 ---
 
-The Taffy Gradle plugins are optional. A plugin that keeps its own Gradle build declares the Taffy modules by their Maven coordinates, like any other library, and sets up the few things the conventions would otherwise do for it: a filtered repository, one Taffy version, three relocations and two files in the shadow jar. This page covers each of them, then the FastStats and bStats versions each release is tested with, and what a build that applies a Taffy convention plugin anyway needs: Gradle on Java 25, a duplicates strategy for `META-INF/LICENSE`, and the javadoc and test defaults it may override.
+The Taffy Gradle plugins are optional. A plugin that keeps its own Gradle build declares the Taffy modules by their Maven coordinates, like any other library, and sets up the few things the conventions would otherwise do for it: a filtered repository, one Taffy version, three relocations and two files in the shadow jar. This page covers each of them, then a task that compiles the plugin against the oldest supported Paper, the FastStats and bStats versions each release is tested with, and what a build that applies a Taffy convention plugin anyway needs: Gradle on Java 25, a duplicates strategy for `META-INF/LICENSE`, and the javadoc and test defaults it may override.
 
 ## Repository
 
@@ -130,6 +130,47 @@ Every Taffy jar carries Taffy's MIT `LICENSE` in `META-INF`. Shadow 9.6.1 copies
 - one `META-INF/LICENSE`, the plugin's own.
 
 `unzip -p build/libs/myplugin-1.0.0-all.jar META-INF/LICENSE` prints the license the jar ships.
+
+## Compiling against the oldest supported Paper
+
+From `0.2.0`, Taffy supports Paper 26.2 build 135 or newer and compiles against a newer `paper-api`, the `paper` version above ([Servers](/docs/versioning#servers)). A plugin compiled against that version can call a method Paper 26.2 does not have, and `compileJava` accepts it. This task compiles the same sources against `paper-api` `26.2.build.135-stable`, so such a call fails the task. It is the task `so.alaz.taffy.paper-plugin` registers as [`compileAgainstPaperFloor`](/docs/gradle-plugins#compiling-against-the-oldest-supported-paper):
+
+```kotlin title="build.gradle.kts"
+val paperFloorCompileClasspath = configurations.create("paperFloorCompileClasspath") {
+    isCanBeConsumed = false
+    extendsFrom(configurations.compileOnly.get(), configurations.implementation.get())
+    attributes {
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_API))
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.EXTERNAL))
+        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.JAR))
+        attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, 25)
+    }
+    resolutionStrategy.eachDependency {
+        if (requested.group == "io.papermc.paper" && requested.name == "paper-api") {
+            useVersion("26.2.build.135-stable")
+        }
+    }
+}
+
+tasks.register<JavaCompile>("compileAgainstPaperFloor") {
+    group = "verification"
+    description = "Compiles the main Java sources against paper-api 26.2.build.135-stable."
+    source = sourceSets.main.get().java
+    classpath = paperFloorCompileClasspath
+    options.annotationProcessorPath = configurations.annotationProcessor.get()
+    destinationDirectory.set(layout.buildDirectory.dir("classes/java/paperFloor"))
+}
+
+tasks.check {
+    dependsOn("compileAgainstPaperFloor")
+}
+```
+
+- The configuration resolves what `compileOnly` and `implementation` declare, as `compileClasspath` does, and answers every request for `paper-api` with the floor build. The attributes are the ones `compileClasspath` asks for, so each Taffy module resolves to its API jar.
+- The class files go to `build/classes/java/paperFloor` and into no jar.
+- The last block makes the task part of `check`. Without it the task runs only when named.
+- It compiles only: a method that exists on Paper 26.2 and behaves differently there is found by running the plugin on that server. Taffy's own calls are checked by Taffy's build, which compiles every module against the same `paper-api` build.
 
 ## Dependabot
 

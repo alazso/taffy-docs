@@ -234,6 +234,33 @@ The file goes through Gradle's `expand`, and `version` is the only property defi
 
 The plugin adds `-Xlint:-classfile` to every `JavaCompile` task. Some integration APIs are Kotlin-compiled and declared without their transitive dependencies, so the `kotlin.*` annotation types their class files name are absent; the flag keeps javac from warning about each of them.
 
+### Compiling against the oldest supported Paper
+
+From `0.2.0`, the plugin registers `compileAgainstPaperFloor`, a `JavaCompile` task that compiles the `main` Java sources against `paper-api` `26.2.build.135-stable`, the build of the oldest Paper server Taffy supports ([Servers](/docs/versioning#servers)). `alaz.paper.api` is a newer build, so `compileJava` accepts a call that Paper 26.2 does not have. This task fails on it:
+
+```text
+> Task :compileAgainstPaperFloor FAILED
+Stored.java:8: error: cannot find symbol
+        return data.getPrimitiveStorageType(key) != null;
+                   ^
+  symbol:   method getPrimitiveStorageType(Key)
+```
+
+No task depends on it. Run it by name, in CI for one, or make it part of `check`:
+
+```kotlin title="build.gradle.kts"
+tasks.check {
+    dependsOn("compileAgainstPaperFloor")
+}
+```
+
+- Its classpath is the `paperFloorCompileClasspath` configuration: what `compileOnly` and `implementation` declare, with every request for `io.papermc.paper:paper-api` answered by the floor build. Every other dependency, Taffy included, resolves as it does for `compileJava`.
+- It writes its class files to `build/classes/java/paperFloor`. They go into no jar.
+- It compiles Java sources only, and it only compiles: a method that exists on Paper 26.2 and behaves differently there is found by running the plugin on that server.
+- It checks the plugin's own calls. Taffy's calls are checked by Taffy's own build, which compiles every module against the same `paper-api` build.
+
+[Without the Gradle plugins](/docs/consuming-by-coordinates#compiling-against-the-oldest-supported-paper) has the same task for a build that does not apply this plugin.
+
 ### Runtime libraries
 
 The `paperPlugin` extension (`so.alaz.taffy.gradle.PaperPluginExtension`) lists the Maven coordinates Paper downloads before the plugin loads, in resolution order. `taffy-storage` needs it: it ships neither HikariCP nor any JDBC driver ([storage](/docs/modules/storage)).
