@@ -799,10 +799,10 @@ From `0.3.0`, `PromptRequest.abandoned(Consumer<PromptEnd>)` gives a question a 
 
 | `PromptEnd` | The ask ended because |
 |---|---|
-| `TIMED_OUT` | it reached its deadline and the origin did not open: the player is dead or has another plugin's inventory open. |
-| `CANCELLED` | the player cancelled it (the cancel word, the cancel link or a closed anvil) and the origin did not open, or `Menus.shutdown()` ended it. |
+| `TIMED_OUT` | it reached its deadline and the origin did not open: the player is dead or has another plugin's inventory open, the server refused the origin's inventory (another plugin cancelled the open), or opening the origin failed. |
+| `CANCELLED` | the player cancelled it (the cancel word, the cancel link or a closed anvil) and the origin did not open, for one of the reasons `TIMED_OUT` lists, or `Menus.shutdown()` ended it. |
 | `LEFT` | the player quit while it waited, was gone when it was to end, or was dead or offline when an accepted or failed answer was to open its menu. |
-| `REPLACED` | something took its place: a menu of these menus opened, a newer ask started, another inventory opened over the prompt's anvil, the player had another inventory open when an accepted, refused or failed answer was to show its menu or its anvil, or the server refused to show the anvil of a refused answer again. |
+| `REPLACED` | something took its place: a menu of these menus opened, a newer ask started, another inventory opened over the prompt's anvil, the player had another inventory open when an accepted, refused or failed answer was to show its menu or its anvil, or the server refused to show the anvil of a refused answer again. It is also how an ask ends when the menu an accepted or failed answer was to open did not open: the server refused its inventory, its route names no registered menu or a state of another type, or the menu failed to draw. |
 
 ```java
 // In a click handler of a sell menu that holds the item the viewer is pricing
@@ -813,6 +813,7 @@ prompts.askLater(click.player(), new PromptRequest(question, "100", session.rout
 
 - The step runs on the player's entity thread, except `LEFT` for a player who is gone, which runs on the thread that found the player gone, where the player must not be used. At `Menus.shutdown()` it runs with `CANCELLED` on the disabling thread, and only for a player that thread owns, as a menu's `closed` does.
 - It is not called for an ask that opens a menu, and not for one that never started: an ask after `Menus.shutdown()`, or one whose anvil the server refused to open, which closes the menu with `left = true`.
+- A menu that fails to open is still logged and reported under `gui.prompt`, after the step ran. A menu that opened and then threw in its `opened` is open, so the step is not called for it.
 - A step that throws a `RuntimeException` is logged and reported under `gui.prompt`.
 - `PromptRequest` has `abandoned` as a fifth record component. `new PromptRequest(question, initial, origin, answer)` still compiles and gives a request whose step does nothing.
 - A later release may add a `PromptEnd`, so a `switch` over it keeps a `default` branch.
