@@ -200,7 +200,7 @@ The supplier runs, at most once, on the calling thread. A `LinkageError` from it
 |---|---|
 | `static ComfiConfConnection connect(Plugin, ErrorReports, boolean, Supplier<ComfiConfLink>)` | The checks above, then the registration. Never `null`. |
 | `ComfiConfStatus status()` | The state now, read when asked. Never `null`. |
-| `@Nullable String resourceId()` | The registered resource id, or `null` when nothing was registered. |
+| `@Nullable String resourceId()` | The registered resource id, or `null` when nothing was registered. From `0.2.2`, it is the id `connect` read from the link, and the link is not asked again. |
 | `void notifyChanged()` | Tells the bridge the settings changed outside ComfiConf, so open editors load the newer values. |
 | `Lock lockFor(Path file)` | The lock the plugin holds around its own writes of `file`. Never `null`. |
 | `void close()` | Unregisters the resource. A second call has no further effect. |
@@ -219,7 +219,7 @@ Every method other than `connect` may be called from any thread. `status()`, `no
 | `void close()` | Unregisters the resource. Calling it more than once has no further effect. |
 | `Lock lockFor(Path file)` | The lock an apply of `file` holds from its read of the file to the move of the new content over the file, and a read of `file` holds while it reads. The same path gives the same lock on every call. Never `null`. |
 
-Implementations are thread-safe: `ComfiConfConnection` calls every method from whichever thread calls the connection. The link `register` returns is thread-safe. While the bridge plugin is enabled, `status()` reads `isRegistered()`: `false` gives `NOT_REGISTERED`, and a `RuntimeException` or `LinkageError` gives `FAILED`. A `null` lock or a `RuntimeException` or `LinkageError` from `lockFor` makes the connection give its own lock instead.
+Implementations are thread-safe: `ComfiConfConnection` calls every method from whichever thread calls the connection. The link `register` returns is thread-safe. While the bridge plugin is enabled, `status()` reads `isRegistered()`: `false` gives `NOT_REGISTERED`, and a `RuntimeException` or `LinkageError` gives `FAILED`. A `null` lock or a `RuntimeException` or `LinkageError` from `lockFor` makes the connection give its own lock instead. From `0.2.2`, `connect` reads `resourceId()` once, right after the supplier returned the link, and a `RuntimeException` or `LinkageError` from it counts as one from the supplier, so it never leaves `connect` or the connection's `resourceId()`.
 
 ## Status for the server owner
 
