@@ -305,6 +305,8 @@ YamlFileProvider.builder(file, mapper, holder::reload)
     .build(plugin.getLogger());
 ```
 
+A `callSync` that timed out may leave the activation waiting for the main thread, which can still run it after `apply` returned. The values are then in effect although the result said they are not, and the outcome of that late run is neither logged nor reported.
+
 An activation failure and a timed-out or interrupted `callSync` are logged as a warning with the stack and never reported to `ErrorReports`, because the message of a failed loader can quote a configuration value.
 
 <Callout type="info" title="Keep the schema and rules as strict as the loader">
