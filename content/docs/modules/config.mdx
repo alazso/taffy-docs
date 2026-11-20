@@ -234,20 +234,54 @@ A list the owner wrote as empty (`aliases: []`) stays empty: only an absent or b
 
 `new ConfigLoader(Path dataFolder, Supplier<@Nullable InputStream> shipped, Logger logger)` loads `config.yml` (`ConfigLoader.FILE_NAME`) from `dataFolder`. `shipped` opens the `config.yml` inside the jar, or gives `null` when the jar has none; it is asked on every load and the loader closes the stream. The data folder is created when the file is first written.
 
-`load()` returns a new `YamlConfiguration` with the file's comments kept, and blocks the calling thread for the file I/O. The shipped file carries its layout version as a whole number under `config-version` (`ConfigLoader.VERSION_KEY`). In the owner's file the version may also be written as text. A file with no such key, or a value that is neither a number nor text holding a whole number of at most nine digits, counts as version 0. In both files a number is read as an `int`: a decimal number counts as its whole part, and a number above 2147483647 is not supported.
+`load()` returns a new `YamlConfiguration` with the file's comments kept, and blocks the calling thread for the file I/O. The shipped file carries its layout version under `config-version` (`ConfigLoader.VERSION_KEY`) as a whole number from 1 to 2147483647, written without quotes. From `0.4.0`, a shipped file without one makes every `load()` throw `ConfigLoadException`, the first start included, and nothing is written. Before `0.4.0` such a file counted as version 0, so no owner's file was ever upgraded and nothing was logged.
+
+In the owner's file the version may also be written as text, and a number is read as an `int`: a decimal number counts as its whole part, and a number above 2147483647 is not supported. An owner's file with no such key, or with a value that is neither a number nor text holding a whole number of at most nine digits, counts as the baseline version, which is 0 unless the plugin [sets another](#a-file-without-a-version).
 
 | The owner's file | What `load()` does |
 |---|---|
 | Absent | Writes the shipped text byte for byte, logs that it wrote the default file and loads it. |
-| Older version | Adds every shipped key the file lacks, with its comments, sets the version to the shipped one, copies the previous file to `config.yml.v<N>.bak` (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs the keys it added. |
+| Older version | Adds every shipped key the file lacks, with its comments, sets the version to the shipped one, writes the previous file to `config.yml.v<N>.bak` (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs the keys it added. |
 | Same version | Reads the file as it is, even when a shipped key is missing. |
 | Newer version | Reads the file as it is and logs a warning. Nothing is changed. |
 
-During an upgrade the owner's keys and values are kept, unknown keys included. A shipped key is not added beneath a path where the owner's file holds a plain value. The save writes the file anew from the parsed settings, so its formatting can change and a comment inside a list is not written back; the `.bak` copy holds the file exactly as it was. YAML drops a key whose value is empty or null while it parses, so such a key counts as missing: it gets the shipped value and comments when the shipped file has the key, and is left out of the saved file otherwise.
+During an upgrade the owner's keys and values are kept, unknown keys included. A shipped key is not added beneath a path where the owner's file holds a plain value. The `.bak` copy holds the file exactly as it was, byte for byte. YAML drops a key whose value is empty or null while it parses, so such a key counts as missing: it gets the shipped value and comments when the shipped file has the key, and is left out of the saved file otherwise.
 
-When the copy or the save of an upgrade fails, a warning is logged, the file stays as the owner left it and the upgraded settings are returned, so the next load tries the upgrade again.
+### What an upgrade rewrites
 
-The save goes through a temporary file in the same folder, `config.yml.tmp`, that is flushed to the device and then replaces the target. A save follows a symbolic link to the file it names (the temporary file is then the linked file's name followed by `.tmp`) and keeps the file's POSIX permissions where the file system has them. A leftover temporary file from a write that was cut off is removed by the next load.
+The save of an upgrade writes the file anew from the parsed settings. Every value is kept, and the way it is written can change:
+
+| In the owner's file | In the saved file |
+|---|---|
+| A text without a line break, of any length | On one line. From `0.4.0` a text is never folded; before `0.4.0` a text longer than 80 columns, such as a MiniMessage line, was broken over several indented lines. |
+| Quotes | Not kept. A text that needs none is written without them, and one that needs them gets the quotes the writer picks: `"0451"` becomes `'0451'`. |
+| A text of several lines | A literal block (the `\|` style), also when it was a folded block (`>`). |
+| A number, a date, `true`/`false` | The plain form of the value: `0x10` becomes `16`, `yes` becomes `true` and `2026-12-31` becomes `2026-12-31T00:00:00Z`. |
+| A key the upgrade adds | After the keys the owner's file has in that section, not at the place it has in the shipped file. |
+| Comments | A comment inside a list is not written back. The indent of a list can change, and a comment or blank line elsewhere can move. |
+| Line endings and a byte order mark | Every line ends in a line feed, and a byte order mark is not written back. |
+
+From `0.4.0`, the text of the upgraded file is produced, parsed again and compared with the upgraded settings before anything is written. When the text cannot be produced, or a value would not be read back as it is, nothing is written and no copy is made. A text with half of a surrogate pair (`"a\ud83db"`) is one the writer cannot write, and a text with a control character (`"ding\a"`) is one it turns into `!!binary`, which loads as bytes. Before `0.4.0` the first threw a `RuntimeException` out of `load()` after the copy was written, and the second was saved as `!!binary`.
+
+When the copy or the save of an upgrade fails, or that check refuses the text, a warning is logged, the file stays as the owner left it and the upgraded settings are returned, so the next load tries the upgrade again.
+
+The copy and the save each go through a temporary file in the same folder that is flushed to the device and then replaces the target: `config.yml.tmp` for the save, and the name of the copy followed by `.tmp` for the copy. From `0.4.0` the copy is on the device before the save replaces the file; before `0.4.0` it was copied without a flush. A save follows a symbolic link to the file it names (the temporary file is then the linked file's name followed by `.tmp`) and keeps the file's POSIX permissions where the file system has them, and the copy gets those permissions too. A leftover temporary file from a write that was cut off is removed by the next load or the next write of that name.
+
+### A file without a version
+
+From `0.4.0`, `ConfigLoader.baselineVersion(int version)` gives a copy of the loader that reads an owner's file without a usable `config-version` as `version`. It is for a plugin whose released versions shipped `config.yml` without the key: every file its owners have lacks it, and read as version 0 each of them would be rewritten on the first start under a shipped `config-version: 1`.
+
+```java
+ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger())
+    .baselineVersion(1);
+```
+
+| Shipped `config-version` | An owner's file without the key, baseline 1 |
+|---|---|
+| `1` | Read as it is. Nothing is written and no copy is made. |
+| `2` | Upgraded from version 1: the missing shipped keys and `config-version: 2` are added, and the previous file is kept as `config.yml.v1.bak`. |
+
+The baseline is the version of the layout those releases wrote, and the first shipped file with the key carries the same number. A file that holds a version is not affected. `version` is 0 or more, and a negative one throws `IllegalArgumentException`.
 
 ### Owner-keyed sections
 
@@ -270,11 +304,11 @@ ConfigLoader files = new ConfigLoader(
     Map.of("kits", Set.of("default")));
 ```
 
-When the owner's file already holds `kits` with at least one key, a shipped entry the owner does not have (`starter`) is not added, while the fixed key `default` still is, and missing keys inside an entry the owner kept are added. An empty section (`kits: {}`) gets the shipped entries, and so does a file without the section. No listed section may lie inside another listed section. The map and its sets are copied.
+When the owner's file already holds `kits` with at least one key, a shipped entry the owner does not have (`starter`) is not added, while the fixed key `default` still is, and missing keys inside an entry the owner kept are added. An empty section (`kits: {}`) gets the shipped entries, and so does a file without the section. No listed section may lie inside another listed section: from `0.4.0` the constructor throws `IllegalArgumentException` for one that does, such as `kits.special` beside `kits`, and for a blank path. The map and its sets are copied.
 
 ### Failures
 
-`load()` throws `ConfigLoadException` when the shipped file is absent, unreadable, not UTF-8 or not valid YAML, when the owner's file cannot be read, is not UTF-8 or is not valid YAML, or when a missing file cannot be written. An existing file is not changed in any of these cases. The loader holds no state between loads, and calls to `load()` must not overlap; `ConfigHolder.reload()` never overlaps, so a loader used only through a holder keeps to that.
+`load()` throws `ConfigLoadException` when the shipped file is absent, unreadable, not UTF-8 or not valid YAML, when it has no whole number of 1 or more under `config-version` (from `0.4.0`, with the message `the config.yml inside the plugin jar has no whole number of 1 or more under config-version`), when the owner's file cannot be read, is not UTF-8 or is not valid YAML, or when a missing file cannot be written. An existing file is not changed in any of these cases. From `0.4.0`, a message about a file that cannot be read or written names it as `config.yml`, without its path (`cannot write config.yml: AccessDeniedException`), and the I/O failure is the cause. The loader holds no state between loads, and calls to `load()` must not overlap; `ConfigHolder.reload()` never overlaps, so a loader used only through a holder keeps to that.
 
 ## ConfigReader
 
@@ -311,7 +345,7 @@ The range overloads of `integer` and `duration` throw `IllegalArgumentException`
 
 `durations` and `strings` return an unmodifiable list, or the fallback itself.
 
-`parsed` hands the parser the text form of the value. The parser rejects it by throwing `IllegalArgumentException`, whose message is not shown. It is not called for a list or a group of keys. The four-argument form writes the fallback with `String.valueOf`, so `T` needs a `toString` an owner can read; for a type such as `org.bukkit.Color`, the five-argument form takes the fallback as the owner would write it. With a parser from `taffy-platform`, pass the parser's `EXPECTED` constant (`Durations.EXPECTED`, `Colors.EXPECTED`, `Expiry.EXPECTED`) as `expected`.
+`parsed` hands the parser the text form of the value. The parser rejects it by throwing `IllegalArgumentException` or, from `0.4.0`, `DateTimeException`, whose message is not shown. The parsers of `java.time` throw the second: `reader.parsed("reset-at", LocalTime.NOON, "a time such as 18:30", LocalTime::parse)` gives the fallback and a warning for `25:99`, and `ZoneId::of` does for a zone that does not exist. Before `0.4.0` that exception left `parsed` and failed the load. Any other exception of the parser is thrown on to the caller. The parser is not called for a list or a group of keys. The four-argument form writes the fallback with `String.valueOf`, so `T` needs a `toString` an owner can read; for a type such as `org.bukkit.Color`, the five-argument form takes the fallback as the owner would write it. With a parser from `taffy-platform`, pass the parser's `EXPECTED` constant (`Durations.EXPECTED`, `Colors.EXPECTED`, `Expiry.EXPECTED`) as `expected`.
 
 ### Text readers
 
@@ -371,6 +405,7 @@ Every warning and error line of `ConfigReader` names the path first and is a ful
 |---|---|
 | A value is replaced | `<path> is <value>; expected <what>, so <fallback> is used.` |
 | A value is outside a range | `<path> is <value>; expected <min> to <max>, so <fallback> is used.` |
+| A whole number does not fit an `int` (`integer`, `optionalInteger`; from `0.4.0`) | `<path> is <value>; expected a whole number from -2147483648 to 2147483647, so <fallback> is used.` |
 | A list entry is dropped | `<path> has <entry>, which is not a single value, so it is skipped.` |
 | A value where a group of keys belongs | `<path> should hold keys beneath it, so its value is ignored.` |
 | A required text is absent | `<path> is missing; <fix>.` |
@@ -395,7 +430,9 @@ particle-color is "pink"; expected a named color, "#RRGGBB" hex in quotes or r,g
 toggle is true; expected on, off or auto, so auto is used. YAML reads an unquoted yes, no, on or off as true or false, so write the value in quotes, for example "on".
 ```
 
-The message of a `ConfigLoadException` is a clause without a full stop, such as `config.yml is not saved as UTF-8`, written to follow a lead-in. `ConfigHolder.reload()` puts its own lead-in before it; a plugin that logs the failure of the first load gives one too, as `onEnable` above does. Every error line of a `YamlFolder` names its file.
+Before `0.4.0` a whole number outside the `int` range gave `expected a whole number`. `integer(path, fallback, min, max)` names its own range for such a number, and `whole` names the `long` range for a number beyond it.
+
+The message of a `ConfigLoadException` is a clause without a full stop, such as `config.yml is larger than 16 MiB`, written to follow a lead-in. `ConfigHolder.reload()` puts its own lead-in before it; a plugin that logs the failure of the first load gives one too, as `onEnable` above does. Every error line of a `YamlFolder` names its file.
 
 The log lines `ConfigLoader` writes for a default file, an upgrade, a failed save and a newer file are worded for the owner and can change in any release. Code branches on exception types and return values, never on a message.
 
@@ -446,13 +483,15 @@ public boolean reloadSettings(CommandSender sender) {
 ```
 
 - `restartOnly` is asked about every path of both configurations that holds a value. A path is dotted and relative to the section passed, such as `storage.type` when the root is passed. It is never asked about a path that holds a section, so a section present in both is not reported: the keys beneath it are.
-- Values compare with `Objects.equals`, which makes a list one value. A value only one of the two has is reported; an empty section is not.
+- A list is one value. Values compare by content: a list entry by entry, and from `0.4.0` a `!!binary` value by its bytes, where before `0.4.0` an unchanged binary value was reported on every reload. Any other value compares with `equals`, so a number written in another form counts as a change: `3306` and `3306.0` differ. A value only one of the two has is reported; an empty section is not.
 - `before` is the configuration loaded at startup, not the one from the previous reload. A key set back to its startup value is no longer reported, and a second reload of an unchanged file reports what the first one did.
 - Values are read with `ConfigurationSection.get(String)`. The configurations `StrictYaml` and `ConfigLoader` return have no defaults attached, so a removed key is always seen as removed.
 
 ## YamlFolder
 
-`new YamlFolder(Path folder)` reads the files directly inside `folder`. A file counts when its name ends in `.yml` in any letter case with at least one character before it; its id is the name without those four characters, in the letter case the file has. Subfolders are not read.
+`new YamlFolder(Path folder)` reads the files directly inside `folder`. A file counts when its name ends in `.yml` in any letter case with at least one character before it and does not start with a dot; its id is the name without those four characters, in the letter case the file has. Subfolders are not read.
+
+From `0.4.0`, a name that starts with a dot is skipped without a line, so a hidden file and the `._<name>.yml` files macOS writes beside a file on a foreign file system are no longer reported as files that are not UTF-8. A regular file whose name ends in `.yaml` is still not read, and from `0.4.0` `load` reports it with a line that tells the owner to rename it, where it was skipped without a word.
 
 ```java
 record Kit(String id, Duration cooldown, List<String> items) {
@@ -479,9 +518,9 @@ Map<String, Kit> loadKits() throws ConfigLoadException {
 
 ### load and loadOne
 
-`load(Parser<T> parser)` reads every file in the order `String.compareTo` sorts their names. When two names give the same id, as `kit.yml` and `kit.YML` can on a case-sensitive file system, the entry read later replaces the earlier one. A folder that does not exist or is not a directory gives an empty `Loaded`. When the folder cannot be listed, `load` throws `ConfigLoadException` with the message `cannot read the folder <path>: <exception class> <message>` and no file has been read.
+`load(Parser<T> parser)` reads every file in the order `String.compareTo` sorts their names. When two names give the same id, as `kit.yml` and `kit.YML` can on a case-sensitive file system, the entry read later replaces the earlier one. A folder that does not exist or is not a directory gives an empty `Loaded`. When the folder cannot be listed, `load` throws `ConfigLoadException` and no file has been read. From `0.4.0` the message is `cannot read the folder <folder name>: <exception class> <reason>`, with the name of the folder and not its path, and the I/O failure as the cause; before `0.4.0` it held the path.
 
-`loadOne(String id, Parser<T> parser)` reads only `<id>.yml`, with the suffix in lower case, and returns a `Loaded` holding the entry or the error line. It returns `null` when `id` is empty, `.` or `..`, when it is not a plain file name, or when the folder holds no regular file by that name. The entry is keyed by `id` as given: on a file system that ignores letter case, such as those of Windows and macOS, `id` can match a file whose name has another letter case.
+`loadOne(String id, Parser<T> parser)` reads only `<id>.yml`, with the suffix in lower case, and returns a `Loaded` holding the entry or the error line. It returns `null` when `id` is empty or starts with a dot (before `0.4.0` only for `.` and `..`), when it is not a plain file name, or when the folder holds no regular file by that name. The entry is keyed by `id` as given: on a file system that ignores letter case, such as those of Windows and macOS, `id` can match a file whose name has another letter case.
 
 A file that fails adds one line to `errors()` and the other files still load:
 
@@ -491,8 +530,28 @@ A file that fails adds one line to `errors()` and the other files still load:
 | The parser throws `ConfigLoadException` | `<file name>: <message>` |
 | The read or the parser throws another `RuntimeException` | `<file name>: <exception class> <message>` |
 | The parser returns `null` | `<file name>: NullPointerException the parser returned null` |
+| A regular file is named `<name>.yaml` (from `0.4.0`) | `<name>.yaml: rename it to <name>.yml to have it read` |
 
-`load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. The folder is never written to and nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread.
+`load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. The folder is never written to and nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread, and the consumers below are called on it.
+
+### Parser bugs
+
+The line of a `RuntimeException` holds its class name and message and no stack trace, which is too little to find a bug in the plugin's own parser. From `0.4.0`, `new YamlFolder(Path folder, BiConsumer<String, Throwable> failures)` hands the consumer the file name and the exception whenever the read or the parser throws a `RuntimeException`, a `null` entry included. The file still gets its line and the other files still load. A `ConfigLoadException` is the parser's own verdict and is not passed on.
+
+```java
+YamlFolder folder = new YamlFolder(getDataPath().resolve("kits"),
+    (fileName, failure) -> getLogger().log(Level.SEVERE, "Could not read kits/" + fileName, failure));
+```
+
+### Files saved in a legacy code page
+
+A file an owner saved as Windows-1252 or another legacy code page holds bytes that are not UTF-8, and a strict read reports it as an error, so its entry is gone. Bukkit's `YamlConfiguration.loadConfiguration` reads such bytes as the replacement character U+FFFD and loads the file. From `0.4.0`, `lenient(Consumer<String> warnings)` gives a copy of the folder that reads each file with [`StrictYaml.readLenient`](#strictyaml), for a plugin that moves to `YamlFolder` and has such files on its owners' servers:
+
+```java
+YamlFolder folder = new YamlFolder(getDataPath().resolve("vouchers")).lenient(getLogger()::warning);
+```
+
+Each byte sequence that is not UTF-8 is read as U+FFFD, the file loads, and `warnings` receives one line per file that names it and the first line with a replaced character. Strict reading stays the default.
 
 ## StrictYaml
 
@@ -500,6 +559,7 @@ A file that fails adds one line to `errors()` and the other files still load:
 
 - `static YamlConfiguration parse(String text, String source)` parses text. Empty text is an empty configuration.
 - `static YamlConfiguration read(Path file, String source)` reads a file as UTF-8 and parses it, blocking the calling thread.
+- From `0.4.0`, `static YamlConfiguration readLenient(Path file, String source, Consumer<String> warnings)` reads as `read` does, except that a byte sequence that is not UTF-8 does not fail the read: each one is read as the replacement character U+FFFD. `warnings` receives one line when the file held such bytes, `<source> is not saved as UTF-8, so each byte that is not UTF-8 is read as the replacement character U+FFFD; the first is on line <n>. Save the file as UTF-8.`, and nothing for a file that is UTF-8. The text that results is parsed, so a replaced character ends up in a value, a key or a comment, or makes the YAML invalid.
 
 `source` names the document in the failure message, such as `config.yml` or `messages.yml`:
 
@@ -513,9 +573,9 @@ YamlConfiguration messages = StrictYaml.read(getDataPath().resolve("messages.yml
 | A top level that is not a mapping, or a second document | `<source> is not valid YAML: <reason>` |
 | An anchor used inside the value it names | `<source> is not valid YAML: an anchor is used inside the value it names` |
 | Aliases that repeat more than 100000 values | `<source> is not valid YAML: its aliases repeat more than 100000 values` |
-| Bytes that are not UTF-8 (`read`) | `<source> is not saved as UTF-8` |
+| Bytes that are not UTF-8 (`read`) | `<source> is not saved as UTF-8: the first byte that is not UTF-8 is on line <n>` (lines from 1; before `0.4.0` the message ended after `UTF-8`) |
 | A file larger than 16 MiB (`read`) | `<source> is larger than 16 MiB` |
-| Any other read failure, a missing file included (`read`) | `cannot read <path>: <exception class> <message>` |
+| Any other read failure, a missing file included (`read`) | `cannot read <source>: <exception class>`, followed by a space and the reason when the I/O failure states one, such as `cannot read config.yml: NoSuchFileException`. The I/O failure is the cause. Before `0.4.0`: `cannot read <path>: <exception class> <message>`, which held the path twice. |
 
 A parse error names a line and column, not the text of the line, though it can name a key or a character. A reason without a position is the parser's own message, which can quote a value. The exception for a parse error carries no cause.
 

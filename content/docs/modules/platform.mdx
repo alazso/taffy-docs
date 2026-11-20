@@ -531,12 +531,28 @@ both. Loading:
 2. reads every `.yml` file in `lang`, skipping an unreadable file with a warning and listing the keys each file
    lacks in one warning per file. From `0.2.0`, two files whose names read as one locale, such as `pt-BR.yml` and
    `pt_br.yml`, give a warning that names both and the one used (the one the folder listing gives last); in `0.1`
-   one replaced the other without a warning,
+   one replaced the other without a warning. A file with bytes that are not UTF-8 is skipped as a whole; from
+   `0.4.0` its warning names the line, `lang/<name> is not saved as UTF-8 (the first byte that is not UTF-8 is on
+   line <n>), so its messages are not used.`,
 3. falls back to the bundled English text when the folder cannot be written or listed, with a warning,
 4. warns when a default locale other than `en` has no file, and uses the bundled English text in its place.
 
 `bundled` opens a new stream on each call. `load` throws `IllegalStateException` when the bundled file is missing,
 is not valid UTF-8 or is not valid YAML.
+
+From `0.4.0`, `Messages.loadLenient(Path, Supplier<InputStream>, Logger, String defaultLocale, boolean perPlayer)`
+loads the same way, except that a language file an owner saved in a legacy code page such as Windows-1252 is not
+skipped. Each byte sequence that is not UTF-8 is read as the replacement character U+FFFD, so the keys of the file
+stay in use and only the characters saved in another encoding are lost, as with Bukkit's
+`YamlConfiguration.loadConfiguration`. One warning per file, on the load and on each `reload()`, names the file and
+the first line with a replaced character:
+
+```text
+lang/de.yml is not saved as UTF-8, so each byte that is not UTF-8 is read as the replacement character U+FFFD; the first is on line 3. Save the file as UTF-8.
+```
+
+A file that is not valid YAML once it is read that way is still skipped, and the bundled file is still read
+strictly. Strict reading stays the default: `load` skips such a file.
 
 ### Lookup
 

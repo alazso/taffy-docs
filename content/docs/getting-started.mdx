@@ -170,7 +170,7 @@ dependencies:
 
 An integration that is installed but not listed reads as `HookState.NOT_VISIBLE`, and its warning names the missing entry.
 
-`ConfigLoader` writes the shipped `config.yml` on first start and upgrades an older file, which it tells apart by the whole number under `config-version` (`ConfigLoader.VERSION_KEY`):
+`ConfigLoader` writes the shipped `config.yml` on first start and upgrades an older file, which it tells apart by the whole number under `config-version` (`ConfigLoader.VERSION_KEY`). From `0.4.0` the shipped file has to carry that key, as a whole number of 1 or more without quotes, or `load()` throws:
 
 ```yaml title="src/main/resources/config.yml"
 config-version: 1

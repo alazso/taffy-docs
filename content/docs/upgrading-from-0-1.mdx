@@ -885,6 +885,11 @@ plugins {
 | [A commit the database rolled back is retried](#a-commit-the-database-rolled-back-is-retried) | a plugin that catches `CommitUnknownException` to retry a serialization failure, as PostgreSQL `SERIALIZABLE` work does | call `asyncRetrying` and drop that branch |
 | [A SQLite write takes the write lock when it begins](#a-sqlite-write-takes-the-write-lock-when-it-begins) | a plugin that passes work that only reads to `async` on SQLite, and a test over `Storage.over` | pass that work to `read`; add `transaction_mode=IMMEDIATE` to the test's properties |
 | [A SQLite backup is named with safe characters only](#a-sqlite-backup-is-named-with-safe-characters-only) | a tool that looks a backup up by a plugin version with a character such as `+` | replace those characters with an underscore |
+| [A shipped config.yml needs a config-version](#a-shipped-configyml-needs-a-config-version) | a plugin on `ConfigLoader` whose shipped `config.yml` has no `config-version`, or a quoted one | write `config-version: 1` without quotes, and set `baselineVersion(1)` when released versions shipped the file without the key |
+| [The message for a file that is not UTF-8 names the line](#the-message-for-a-file-that-is-not-utf-8-names-the-line) | code or a test that compares the whole message of `StrictYaml.read`, `ConfigLoader.load` or a `YamlFolder` error line | compare the start of the message |
+| [Read and write failures name the file, not its path](#read-and-write-failures-name-the-file-not-its-path) | code or a test that reads a path out of a `cannot read` or `cannot write` message of `taffy-config` | take the path from the `Path` passed, or from the cause |
+| [YamlFolder skips dot files and reports .yaml files](#yamlfolder-skips-dot-files-and-reports-yaml-files) | a plugin whose entry files start with a dot, or whose owners keep `.yaml` files in a `YamlFolder` folder | rename the files, or drop the line from `errors()` |
+| [Owner-keyed sections are checked](#owner-keyed-sections-are-checked) | a plugin that passes `ConfigLoader` a blank owner-keyed path or one section inside another | list each section once and none inside another |
 
 ### Storage settings are built through factories
 
@@ -1105,4 +1110,137 @@ backups/data-1.4.0+build.7-20261102-101530.db
 
 ```text title="0.4.0"
 backups/data-1.4.0_build.7-20261102-101530.db
+```
+
+### A shipped config.yml needs a config-version
+
+`ConfigLoader.load()` throws `ConfigLoadException` with the message `the config.yml inside the plugin jar has no
+whole number of 1 or more under config-version` when the shipped file has no `config-version`, or has one that is
+quoted, a decimal, text, below 1 or above 2147483647. It throws on every load, the first start included, and writes
+nothing. In `0.3` such a shipped file counted as version 0: no owner's file was ever older, so new shipped keys were
+never added, and nothing was logged.
+
+**Migration:** write `config-version: 1`, without quotes, into the shipped `config.yml`. A plugin whose released
+versions shipped the file without the key also sets the baseline, so the files its owners have, which lack the key
+too, are left as they are and not rewritten on the first start.
+
+```yaml title="0.3: config.yml (shipped)"
+# loads, and no owner's file is ever upgraded
+prefix: "<gray>[Shop]"
+```
+
+```yaml title="0.4.0: config.yml (shipped)"
+config-version: 1
+prefix: "<gray>[Shop]"
+```
+
+```java title="0.3"
+ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger());
+```
+
+```java title="0.4.0"
+// an owner's file without config-version reads as version 1, the layout the earlier releases wrote
+ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger())
+    .baselineVersion(1);
+```
+
+A plugin whose shipped file always carried a whole-number `config-version` changes nothing.
+[A file without a version](/docs/modules/config#a-file-without-a-version) describes the baseline.
+
+### The message for a file that is not UTF-8 names the line
+
+`StrictYaml.read` names the line of the first byte that is not UTF-8, counted from 1, in the message of its
+`ConfigLoadException`. The same message is the error line of a `YamlFolder` for such a file and the message of
+`ConfigLoader.load()` for such a `config.yml`. An owner who saved one line with an umlaut in a legacy code page
+now learns which line.
+
+**Migration:** code or a test that compares the whole message compares its start.
+
+```java title="0.3"
+// "config.yml is not saved as UTF-8"
+boolean encoding = failure.getMessage().equals("config.yml is not saved as UTF-8");
+```
+
+```java title="0.4.0"
+// "config.yml is not saved as UTF-8: the first byte that is not UTF-8 is on line 12"
+boolean encoding = failure.getMessage().startsWith("config.yml is not saved as UTF-8");
+```
+
+A plugin that would rather load such a file, as Bukkit's `YamlConfiguration.loadConfiguration` does, reads it with
+`StrictYaml.readLenient`, `YamlFolder.lenient` or `Messages.loadLenient`, which are new in `0.4.0`:
+[StrictYaml](/docs/modules/config#strictyaml),
+[Files saved in a legacy code page](/docs/modules/config#files-saved-in-a-legacy-code-page) and
+[Messages](/docs/modules/platform#messages) describe them. `Messages` also names the line in the warning for a
+language file it skips.
+
+### Read and write failures name the file, not its path
+
+The messages of `taffy-config` for a file or folder that cannot be read or written hold the name the plugin gave
+and no longer the absolute path on the server, which a plugin often shows to a player or a web editor. In `0.3` the
+path was in the message twice, once from Taffy and once from the message of the I/O failure. The I/O failure is
+still the cause, so a logged stack trace holds the path.
+
+| Method | `0.3` | `0.4.0` |
+|---|---|---|
+| `StrictYaml.read` | `cannot read <path>: <exception class> <message>` | `cannot read <source>: <exception class>`, then a space and the reason when the failure states one |
+| `ConfigLoader.load` | `cannot write <path>: <exception class> <message>` | `cannot write config.yml: <exception class>`, then the reason |
+| `YamlFolder.load` | `cannot read the folder <path>: <exception class> <message>` | `cannot read the folder <folder name>: <exception class>`, then the reason |
+
+**Migration:** code that read the path out of the message takes it from the `Path` it passed, or from the cause.
+
+```java title="0.3"
+// "cannot read /srv/mc/plugins/Shop/menus.yml: NoSuchFileException /srv/mc/plugins/Shop/menus.yml"
+String path = failure.getMessage().substring("cannot read ".length(), failure.getMessage().indexOf(": "));
+```
+
+```java title="0.4.0"
+// "cannot read menus.yml: NoSuchFileException"
+String path = failure.getCause() instanceof FileSystemException onFile ? onFile.getFile() : file.toString();
+```
+
+### YamlFolder skips dot files and reports .yaml files
+
+`YamlFolder` skips every file whose name starts with a dot, without an error line, and `loadOne` returns `null`
+for an id that starts with a dot. In `0.3` a `.hidden.yml` was an entry with the id `.hidden`, and the
+`._<name>.yml` files macOS writes beside a file on a foreign file system were reported as files that are not UTF-8.
+`YamlFolder.load` also adds an error line for a regular file whose name ends in `.yaml`, which `0.3` skipped
+without a word while its owner wondered why the entry was missing.
+
+**Migration:** give an entry file a name that does not start with a dot. An owner renames a `.yaml` file to
+`.yml`; a plugin that keeps other `.yaml` files in the folder on purpose drops the line.
+
+```text title="0.3"
+kits/.vip.yml      loaded as the entry ".vip"
+kits/._bank.yml    "._bank.yml is not saved as UTF-8"
+kits/bank.yaml     skipped, no line
+```
+
+```text title="0.4.0"
+kits/.vip.yml      skipped, no line
+kits/._bank.yml    skipped, no line
+kits/bank.yaml     "bank.yaml: rename it to bank.yml to have it read"
+```
+
+```java title="0.4.0"
+List<String> errors = loaded.errors().stream()
+    .filter(line -> !line.endsWith(" to have it read"))
+    .toList();
+```
+
+### Owner-keyed sections are checked
+
+`new ConfigLoader(Path, Supplier, Logger, Map)` throws `IllegalArgumentException` when a listed owner-keyed path
+is blank or when one listed section lies inside another. The Javadoc of `0.3` ruled the second out without a check,
+and which of the two sections applied to a key beneath both was not defined.
+
+**Migration:** list each owner-keyed section once and none inside another.
+
+```java title="0.3"
+// accepted; kits.special.gold was handled by either section
+Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"), "kits.special", Set.of());
+```
+
+```java title="0.4.0"
+// "the owner-keyed section kits.special lies inside the owner-keyed section kits" for the map above
+Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"));
 ```
