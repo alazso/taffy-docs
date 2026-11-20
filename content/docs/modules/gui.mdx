@@ -677,7 +677,7 @@ A `MenuSession<S>` is one open menu for one viewer and is its inventory's `Inven
 `menus.load(session, source, apply)` waits for a `CompletableFuture` that completes on any thread, runs `apply` with the value on the viewer's entity thread and draws the session again, unless the session closed or a later load started meanwhile. Call it on the viewer's entity thread, from `opened` or a click handler. From `0.3.0` it throws `IllegalStateException` on a thread that does not own the viewer and starts no load; code on another thread hops to the viewer's thread first, through the `EntityThread` the menus were built with (`entity.call(viewer.getUniqueId(), player -> ...)`).
 
 - From `0.3.0`, a load the handler of an exclusive button starts keeps the session busy with no call in the handler.
-- `busy` clears when the load applies, fails or is cancelled, unless a later load started.
+- From `0.3.0`, a load clears `busy` only for the hold that belongs to it: the exclusive button whose handler started it, or a `busy(true)` taken in the same handler or `opened` as the `load` call. It clears that hold when it applies, fails or is cancelled, also when a later load started meanwhile. Before `0.3.0` the end of the latest load of a session cleared every hold. See [Exclusive buttons](#exclusive-buttons).
 - A failure of `source` or `apply` is logged with its stack and reported under `gui.load`. While the session is open and no later load started, the viewer is told `gui.error` and hears `Cue.FAIL`.
 - A cancelled `source` is no failure: nothing is logged, reported or told.
 - A viewer who left the server is told nothing; a failure of `source` itself is still logged and reported.
@@ -692,7 +692,7 @@ The menu listener keeps menu views safe. From `0.3.0` the menus register it them
 - Only a click of a type in `ClickGuard.ANY_PLAIN` (`LEFT`, `SHIFT_LEFT`, `RIGHT`, `SHIFT_RIGHT`), by the session's own viewer, on a slot of the menu inventory whose button accepts that type, reaches a button. Number keys, drops, double clicks and creative clicks never do. `ClickGuard.LEFT_ONLY` is a plain left click alone.
 - A click within the click debounce window after the menu opened is dropped, an exclusive button is dropped while the session is busy (see [Exclusive buttons](#exclusive-buttons)), and a second click on the same button within the debounce window is dropped. Slots of one layout item share one debounce. From `0.3.0`, these windows and the deadline of a prompt are measured with `System.nanoTime()`, so a step of the server's wall clock neither drops clicks nor lets one through early.
 - From `0.3.0`, a click on a slot is also dropped for the click debounce window after a redraw (`rerender`, or a load that applied) put another button in that slot. Before `0.3.0` the click ran the handler of whatever the slot showed by then, so when a sold listing shifted the rows up, a viewer aiming at one listing bought the next. Another button is a list row with another `Frame.Entry.key`, for a row with no key a row with another icon, a button of another layout item, or any button in a slot that had none. A layout action that redraws with other text or another icon keeps taking clicks, and so does a keyed row that stays in its slot, whatever its icon shows. A row with no key whose icon changes on every redraw, such as a countdown, drops the clicks of the window after each redraw, so give each clickable row a key. From `0.3.0` the click debounce of a keyed row follows its key, and that of a row with no key its slot.
-- An accepted click plays `Cue.CLICK`. A handler that throws a `RuntimeException` leaves the event cancelled, is logged and reported under `gui.click`, clears `busy` and plays `Cue.FAIL`.
+- An accepted click plays `Cue.CLICK`. A handler that throws a `RuntimeException` leaves the event cancelled, is logged and reported under `gui.click`, clears `busy` and plays `Cue.FAIL`. From `0.3.0` it leaves `busy` as it is when the session was busy before the handler ran, so a failing button that is not exclusive does not release the hold of another button's work.
 - In any view that is neither a menu nor a prompt anvil, a stack carrying the preview key on the clicked slot, the cursor, a number key's hotbar slot or the offhand is deleted, the click is cancelled and a `preview.leak` warning naming the player is logged. A drag outside menus with a marked cursor is cancelled and the cursor cleared on the next tick.
 - A close ends the session (watched at `MONITOR`), and a quit forgets the player's debounce, view memory, session and pending prompt.
 - From `0.3.0`, the listener sends a player's inventory again, through `Player.updateInventory()` on the next tick on the player's entity thread, after it cancelled the player's shift-click in a menu view and after the viewer's menu closed. The client moves a stack on its own screen before the server answers, so it could keep showing a stack the server never moved. A menu that another inventory replaces sends nothing more, since the server sends the new inventory in full.
@@ -717,7 +717,7 @@ frame.action("amount", Frame.Spec.click(click -> {
 
 An exclusive button (`Frame.Spec.exclusively()`, `Frame.Entry.exclusively()` and the footer's refresh) is for an action that must not run twice at once, such as a purchase. A click on any exclusive button of the session is dropped while `session.busy()`; other buttons still act.
 
-From `0.3.0`, a handler that does its work through `menus.load` calls nothing else. When the handler of an exclusive button returns with a load it started still in flight, the session is busy until that load applies, fails or is cancelled:
+From `0.3.0`, a handler that does its work through `menus.load` calls nothing else. When the handler of an exclusive button returns with a load it started still in flight, the session is busy until that load applies, fails or is cancelled. A load another button starts, such as a page turn, does not free a purchase still in flight when it ends, and neither does it stop the purchase's own load from freeing the session:
 
 ```java
 frame.action("buy", Frame.Spec.click(click ->
@@ -725,9 +725,9 @@ frame.action("buy", Frame.Spec.click(click ->
     .exclusively());
 ```
 
-Before `0.3.0`, `exclusively()` did nothing unless the handler called `session.busy(true)` itself, so the handler above ran a second purchase once the click debounce passed. A handler that calls `busy(true)` before its load keeps working.
+Before `0.3.0`, `exclusively()` did nothing unless the handler called `session.busy(true)` itself, so the handler above ran a second purchase once the click debounce passed. A handler that calls `busy(true)` before its load keeps working: a hold taken in the same handler as a `menus.load` call is released when that load ends.
 
-A handler whose work runs outside `menus.load`, such as a service that calls back when it is done, holds the session itself. `session.busy(true)` in the handler lasts past the handler's return, and nothing releases it but `session.busy(false)`, a load of the session that ends, or a handler that throws. Release it on the viewer's entity thread when the work ends, on success and on failure:
+A handler whose work runs outside `menus.load`, such as a service that calls back when it is done, holds the session itself. `session.busy(true)` in the handler lasts past the handler's return, and nothing releases it but `session.busy(false)` or that handler throwing; a load another button starts does not release it. Before `0.3.0` any load of the session that ended, and any handler that threw, released it. Release it on the viewer's entity thread when the work ends, on success and on failure:
 
 ```java
 frame.action("claim", Frame.Spec.click(click -> {

@@ -349,6 +349,7 @@ plugins {
 | [Menus.listener() and Prompts.listener() register nothing](#menuslistener-and-promptslistener-register-nothing) | a plugin that passes `menus.listener()` or `prompts.listener()` to `registerEvents` | delete the `registerEvents` calls |
 | [A click just after a redraw is dropped](#a-click-just-after-a-redraw-is-dropped) | a menu whose list rows change their icon on a redraw, such as an animated row, and a plugin with a record pattern over `Frame.Entry` | give each clickable row a `key`, and add a fifth component to the pattern |
 | [Menus and Prompts check the calling thread](#menus-and-prompts-check-the-calling-thread) | a plugin that calls `Menus.open`, `Menus.rerender`, `Menus.load` or `Prompts.ask` from a thread that does not own the viewer, such as a storage callback | call `openLater`, `rerenderLater` or `askLater`, and hop to the viewer's thread before `load` |
+| [A load releases only its own hold](#a-load-releases-only-its-own-hold) | a handler that takes `session.busy(true)` for work outside `Menus.load` and never calls `busy(false)` | call `session.busy(false)` when the work ends |
 | [PromptRequest has a fifth component](#promptrequest-has-a-fifth-component) | a plugin with a record pattern over `PromptRequest`; every `new PromptRequest(question, initial, origin, answer)` still compiles | add a fifth component to the pattern |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
 | [Answer has a third result](#answer-has-a-third-result) | a plugin with a `switch` over `Answer` that has no `default` branch | add a `default` branch, or a case for `Answer.Later` |
@@ -552,6 +553,37 @@ Frame.Entry row = Frame.Entry.click(icon(listing), click -> buy(click, listing))
 if (row instanceof Frame.Entry(var icon, var handler, var clicks, var exclusive, var key)) {
     // ...
 }
+```
+
+### A load releases only its own hold
+
+A load clears `MenuSession.busy()` only for the hold that belongs to it: the exclusive button whose handler
+started the load, or a `busy(true)` taken in the same handler or `Menu.opened` as the `Menus.load` call. It
+clears that hold when it applies, fails or is cancelled, also when a later load started meanwhile. In `0.2` the
+end of the latest load of a session released every hold, so a refresh or a page turn that ended while a claim
+held the session with `busy(true)` let the same claim run a second time. A handler that throws likewise clears
+`busy()` only when the session was not busy before it ran. A handler that calls `busy(true)` and then
+`Menus.load` needs no change.
+
+**Migration:** a handler that takes `busy(true)` for work outside `Menus.load`, and relied on a later load or a
+failing handler to release it, calls `session.busy(false)` on the viewer's entity thread when its work ends, on
+success and on failure. [Exclusive buttons](/docs/modules/gui#exclusive-buttons) shows such a handler.
+
+```java title="0.2"
+frame.action("claim", Frame.Spec.click(click -> {
+    session.busy(true);
+    stash.claim(click.player(), card, () -> menus.load(session, stash.cards(owner), (s, cards) -> s.data(cards)));
+}).exclusively());
+```
+
+```java title="0.3.0"
+frame.action("claim", Frame.Spec.click(click -> {
+    session.busy(true);
+    stash.claim(click.player(), card, () -> {
+        session.busy(false);
+        menus.load(session, stash.cards(owner), (s, cards) -> s.data(cards));
+    });
+}).exclusively());
 ```
 
 ### PromptRequest has a fifth component
