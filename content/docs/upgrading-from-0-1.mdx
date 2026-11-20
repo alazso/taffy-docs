@@ -892,6 +892,9 @@ plugins {
 | [Owner-keyed sections are checked](#owner-keyed-sections-are-checked) | a plugin that passes `ConfigLoader` a blank owner-keyed path or one section inside another | list each section once and none inside another |
 | [CustomItemPlugin may gain a constant](#customitemplugin-may-gain-a-constant) | a plugin with a `switch` over `CustomItemPlugin` | add a `default` branch |
 
+A server owner changes nothing for `0.4.0`. [The first start on 0.4.0](#the-first-start-on-040) lists what the
+console and the database show differently once a plugin built on it starts.
+
 ### Storage settings are built through factories
 
 `StorageSettings`, `StorageSettings.Server` and `StorageSettings.Pool` are final classes with no public constructor
@@ -1273,3 +1276,51 @@ String label = switch (plugin) {
     default -> plugin.plugin() + " item";
 };
 ```
+
+### The first start on 0.4.0
+
+A server owner updates the plugin and starts the server. Three things differ from a start on `0.3`, and none of
+them needs an action from the owner.
+
+| What | Who sees it | What the owner sees |
+|---|---|---|
+| The version table name | a server on MySQL, MariaDB or PostgreSQL | One console line, once, and a new table `<prefix><plugin>_schema_version` beside the earlier `<prefix>schema_version`, which stays. |
+| The checksum rule | a server whose plugin build holds scripts with other line endings than the build that set the database up | The start succeeds, where it stopped with `changed after it ran on this database`. Nothing is logged and no row is rewritten. |
+| The config upgrade | a server whose plugin gave its shipped `config.yml` a `config-version` for `0.4.0` without setting a baseline | One console line, a `config.yml` written anew with `config-version` in it, and the previous file as `config.yml.v0.bak`. |
+
+**The version table name.** The start copies the plugin's history into the table named after the plugin and logs,
+for the plugin `My-Plugin` under the prefix `myplugin_`:
+
+```text title="Console"
+[My-Plugin] Copied the migrations myplugin_schema_version records into myplugin_my_plugin_schema_version, which records them from now on. myplugin_schema_version stays as it was and is no longer read.
+```
+
+Later starts log nothing, because the new table exists. A server on SQLite keeps `schema_version` and sees no line.
+A plugin that set `StorageSettings.versionTable` to the earlier name keeps that table, and no line is logged.
+[The version table](/docs/modules/storage#the-version-table) describes the copy.
+
+**The checksum rule.** The rows of the version table keep the checksums `0.1.0` to `0.3.2` wrote, and a script that
+still has the bytes it ran with is accepted as before. A build whose scripts differ from those bytes only in their
+line endings or a leading byte order mark now starts as well. A script whose text changed still stops the start
+with `changed after it ran on this database`. [Checksums](/docs/modules/storage#checksums) states the rule.
+
+**The config upgrade.** What happens to an owner's `config.yml` depends on what the plugin did about
+[the shipped config-version](#a-shipped-configyml-needs-a-config-version):
+
+| The plugin | The owner's `config.yml` at the first start |
+|---|---|
+| Its shipped file always carried a whole-number `config-version` | Read as before. It is rewritten only when the plugin's release ships a higher version, as in `0.3`. |
+| Wrote `config-version: 1` into the shipped file and set `baselineVersion(1)` | Read as it is. Nothing is written and no copy is made. |
+| Wrote `config-version: 1` into the shipped file and set no baseline | Counted as version 0 and upgraded to 1: the shipped keys it lacks and `config-version: 1` are added, the file is written anew and the previous file is kept as `config.yml.v0.bak`. |
+| Left the shipped file without a `config-version` | Not read: `load()` throws `the config.yml inside the plugin jar has no whole number of 1 or more under config-version`, and the file is not changed. |
+
+An upgrade logs one line that names the versions and the copy, and the shipped keys it added when there are any:
+
+```text title="Console"
+[My-Plugin] Upgraded config.yml from version 0 to 1; the previous file is kept as config.yml.v0.bak.
+```
+
+Every value of the owner's file is kept, and the way it is written can change: quotes, the form of a number, the
+place of an added key and comments inside a list, as
+[What an upgrade rewrites](/docs/modules/config#what-an-upgrade-rewrites) lists. From `0.4.0` a text longer than 80
+columns stays on one line in the saved file.
