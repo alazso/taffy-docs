@@ -231,3 +231,46 @@ the refusals.
 **Migration:** a log filter or test that matched the failure text in the message matches
 `Failed to <what> during shutdown` and reads the failure from `LogRecord.getThrown()`.
 [Shutdown.closeQuietly](/docs/modules/platform#shutdownclosequietly) describes the step.
+
+## 0.2.1
+
+`0.2.1` needs no action from a plugin: change the version of the settings plugin and rebuild. Every signature of
+`0.2.0` is still there and does what it did, and each addition is off or unused until a plugin calls it.
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.2.1"
+}
+```
+
+The release changes what a plugin built with [taffy-metrics](/docs/modules/metrics) sends to FastStats and bStats,
+so the plugin's error list and Taffy's usage graph read differently after the upgrade:
+
+| Change | What is sent |
+|---|---|
+| [More of a message is hidden](/docs/modules/metrics#anonymizing) | The user name and password of a URI of any scheme, a UUID in upper case or without dashes, the quoted user and host of a MySQL or MariaDB account, the value of a key such as `password` or `token`, an absolute Unix path and a host name with a common ending are replaced by a placeholder. A jdbc URL with a user name before an `@` is redacted whole. |
+| [The SQL rule needs the start of a statement](/docs/modules/metrics#anonymizing) | A message with the bare word `select`, `insert`, `update` or `delete`, such as `Failed to update balance for shop 12`, is sent as written, where it was cut to `Failed to [sql hidden]`. A statement of another shape, such as `SELECT 1`, is no longer hidden. |
+| [Addresses and numbers no longer split a kind](/docs/modules/metrics#what-faststats-receives) | Reports whose messages differ only in an IPv4 address, an IPv6 address, a run of digits or a value the rules hide merge into one error with a count, sent with the message of the first report. Each took one of the 32 kinds of its source before. |
+| [A task that throws under Scheduler is unhandled](/docs/modules/metrics#what-faststats-receives) | The error is sent with `handled` set to `false`, where it was sent as a handled error. It is sent once for its kind and source for the life of the handle, where a repeating task that threw on every run was one error with a count. |
+| [One plugin per server reports the Taffy usage chart](/docs/modules/metrics#the-taffy-usage-chart) | On a server with several plugins built with Taffy `0.2.1` or newer, one of them starts the second FastStats context and the second bStats instance that report `taffy_version`. A plugin built with an older Taffy still starts its own. |
+
+Two more changes are visible on the server and send nothing new:
+
+- `Metrics.shutdown()` waits at most 5 seconds for the final FastStats send, which runs on a daemon thread named
+  `taffy-metrics-final-send`. A chart supplier read during that send runs on that thread. A supplier already may
+  run on any thread, as [the supplier contract](/docs/modules/metrics#the-supplier-contract) states.
+- The first time a source of error reports holds 32 kinds, one warning that names the source is logged on the
+  plugin's logger. Reports of a further kind were dropped with no log line.
+
+Three additions are there for a plugin that wants them:
+
+- `MetricsBuilder.usageChart(false)` leaves the Taffy usage chart off for that plugin alone, such as from a key of
+  its own in the plugin's config. [Turning the chart off](/docs/modules/metrics#turning-the-chart-off) shows it.
+- `ErrorReports.reportUnhandled` reports an error the plugin rethrows or lets escape, and FastStats receives it
+  with `handled` set to `false`.
+- `ErrorReports.install(handle, unhandled)` installs one handler for each of the two kinds of report. A plugin that
+  installed a target of its own after `start()` with the one-handler `install` and passes every report to
+  `Metrics.report` still receives each report, and a `Scheduler` failure it passes on is sent as a handled
+  error, as in `0.2.0`. To send it as unhandled, install two handlers and pass the second one's reports to
+  `Metrics.reportUnhandled`, as [The error sink has one target](/docs/modules/metrics#the-error-sink-has-one-target)
+  shows.
