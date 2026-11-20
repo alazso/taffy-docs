@@ -335,7 +335,7 @@ A plugin that reads `getConfig()` moves every read of the file onto the holder b
 - A live field is read from `ConfigHolder.get()` each time it is used, and a field declared `restartRequired()`, like every value used once at enable, from `ConfigHolder.startup()`.
 - `getConfig`, `reloadConfig` and `saveConfig` are overridden to throw, so a site that was missed fails in a test instead of answering with a value no save reaches.
 
-The move changes what the server owner sees, apart from the editor: the first load is strict, so a `config.yml` that is not UTF-8 or not valid YAML stops the start where `getConfig()` started the plugin on the values shipped in the jar, and an absent key no longer reads the shipped value. A list read therefore names its fallback, through `ConfigReader.strings(path, fallback)`.
+The move changes what the server owner sees, apart from the editor: the first load is strict, so a `config.yml` that is not UTF-8 or not valid YAML stops the start, where `getConfig()` read the first with replacement characters and started the plugin on the values shipped in the jar for the second, and an absent key no longer reads the shipped value. A list read therefore names its fallback, through `ConfigReader.strings(path, fallback)`.
 
 ## Reloads and the plugin's own writes
 
