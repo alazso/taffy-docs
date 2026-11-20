@@ -340,7 +340,7 @@ The shutdown classes assume this order, with each step run through `Shutdown.clo
   <Step>`TaskGate.close`, which refuses new async tasks and waits for the admitted ones.</Step>
   <Step>`PendingSettlements.settleAll`, which settles the work no callback started.</Step>
   <Step>The close of whatever the settlements write to, such as [storage](/docs/modules/storage).</Step>
-  <Step>`DiscordWebhook.close()`, which waits for the posts still in flight.</Step>
+  <Step>`DiscordWebhook.close()`, which waits for the posts still in flight, from `0.2.0` for at most 5 seconds.</Step>
   <Step>`Metrics.shutdown` of [taffy-metrics](/docs/modules/metrics), which stops reporting and makes the final send, so the reports the steps before it raised are sent.</Step>
 </Steps>
 
@@ -736,7 +736,8 @@ closed jar, counts as absent and is logged as a warning; an absent class is not 
 | `post(String url, String content, PostOptions options, Consumer<String> onError)` | From `0.2.0`. The same, with the mention types of `options` allowed to ping. |
 | `postBody(String url, String body, Consumer<String> onError)` | Posts a ready JSON body as given, with nothing added. |
 | `isWebhookUrl(String)` | Static. Whether the URL is an `https` Discord webhook URL on `discord.com` or `discordapp.com`, with optional `canary.` or `ptb.` and API version. |
-| `close()` | Closes the client and blocks until every in-flight request has finished. |
+| `close()` | Closes the client and waits for the in-flight requests. From `0.2.0`, for at most 5 seconds. |
+| `close(Duration wait)` | From `0.2.0`. The same, waiting at most `wait`. |
 
 ```java
 String url = getConfig().getString("webhook-url");
@@ -786,13 +787,38 @@ a type only for content the plugin or the server owner wrote.
 `postBody` passes its body through raw: it is sent as given, with nothing added, removed or checked. A body without
 an `allowed_mentions` key leaves Discord's default in force, under which every mention in it pings.
 
-Each request fails when no response headers arrive within 15 seconds, but `close()` has no upper bound: a server
-that sends headers and then stalls keeps it blocked longer. An interrupt ends the wait, aborts the in-flight
-requests through their callbacks and stays set. `close()` is meant to be the last step of a shutdown before metrics.
+From `0.2.0`, `close()` blocks the calling thread until every in-flight request has finished or 5 seconds have
+passed, whichever comes first, and `close(Duration wait)` does the same with the given wait. The requests still in
+flight when the wait ends are aborted and fail through their callbacks; a zero or negative wait aborts them at
+once. In `0.1`, `close()` had no upper bound: each request fails when no response headers arrive within 15 seconds,
+but a server that sent headers and then stalled kept the disabling thread blocked longer. An interrupt ends the
+wait, aborts the in-flight requests through their callbacks and stays set. Closing the webhook is meant to be the
+last step of a shutdown before metrics.
 
 `WebhookPayload.render(Map<String, Object> template, UnaryOperator<String> resolve)` turns a payload template (nested
 maps, lists, strings, numbers and booleans) into the JSON body `postBody` sends. Every string goes through
 `resolve` first, and the structure is then serialized, so a resolved value cannot change the JSON structure.
+
+From `0.2.0`, a value in the template is one of these types, at any depth:
+
+| Value | Rendered as |
+|---|---|
+| `String` | the result of `resolve` |
+| `Number`, `Boolean`, `null` | itself |
+| `Map` | an object, with each key as `String.valueOf` gives it |
+| `List` | an array |
+| Bukkit `ConfigurationSection` | an object of the section's own keys |
+
+Any other type makes `render` throw `IllegalArgumentException`, and the message names the value by its key path,
+such as `embeds[0].timestamp`. A payload read from config holds a `ConfigurationSection` for each nested object, so
+it can go to `render` as read:
+
+```java
+Map<String, Object> template = getConfig().getConfigurationSection("payload").getValues(false);
+```
+
+In `0.1` a section and every other type went to the JSON serializer as they were, which did not write a section as
+the object the config held.
 
 From `0.2.0`, `render` adds `"allowed_mentions": {"parse": []}` to the top level of a template that has no
 `allowed_mentions` key of its own, so a mention in a resolved value pings no one. A template that has the key keeps
