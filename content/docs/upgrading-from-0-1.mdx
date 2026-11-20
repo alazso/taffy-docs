@@ -724,3 +724,143 @@ One addition is in [taffy-platform](/docs/modules/platform#itembuilder):
 `ItemBuilder.deserializeOrThrow(String reference)` rebuilds the item of a `serialized:<base64>` reference or throws
 `IllegalArgumentException` with the cause, so a plugin that stores items can log why a stored item is gone.
 `ItemBuilder.deserialize` still returns `null` for every failure.
+
+## 0.3.2
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.3.2"
+}
+```
+
+Every signature of `0.3.1` is still there, and a plugin that follows the two thread rules the Javadoc already
+stated recompiles with no change. `0.3.2` enforces both rules, so a call that broke one ran before and throws now.
+Every change is in [taffy-hooks](/docs/modules/hooks) and [taffy-storage](/docs/modules/storage).
+
+| Change | Affects | Action |
+|---|---|---|
+| [An economy call off its thread throws](#an-economy-call-off-its-thread-throws) | a plugin that calls `balance`, `has`, `withdraw` or `deposit` of the Vault economy on a thread other than the one `thread(player)` names: an async thread on Paper, and under the default rule every region thread on Folia | run the call through `Scheduler.dispatch`, or look the economy up with the entity thread rule |
+| [A LuckPerms write on a server thread throws](#a-luckperms-write-on-a-server-thread-throws) | a plugin that calls `addGroup`, `addTempGroup`, `removeGroup`, `setPermission` or `unsetPermission` on the main thread, a region thread or the global region thread, or in `onDisable`, directly or through `Scheduler.asyncOrRun` | run the write through `Scheduler.async`; a write made in `onDisable` moves to before the plugin disables |
+
+[What a plugin can now do](#what-a-plugin-can-now-do) lists the additions and the calls that answer differently
+with no change in the plugin.
+
+### An economy call off its thread throws
+
+`balance`, `has`, `withdraw` and `deposit` of the Vault economy throw `IllegalStateException` when the calling
+thread is not the one `EconomyProvider.thread(player)` names. The message names `thread(player)` and
+`Scheduler.dispatch`. The rule itself is not new: the `EconomyProvider` Javadoc states that every call runs on
+that thread. Until `0.3.1` nothing enforced it, so a call from a Folia region thread or an async thread ran
+unordered against the other callers of the economy. The check comes before anything in the economy is called, so
+a refused call moves no money. [The thread rule](/docs/modules/hooks#the-thread-rule) names the server check
+behind each tag.
+
+A call made on the main thread of a Paper server, or through `Scheduler.dispatch` on the thread `thread(player)`
+names, is unchanged. The mistake shows mostly on Folia, where a click handler or a command runs on a region
+thread and `thread(player)` names the global region thread: the same code passes on Paper, where both are the
+main thread.
+
+**Migration:** run each call through `Scheduler.dispatch` on the thread `thread(player)` names, and hop back to
+the player's thread for the result.
+
+```java title="0.3.1"
+EconomyResult result = money.withdraw(player.getUniqueId(), price);
+```
+
+```java title="0.3.2"
+UUID id = player.getUniqueId();
+scheduler.dispatch(money.thread(id), () -> money.withdraw(id, price))
+    .whenComplete((result, failure) -> scheduler.entity(player, () -> deliver(player, result, failure)));
+```
+
+A plugin that must call the economy inline on the player's region thread, with an economy plugin that is safe
+there, opts in to the entity thread rule at the lookup. `thread(player)` then names the player's own thread
+while the player is online, and the inline call passes the check:
+
+```java title="0.3.2"
+Detected<EconomyProvider> economy = EconomyProvider.vault(
+    VaultOptions.of(this, errors, scheduler.mode() == Scheduler.Mode.FOLIA)
+        .threadRule(VaultOptions.ThreadRule.ENTITY));
+```
+
+### A LuckPerms write on a server thread throws
+
+`addGroup`, `addTempGroup`, `removeGroup`, `setPermission` and `unsetPermission` of `PermissionProvider.luckPerms`
+throw `IllegalStateException` when called on a server thread: the main thread on Paper, and every region thread
+and the global region thread on Folia (a thread `Server.isPrimaryThread()` is `true` on). The rule itself is not
+new: the `PermissionProvider` Javadoc states that writes run off the server thread, since a write loads the
+player's data when it is not cached and blocks until the change is saved. Until `0.3.1` nothing enforced it. The
+check comes before LuckPerms is asked, so a refused write changes nothing. `available`, `primaryGroup` and
+`groups` are not checked.
+
+A write made on an async thread is unchanged.
+
+**Migration:** move each write to an async thread and take its result there, hopping back to the player's thread
+for anything that touches the player.
+
+A write made in `onDisable` runs on a server thread and throws too, where it blocked and saved until `0.3.1`.
+`Scheduler.async` returns `false` once the plugin is disabling and never runs the task, and
+`Scheduler.asyncOrRun` then runs it on the calling thread, where the write throws. Make the write before the
+plugin disables, on an async thread, for example when the player quits or when the state it reflects changes.
+
+```java title="0.3.1"
+boolean added = permissions.addGroup(player.getUniqueId(), "vip");
+```
+
+```java title="0.3.2"
+UUID id = player.getUniqueId();
+scheduler.async(() -> {
+    boolean added = permissions.addGroup(id, "vip");
+    scheduler.entity(player, () -> confirm(player, added));
+});
+```
+
+### What a plugin can now do
+
+Each addition is unused until a plugin calls it:
+
+- **Ask whether the money moved.** `EconomyResult.moved()` is `true` for `OK` and `OVERDRAWN`. A plugin that
+  refuses a purchase on `status() != Status.OK` keeps the money of an `OVERDRAWN` withdraw and delivers nothing, so
+  branch on `moved()`, as [Charging a player](/docs/modules/hooks#charging-a-player-on-paper-and-folia) does.
+- **Look the economy up with options.** `EconomyProvider.vault(VaultOptions options)` takes the owner, the error
+  reports, the switch, the server kind and the scale as one object, with the two options below. The entry point of
+  `0.3.0` is unchanged and gives the same result.
+- **Call the economy inline on the player's thread.** `VaultOptions.ThreadRule.ENTITY` makes `thread(player)`
+  name the player's own thread while the player is online, for an economy plugin that is safe on region threads.
+  [The thread rule](/docs/modules/hooks#the-thread-rule) states what is no longer ordered under it.
+- **Let the economy decide an overdraft or a loan.** `VaultOptions.FundsCheck.NATIVE` answers `has` through Vault's
+  `Economy.has` and lets `withdrawPlayer` decide a withdraw. A withdraw the economy refuses then gives `FAILED`,
+  for a short balance too, and never `INSUFFICIENT` or `OVERDRAWN`, as
+  [The funds check](/docs/modules/hooks#the-funds-check) describes.
+- **Store a balance above the money ceiling.** `Params.decimal(BigDecimal)` and `Row.decimal(String)` bind and
+  read a decimal number of any magnitude, for a balance that passes `MoneyColumn.MAX` (about 9.22e14).
+  [Amounts above the money ceiling](/docs/modules/storage#amounts-above-the-money-ceiling) gives the column of each
+  dialect and the limits on SQLite.
+- **Refuse a signed amount that is out of range.** `Params.signedMoney(BigDecimal)` binds like `moneyOrNull` and
+  throws `MoneyOutOfRangeException` above `MoneyColumn.MAX` in magnitude, where `moneyOrNull` stores `NULL`.
+  `moneyOrNull` is unchanged.
+
+Six calls answer differently after the upgrade and need no change in the plugin. A plugin that worked around one of
+them can drop the workaround:
+
+- **Revoke a temporary rank.** `PermissionProvider.removeGroup` removes a membership `addTempGroup` added, and one
+  held in a context, and returns `true`, where it left the membership and returned `false`.
+- **Flip a permission.** `PermissionProvider.setPermission` replaces a node the player already holds without
+  context, so a granted node becomes denied and a denied one granted, where it returned `false` and saved nothing.
+- **Reach the other servers of a network.** A saved LuckPerms write is pushed through LuckPerms' messaging service
+  when one is set up, so the plugin needs no push of its own.
+- **Charge a balance kept as a `double`.** A balance read from Vault is rounded to 8 decimal places before it is
+  compared, and one within 16 units in the last place of the `double` of an amount at `scale()` reads as that
+  amount, so a stored `0.09999999999999998` covers `0.10` and a stored `1000000428.0799999` covers
+  `1000000428.08`, where `has` answered `false` and `withdraw` gave `INSUFFICIENT`. From about 1e13 at 2 decimal
+  places, and about 1e11 at 4, a `double` no longer holds the amount and a comparison can be off by one unit of
+  `scale()`.
+- **Read a confirmed withdraw as `OK`.** A withdraw the economy confirmed returns `OK` when the balance read that
+  follows it throws, where the throwable left `withdraw` and the outcome read as unknown.
+- **Read a disabled economy plugin as `FAILED`.** `withdraw` and `deposit` return `FAILED` with the message
+  `the economy plugin <name> is disabled` while the plugin that registered the economy is disabled, where the call
+  reached that plugin. No money moves.
+
+[Economy](/docs/modules/hooks#economy) and [Permissions](/docs/modules/hooks#permissions) describe each of them.

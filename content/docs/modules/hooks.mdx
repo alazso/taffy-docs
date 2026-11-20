@@ -413,6 +413,14 @@ Before `0.3.1` there is no `close()`, and each further `detect` leaves one more 
 - `folia` tells whether the server is Folia: `scheduler.mode() == Scheduler.Mode.FOLIA` for a plugin with a Taffy `Scheduler`. It decides what each reason asks the owner to install: on Folia the reasons name VaultUnlocked and an economy plugin that supports Folia. From `0.3.0` the entry point takes this flag, so a plugin with no Taffy `Scheduler` can look the economy up. The overload that takes a `Scheduler.Mode` in its place is deprecated and a later release removes it; it gives the same result.
 - `scale` is the number of decimal places to use, from 0 to `EconomyProvider.MAX_SCALE` (4), or `null` to use the economy's own fractional digits, capped at 4, or 2 when it reports none. A scale finer than the economy keeps is warned about on first use. A scale outside 0 to 4 throws `IllegalArgumentException`, also when switched off.
 
+From `0.3.2`, `EconomyProvider.vault(VaultOptions options)` takes the same values as one object, with the options the entry point above has no argument for. `VaultOptions.of(Plugin owner, ErrorReports errors, boolean folia)` gives a lookup that is switched on, uses the economy's own decimal places and calls the economy on the global region thread. `switchedOn(boolean)`, `scale(Integer)`, `threadRule(VaultOptions.ThreadRule)` and `fundsCheck(VaultOptions.FundsCheck)` each give a copy with that value replaced and leave the options unchanged. `vault(owner, errors, switchedOn, folia, scale)` gives the same result as `vault(VaultOptions.of(owner, errors, folia).switchedOn(switchedOn).scale(scale))`.
+
+```java
+Detected<EconomyProvider> economy = EconomyProvider.vault(
+    VaultOptions.of(this, errors, scheduler.mode() == Scheduler.Mode.FOLIA)
+        .threadRule(VaultOptions.ThreadRule.ENTITY));
+```
+
 Vault itself need not be enabled: only the API and the registration are read. The status's plugin is always `Vault`, and each state but `SWITCHED_OFF` and `ON` carries a reason:
 
 | State | When |
@@ -442,19 +450,72 @@ Each lookup is a new detection: a Vault that stays `NOT_VISIBLE`, `API_MISSING` 
 | Method | Behaviour |
 |---|---|
 | `int scale()` | Decimal places, from 0 to 4. |
-| `ThreadTag thread(UUID player)` | The thread to call the economy on. The Vault provider gives `ThreadTag.GLOBAL` for every player. |
+| `ThreadTag thread(UUID player)` | The thread to call the economy on. The Vault provider gives `ThreadTag.GLOBAL` for every player, unless the lookup opted in to the [entity thread rule](#the-thread-rule). |
 | `BigDecimal balance(UUID player)` | The balance rounded half-even to `scale()`, possibly negative. Throws `IllegalStateException` when the economy reports a value that is not finite. |
-| `boolean has(UUID player, BigDecimal amount)` | Compares the unrounded balance with the amount rounded half-even to `scale()`. Accepts any amount. |
+| `boolean has(UUID player, BigDecimal amount)` | Compares the balance, not rounded to `scale()`, with the amount rounded half-even to `scale()`. Accepts any amount. The Vault provider asks the economy instead when the lookup opted in to the [native funds check](#the-funds-check). |
 | `EconomyResult withdraw(UUID player, BigDecimal amount)` | Takes money when `has` holds. Never `NOT_STARTED`. |
 | `EconomyResult withdraw(UUID player, BigDecimal amount, BooleanSupplier start)` | As above; `start` runs after the balance check and before money moves, on the same thread, and `false` gives `NOT_STARTED` with no money moved. |
 | `EconomyResult deposit(UUID player, BigDecimal amount)` | Gives money. |
 | `String probe()` | A self-test that reads what the economy reports about itself and moves no money. Returns one line naming what was reached (for Vault, the economy's name and its decimal places). Throws a `RuntimeException` when nothing was reached. |
 
-Every call is synchronous. A withdraw or deposit rounds the amount half-even to `scale()` and throws `IllegalArgumentException` for an amount that is negative, rounds to zero, or cannot reach the economy exactly. Vault carries amounts as `double` (the Vault 1.7 API), so an amount that does not survive the conversion to `double` and back is refused. A withdraw or deposit that throws has an unknown outcome: money may or may not have moved.
+Every call is synchronous and runs on the thread `thread(UUID)` names; from `0.3.2` the Vault provider [throws on any other thread](#the-thread-rule). A withdraw or deposit rounds the amount half-even to `scale()` and throws `IllegalArgumentException` for an amount that is negative, rounds to zero, or cannot reach the economy exactly. Vault carries amounts as `double` (the Vault 1.7 API), so an amount that does not survive the conversion to `double` and back is refused. A withdraw or deposit that throws has an unknown outcome: money may or may not have moved.
+
+From `0.3.2`, a balance read from Vault is rounded half-even to 8 decimal places, four more than `EconomyProvider.MAX_SCALE`, before it is compared or rounded to `scale()`, and a balance within 16 units in the last place of the `double` of an amount at `scale()` reads as that amount. An economy that keeps balances as `double` holds `0.09999999999999998` after a player with `1.00` pays `0.90`, and that balance now covers `0.10`; one that holds `1000000428.0799999` after a player with `1000000456.18` pays `28.10` covers `1000000428.08`. Before `0.3.2`, `has` answered `false` and `withdraw` gave `INSUFFICIENT` for both. The balance read after a withdraw is measured in units of the balance read before it, so a withdraw of the whole balance gives `OK`, not `OVERDRAWN`. A balance that is short by more than that, such as `0.0999`, is still short. Once the balance covers the amount the provider asks the economy, and an economy that compares its own `double` balance may still refuse, which gives `FAILED` with the economy's message and no money moved. Where one such unit nears the smallest amount at `scale()`, which is from about 1e13 at 2 decimal places and from about 1e11 at 4, a `double` no longer holds the amount and a comparison can be off by one unit of `scale()`.
+
+From `0.3.2`, the Vault provider keeps the plugin that registered the economy, and while that plugin is disabled `withdraw` and `deposit` return `FAILED` with the message `the economy plugin <name> is disabled`. The refusal comes before the amount is checked and calls nothing in the economy, so no money moves. Before `0.3.2` the call reached the disabled plugin's economy, which happens during a server stop or in a plugin that registered no `EconomyWatcher`. `balance` and `has` still read the economy, and the status stays as the lookup found it.
+
+A withdraw reads the balance a second time once the economy confirmed it, to tell `OVERDRAWN`. From `0.3.2`, when that read throws an exception or a `LinkageError`, the result is `OK`, the overdraft check is skipped and a warning is logged. Before `0.3.2` the throwable left `withdraw`.
+
+### The thread rule
+
+`VaultOptions.ThreadRule` names the thread the Vault economy is called on, which is what `thread(UUID)` answers. It exists from `0.3.2`; before it, the Vault provider answered `ThreadTag.GLOBAL` for every player.
+
+| `VaultOptions.ThreadRule` | `thread(player)` answers |
+|---|---|
+| `GLOBAL` (the default) | `ThreadTag.GLOBAL` for every player: the main thread on Paper, the global region thread on Folia. |
+| `ENTITY` | `ThreadTag.entity(player)` for a player who is online, and `ThreadTag.GLOBAL` for a player who is not, since no region owns an offline player. |
+
+`ENTITY` is an opt-in for an economy plugin that is safe to call on region threads. A plugin that is already on a player's region thread, in a click handler or a command, then calls the economy inline and reads the result in the same tick, where `GLOBAL` needs a `Scheduler.dispatch` and a hop back. The answer is read from the server on each call, so ask `thread(player)` right before each dispatch and do not keep it.
+
+Under `ENTITY` the calls for one online player are ordered on that player's thread. On Folia they are not ordered against another plugin that moves the same account on the global region thread, nor against a call made for the player on the global region thread while the player was offline, so a balance check there and a withdraw here can interleave. On Paper every one of these threads is the main thread. Keep `GLOBAL` unless the economy plugin states that it supports Folia's region threads.
+
+From `0.3.2`, `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` when the calling thread is not the one `thread(player)` names. Before `0.3.2` the rule was documentation only: a call from a Folia region thread or an async thread ran, unordered against the other callers of the economy, so the balance check of a withdraw could pass twice. The message names `thread(player)` and `Scheduler.dispatch`, the tag, and the calling thread:
+
+```
+an economy call for 069a79f4-44e9-4726-a5be-fca90e38aaf5 runs on the thread thread(player) names, GLOBAL, not on Craft Scheduler Thread - 3; run it through Scheduler.dispatch(economy.thread(player), ...)
+```
+
+| `thread(player)` | The call is accepted where |
+|---|---|
+| `ThreadTag.GLOBAL` | `Server.isGlobalTickThread()` is `true`: the main thread on Paper, the global region thread on Folia. This is where `Scheduler.dispatch(ThreadTag.GLOBAL, ...)` runs its task. |
+| `ThreadTag.entity(player)` | `Server.isOwnedByCurrentRegion(player)` is `true`: the main thread on Paper, the region thread that owns the player on Folia. |
+
+Under `ENTITY`, a call for a player who is not online is checked against the global region thread, as `thread(player)` answers `ThreadTag.GLOBAL` for that player. A player who logs in between the `thread(player)` call and a task dispatched to `GLOBAL` makes that task's call throw on Folia, where the global region thread does not own the player; the future of the dispatch carries the exception and no money has moved, so the caller reads `thread(player)` again and dispatches once more.
+
+The check comes after the `null` checks and before the amount is checked, the registering plugin's state is read or anything in the economy is called, so no money moves. `scale()`, `thread(UUID)`, `probe()` and `EconomyProvider.vault` are not checked. A plugin's own `EconomyProvider` may make the same check; the interface allows it.
+
+### The funds check
+
+`VaultOptions.FundsCheck` names who decides whether a balance covers an amount. It exists from `0.3.2`; before it, the Vault provider always decided itself and never called Vault's `Economy.has`.
+
+| `VaultOptions.FundsCheck` | `has` | `withdraw` |
+|---|---|---|
+| `EMULATED` (the default) | Compares the balance read from the economy with the amount. | Reads the balance, gives `INSUFFICIENT` when it is short without asking the economy, withdraws, and reads the balance again to tell `OVERDRAWN`. |
+| `NATIVE` | Answers what `Economy.has` answers for the amount rounded half-even to `scale()` and sent as a `double`. | Reads no balance, before or after: `start` runs first, and `withdrawPlayer` decides. |
+
+`NATIVE` is an opt-in for an economy that allows an overdraft or a loan, or that keeps rules of its own. Under `EMULATED` a player with `5.00` and a credit line of `50.00` is refused a price of `20.00` before the economy is asked; under `NATIVE` the economy takes it and the result is `OK`.
+
+```java
+Detected<EconomyProvider> economy = EconomyProvider.vault(
+    VaultOptions.of(this, errors, scheduler.mode() == Scheduler.Mode.FOLIA)
+        .fundsCheck(VaultOptions.FundsCheck.NATIVE));
+```
+
+Under `NATIVE` a withdraw the economy refuses gives `FAILED` with the economy's message, or `the economy refused it` when it gives none, for a short balance too: a Vault response has no type for insufficient funds. A withdraw never gives `INSUFFICIENT` or `OVERDRAWN`, and one that leaves the balance below zero gives `OK`. A plugin that tells the player "not enough money" on `INSUFFICIENT` asks `has` first under `NATIVE`, or shows the message of the `FAILED` result. The amount, the calling thread and the disabled economy plugin are checked as under `EMULATED`, and `NOT_IMPLEMENTED` still gives `UNSUPPORTED`.
 
 ### EconomyResult
 
-`EconomyResult(Status status, @Nullable String message)`, with `EconomyResult.ok()`, `EconomyResult.of(Status)` and `EconomyResult.failed(String message)`. A `FAILED` result needs a non-blank message; `of(Status.FAILED)` throws `IllegalArgumentException`.
+`EconomyResult(Status status, @Nullable String message)`, with `EconomyResult.ok()`, `EconomyResult.of(Status)` and `EconomyResult.failed(String message)`. A `FAILED` result needs a non-blank message; `of(Status.FAILED)` throws `IllegalArgumentException`. From `0.3.2`, `moved()` tells whether the money moved: `true` for `OK` and `OVERDRAWN`, `false` for every other status.
 
 | `EconomyResult.Status` | Meaning |
 |---|---|
@@ -462,12 +523,14 @@ Every call is synchronous. A withdraw or deposit rounds the amount half-even to 
 | `INSUFFICIENT` | The balance did not cover the amount; no money moved. |
 | `UNSUPPORTED` | The economy does not support the call; no money moved. |
 | `OVERDRAWN` | The money moved and left the balance below zero. |
-| `FAILED` | The economy refused the call; `message()` holds its reason; no money moved. |
-| `NOT_STARTED` | `start` returned `false` after the balance check; no money moved. |
+| `FAILED` | The economy refused the call, or from `0.3.2` the plugin that registered it is disabled; `message()` holds the reason; no money moved. Under the [native funds check](#the-funds-check) this is also the result of a withdraw the economy refused for a short balance. |
+| `NOT_STARTED` | `start` returned `false` before any money moved. Under the native funds check no balance is checked first. |
+
+`OVERDRAWN` is a completed payment: the caller delivers the goods and may log it. A caller that does not want to accept an overdraft reverses it itself with `deposit`.
 
 ### Charging a player on Paper and Folia
 
-Run each call on the thread `thread(UUID)` names, through `Scheduler.dispatch`:
+Run each call on the thread `thread(UUID)` names, through `Scheduler.dispatch`. From `0.3.2` a call made on another thread throws `IllegalStateException`, which on Paper is an async thread and on Folia, under the default rule, every region thread:
 
 ```java
 void charge(Player player, BigDecimal price) {
@@ -481,7 +544,11 @@ void charge(Player player, BigDecimal price) {
         .whenComplete((result, failure) -> scheduler.entity(player, () -> {
             if (failure != null) {
                 player.sendPlainMessage("The payment could not be confirmed.");
-            } else if (result.status() == EconomyResult.Status.OK) {
+            } else if (result.moved()) {
+                if (result.status() == EconomyResult.Status.OVERDRAWN) {
+                    getLogger().warning(player.getName() + " paid " + price.toPlainString()
+                        + " and is overdrawn.");
+                }
                 player.sendPlainMessage("Paid " + price.toPlainString() + ".");
             } else {
                 player.sendPlainMessage("The payment did not go through.");
@@ -490,7 +557,7 @@ void charge(Player player, BigDecimal price) {
 }
 ```
 
-The future also fails when the plugin is disabling (`RejectedExecutionException` for `ThreadTag.GLOBAL`, before anything runs) or when the amount is refused with `IllegalArgumentException` before it reaches the economy. A withdraw that throws inside the economy has an unknown outcome, so the plugin does not refund or retry blindly.
+The future also fails when the plugin is disabling (`RejectedExecutionException` for `ThreadTag.GLOBAL`, before anything runs) or when the amount is refused with `IllegalArgumentException` before it reaches the economy. A withdraw that throws inside the economy has an unknown outcome, so the plugin does not refund or retry blindly. The example branches on `moved()`, so an `OVERDRAWN` withdraw, whose money has left the account, counts as paid; a branch on `status() == Status.OK` would keep that money and deliver nothing.
 
 ## Permissions
 
@@ -505,11 +572,11 @@ Plain permission checks go through Bukkit's `Player.hasPermission` and are not p
 | `List<String> groups(UUID player)` | Every group the player inherits, directly or through other groups, without context; empty when the data is not loaded or cannot be read. |
 | `boolean addGroup(UUID player, String group)` | Adds a permanent membership; `true` when the player was not already in the group and the change was saved. |
 | `boolean addTempGroup(UUID player, String group, Duration duration)` | Adds a membership until a time from now, in whole seconds rounded down. An earlier expiry is moved to the new time; a later one is kept; a permanent membership is left and the temporary one added beside it. Throws `IllegalArgumentException` for under one second or an end after `Instant.MAX`. |
-| `boolean removeGroup(UUID player, String group)` | Removes a membership. |
-| `boolean setPermission(UUID player, String node, boolean value)` | Grants (`true`) or denies (`false`) a node, without context. |
+| `boolean removeGroup(UUID player, String group)` | Removes every membership of the group set directly on the player, permanent or temporary, in every context, in saved data only; `true` when the player held at least one and the change was saved. |
+| `boolean setPermission(UUID player, String node, boolean value)` | Grants (`true`) or denies (`false`) a node, without context and without an expiry, replacing a node of that name already set without context; `false` when the player already holds it at that value. |
 | `boolean unsetPermission(UUID player, String node)` | Clears a node set directly on the player, whatever its value or context, in saved data only. |
 
-Reads come from LuckPerms' cache, so a player whose data is not loaded (usually one who is offline) gives `null` or an empty list. Writes load the player's data when it is not cached, then block until the change is saved, so run them off the server thread:
+Reads come from LuckPerms' cache, so a player whose data is not loaded (usually one who is offline) gives `null` or an empty list. Writes load the player's data when it is not cached, then block until the change is saved, so run them off the server thread; from `0.3.2` a write called on a server thread throws `IllegalStateException`:
 
 ```java
 PermissionProvider perms = permissions.provider();
@@ -519,7 +586,15 @@ if (perms != null) {
 }
 ```
 
+From `0.3.2`, `addGroup`, `addTempGroup`, `removeGroup`, `setPermission` and `unsetPermission` throw `IllegalStateException` when called on a server thread, with a message that names the calling thread and `Scheduler.async`. Before `0.3.2` the rule was documentation only, and a write from an event handler held the tick for a storage round trip. A server thread is one `Server.isPrimaryThread()` is `true` on: the main thread on Paper, and every region thread and the global region thread on Folia. The check comes after the arguments are checked and before LuckPerms is asked, so nothing is loaded or changed, and it is made whether or not LuckPerms is available. `available`, `primaryGroup` and `groups` are not checked. A write made in `onDisable` throws as well: it runs on a server thread, `Scheduler.async` returns `false` once the plugin is disabling and never runs the task, and `Scheduler.asyncOrRun` runs it on the calling server thread, where the write throws. Make that write before the plugin disables.
+
 A write returns `true` only when the data changed and was saved, and `false` when nothing changed, LuckPerms is not available, or the write failed. A failure inside LuckPerms is logged as a warning (at most once a minute per kind of call, with its stack the first time) and reported under `hook.luckperms`, not thrown.
+
+From `0.3.2`, a saved write is pushed to the other servers of a network: after a successful save the provider calls `pushUserUpdate` on LuckPerms' `MessagingService` when one is set up, so a server that has the player's data loaded applies the change without waiting for its next sync. With no messaging service nothing is pushed. A push that throws is logged as a warning and reported under `hook.luckperms`, and the write still returns `true`, since the change is saved. Before `0.3.2` the provider saved the change and pushed nothing.
+
+From `0.3.2`, `removeGroup` removes a membership that `addTempGroup` added, and one held in a context. Before `0.3.2` it removed only a permanent membership without context, so a rank granted for 30 days and revoked early stayed, and the call returned `false`. The group name is matched without regard to case. A membership held for the session only, or inherited through another group, is left in place.
+
+From `0.3.2`, `setPermission` changes a node the player already holds: every node of that name set directly on the player without context is replaced, so a granted node becomes denied, a denied one granted, and a temporary one permanent, with one save. Before `0.3.2`, `setPermission(player, "fly.use", false)` on a player who held `fly.use` granted returned `false`, saved nothing and left the permission granted. It returns `false` with nothing saved only when the player already holds the node without context and without an expiry at that value. A node of the same name set in a context is left as it is, and only saved data is changed. Only a plain permission node is counted as held and replaced: a node LuckPerms keeps as another kind under that name, such as the group membership `group.vip`, is left as it is. When LuckPerms refuses the new node once the held ones are cleared, that is logged as a warning and reported under `hook.luckperms`, and the call still saves and returns `true`, since the held nodes are gone.
 
 ## Regions
 
@@ -701,7 +776,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 |---|---|
 | `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, and an item that could not be built. |
 | `hook.vault` | A lookup that failed, once per lookup. |
-| `hook.luckperms` | A failed detection, and every failed call. |
+| `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
 | `hook.worldguard` | A failed detection, and every failed lookup. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
@@ -718,8 +793,8 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
 | `CustomItems.close` | The server thread, before the plugin detects again. |
-| `EconomyProvider` calls | The thread `thread(UUID)` names. |
-| `PermissionProvider` writes | Off the server thread; they block until saved. |
+| `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. |
+| `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. Before detecting again, the server's global thread. |

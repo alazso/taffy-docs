@@ -13,7 +13,7 @@ description: JDBC storage over HikariCP for SQLite, MySQL, MariaDB and PostgreSQ
 | `Migration` | One numbered schema step, located by its script name. |
 | `Baseline` | The version table of the plugin's previous migration runner, taken over once. |
 | `Tx`, `TxWork` | The open transaction, and the work run inside it. |
-| `Params`, `Row` | Typed placeholder binding and column reading: UUID, text, integer, money, time, JSON, bytes. |
+| `Params`, `Row` | Typed placeholder binding and column reading: UUID, text, integer, money, decimal, time, JSON, bytes. |
 | `MoneyColumn` | Stores an amount as a whole number at 4 decimal places. |
 | `StorageException`, `CommitUnknownException`, `MoneyOutOfRangeException` | A failure for the server owner, a commit with an unknown outcome, an amount out of range. |
 
@@ -273,6 +273,8 @@ public CompletableFuture<Boolean> deposit(UUID player, BigDecimal amount) {
 | `integer(long)`, `integer(Long)` | `integer(String)` returns `Long` | A whole number; a `null` `Long` binds `NULL` typed `BIGINT`. |
 | `money(BigDecimal)` | `money(String)` | A `BIGINT` at 4 decimal places, through `MoneyColumn.toStored`. |
 | `moneyOrNull(BigDecimal)` | `money(String)` | A signed amount through `MoneyColumn.toStoredOrNull`: an amount above `MoneyColumn.MAX` in magnitude binds `NULL`. |
+| `signedMoney(BigDecimal)` | `money(String)` | A signed amount through `MoneyColumn.toStoredSigned`: an amount above `MoneyColumn.MAX` in magnitude throws `MoneyOutOfRangeException`. From `0.3.2`. |
+| `decimal(BigDecimal)` | `decimal(String)` | A decimal number of any magnitude, unscaled: a `DECIMAL` on MySQL and MariaDB, a `NUMERIC` on PostgreSQL, text on SQLite. From `0.3.2`. |
 | `time(Instant)` | `time(String)` | Milliseconds since the epoch in a `BIGINT`; precision below a millisecond is dropped. |
 | `json(String)` | `json(String)` | `Types.OTHER` on PostgreSQL (fits `json` and `jsonb`), a string elsewhere. |
 | `bytes(byte[])` | `bytes(String)` | A byte array. |
@@ -280,6 +282,64 @@ public CompletableFuture<Boolean> deposit(UUID player, BigDecimal amount) {
 `Row.json` returns a normalized document for a MySQL `JSON` column and a PostgreSQL `jsonb` column, which may differ from the stored text in whitespace, key order and duplicate keys. MariaDB, SQLite and a PostgreSQL `json` column return the stored text.
 
 `MoneyColumn.SCALE` is 4 and `MoneyColumn.MAX` is `Long.MAX_VALUE` at 4 decimal places. `12.5` is stored as `125000`, so stored values sort numerically on every database. `toStored` rounds half even and throws `MoneyOutOfRangeException` (an `IllegalArgumentException`) for an amount of `-0.0001` or less, or above `MAX`. An amount whose magnitude is below `0.0001` is stored as 0 whatever its sign. `fromStored(long)` decodes.
+
+A balance that may be negative is bound with `signedMoney` or `moneyOrNull`. Both encode like `money` and differ only above `MoneyColumn.MAX` in magnitude: `signedMoney` (from `0.3.2`) throws `MoneyOutOfRangeException`, so the transaction rolls back and the caller sees the failure, and `moneyOrNull` binds `NULL`, so the row is written without the balance.
+
+### Amounts above the money ceiling
+
+`MoneyColumn.MAX` is `922337203685477.5807`, about 9.22e14. A prison, tycoon or skyblock economy passes it, and `money` then throws on every save of that balance. From `0.3.2`, `Params.decimal(BigDecimal)` and `Row.decimal(String)` bind and read a `BigDecimal` without scaling or rounding it, for a column the migration script of each dialect declares:
+
+| Dialect | Column type | Bound as |
+|---|---|---|
+| MySQL, MariaDB | `DECIMAL(precision, scale)`, up to 65 digits | `setBigDecimal` |
+| PostgreSQL | `NUMERIC`, or `NUMERIC(precision, scale)` | `setBigDecimal` |
+| SQLite | `TEXT` | The text of `BigDecimal.toString`, which keeps every digit and the scale. |
+
+<Tabs items={['SQLite', 'MariaDB', 'PostgreSQL']}>
+<Tab value="SQLite">
+```sql title="db/migration/sqlite/V1__accounts.sql"
+CREATE TABLE ${prefix}accounts (
+    player BLOB NOT NULL PRIMARY KEY,
+    balance TEXT NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+```
+</Tab>
+<Tab value="MariaDB">
+```sql title="db/migration/mariadb/V1__accounts.sql"
+CREATE TABLE IF NOT EXISTS ${prefix}accounts (
+    player BINARY(16) NOT NULL PRIMARY KEY,
+    balance DECIMAL(65, 4) NOT NULL,
+    updated_at BIGINT NOT NULL
+) ENGINE = InnoDB;
+```
+</Tab>
+<Tab value="PostgreSQL">
+```sql title="db/migration/postgres/V1__accounts.sql"
+CREATE TABLE ${prefix}accounts (
+    player UUID NOT NULL PRIMARY KEY,
+    balance NUMERIC NOT NULL,
+    updated_at BIGINT NOT NULL
+);
+```
+</Tab>
+</Tabs>
+
+```java
+tx.update("UPDATE " + tx.table("accounts") + " SET balance = ?, updated_at = ? WHERE player = ?",
+    params -> params.decimal(balance).time(tx.now()).uuid(player));
+
+Optional<BigDecimal> balance = tx.queryOne(
+    "SELECT balance FROM " + tx.table("accounts") + " WHERE player = ?",
+    params -> params.uuid(player), row -> row.decimal("balance"));
+```
+
+The limits of a decimal column:
+
+- **SQLite compares the stored values as text.** `ORDER BY`, `<`, `>`, `MIN` and `MAX` over the column are not numeric there: `10` sorts before `9`. Arithmetic in SQL, such as `SUM` or `balance = balance + ?`, converts the text to a floating-point number there and loses digits, so read the value, compute in Java and write it back inside one transaction. A top list over a decimal column is sorted in Java on SQLite, and a column that is sorted or compared in SQL on every database stays a `money` column.
+- **A SQLite column declared `NUMERIC` or `DECIMAL` loses digits.** SQLite converts the text to a floating-point number in such a column and keeps about 15 digits. Declare it `TEXT`.
+- **The declared precision and scale are the range.** The database rounds a value to the declared scale and decides what happens to one with more digits than the declared precision. Taffy checks neither.
+- **`Row.decimal` returns the scale the column holds**, which may differ from the scale that was bound (`DECIMAL(65, 4)` returns `12.5000` for `12.5`), so compare with `compareTo`, not `equals`. On SQLite, text that is not a decimal number throws `SQLException`.
 
 ### Dialect SQL
 
