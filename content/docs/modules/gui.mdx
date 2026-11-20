@@ -789,6 +789,7 @@ Behaviour of an ask:
 - An answer function that throws a `RuntimeException` or returns `null` is logged, reported under `gui.prompt`, and the player is told `gui.error` and returned to `origin`.
 - The chat handlers run at `LOWEST` with `ignoreCancelled = false`, so a mute plugin cannot leave a prompt waiting. The answer line is cancelled and never modified. From `0.3.0`, its audience is emptied too (`AsyncChatEvent.viewers()` and `AsyncPlayerChatEvent.getRecipients()`, where the set can be changed), so a chat plugin that delivers cancelled lines has nobody to deliver the answer to. The event still reaches every handler that does not ignore cancelled events, at any priority, and such a handler can read the answer. A line from a player with no chat prompt is left alone.
 - Paper posts the legacy `AsyncPlayerChatEvent` and then `AsyncChatEvent` for one chat line. From `0.3.0`, the line is judged once: after a refused answer, or an answer whose function asked again, the second event no longer answers the ask waiting by then with the same text.
+- A plugin with two `Menus` builds its `Prompts` over one of them: an ask of one `Prompts` does not end a pending ask of another, and one chat line would answer both.
 - The anvil is a virtual anvil at a repair cost of 0, holding a marked paper. Every click and drag on it is cancelled, a click on its result slot submits the name field, and closing it cancels the ask. Another inventory opening over it ends the ask with no message.
 
 ### When an ask opens no menu
