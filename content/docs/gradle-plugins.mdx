@@ -66,23 +66,27 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 
 | Name | URL | Content |
 |---|---|---|
-| `MavenRepo` | Maven Central | everything |
-| `papermc` | `https://repo.papermc.io/repository/maven-public/` | everything |
-| `alazso` | `https://repo.alaz.so/releases` | releases of the `so.alaz` group and its subgroups only |
-| `alazsoSnapshots` | `https://repo.alaz.so/snapshots` | snapshots of the `so.alaz` group and its subgroups only |
-| `placeholderapi` | `https://repo.extendedclip.com/releases/` | everything |
-| `faststats` | `https://repo.faststats.dev/releases` | everything |
-| `jitpack` | `https://jitpack.io` | everything |
-| `vaultunlocked` | `https://repo.codemc.io/repository/creatorfromhell/` | everything |
-| `playerpoints` | `https://repo.rosewooddev.io/repository/public/` | everything |
-| `oraxen` | `https://repo.oraxen.com/releases` | everything |
-| `nexo` | `https://repo.nexomc.com/releases` | everything |
-| `enginehub` | `https://maven.enginehub.org/repo/` | everything |
-| `fancyinnovations` | `https://maven.fancyspaces.net/fancyinnovations/releases` | the `de.oliver` group only |
-| `thenextlvl` | `https://repo.thenextlvl.net/releases` | the `net.thenextlvl` group only |
-| `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | the `com.github.retrooper` group only |
+| `MavenRepo` | Maven Central | releases of every group except `so.alaz` and its subgroups |
+| `papermc` | `https://repo.papermc.io/repository/maven-public/` | `io.papermc` and its subgroups, `com.mojang`, `net.md-5` |
+| `alazso` | `https://repo.alaz.so/releases` | releases of the `so.alaz` group and its subgroups |
+| `alazsoSnapshots` | `https://repo.alaz.so/snapshots` | snapshots of the `so.alaz` group and its subgroups |
+| `placeholderapi` | `https://repo.extendedclip.com/releases/` | `me.clip` |
+| `faststats` | `https://repo.faststats.dev/releases` | `dev.faststats.metrics` |
+| `vaultunlocked` | `https://repo.codemc.io/repository/creatorfromhell/` | `net.milkbowl.vault` |
+| `playerpoints` | `https://repo.rosewooddev.io/repository/public/` | `org.black_ixx` |
+| `oraxen` | `https://repo.oraxen.com/releases` | `io.th0rgal`, `md.thomas.hopper` |
+| `nexo` | `https://repo.nexomc.com/releases` | `com.nexomc`, `com.tcoded`, `me.gabytm.util`, `team.unnamed` |
+| `enginehub` | `https://maven.enginehub.org/repo/` | `com.sk89q`, `org.enginehub` and their subgroups |
+| `fancyinnovations` | `https://maven.fancyspaces.net/fancyinnovations/releases` | `de.oliver` |
+| `thenextlvl` | `https://repo.thenextlvl.net/releases` | `net.thenextlvl` |
+| `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | `com.github.retrooper` |
+| `jitpack` | `https://jitpack.io` | `com.github.MilkBowl`, `com.github.Arcaniax-Development`, `com.github.decentsoftware-eu`, `com.github.HologramLib`, `com.github.maximjsx.EntityLib` |
 
-The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`.
+Gradle asks a repository only for the groups in its Content column. A row that names subgroups covers every group below the ones it names, and every other group is matched exactly. The groups are the ones the `alaz` catalog's entries and their dependencies come from. The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`.
+
+From `0.2.0`, every repository except Maven Central has a content filter and `jitpack` is last. Before `0.2.0`, only `alazso`, `alazsoSnapshots` and the three hologram rows had one, `jitpack` stood between `faststats` and `vaultunlocked`, and the other repositories were asked for any module an earlier repository lacked. A build that took a module of another group from one of these repositories now fails with `Could not find` for that module, and declares the repository itself, as shown below.
+
+From `0.2.0`, `alazso` and `alazsoSnapshots` are declared through Gradle's `exclusiveContent`, so the `so.alaz` group and its subgroups resolve from those two repositories and from no other, Maven Central and a repository the build adds included. A `mavenLocal()` in `dependencyResolutionManagement.repositories` is therefore not asked for a locally published Taffy. [Build against a snapshot or a local publish](/docs/getting-started#build-against-a-snapshot-or-a-local-publish) shows how to point `alazsoSnapshots` at the local Maven repository.
 
 The plugin sets `RepositoriesMode.PREFER_SETTINGS`: Gradle ignores a repository declared in a project build script. A build that needs another repository declares it in `settings.gradle.kts`:
 

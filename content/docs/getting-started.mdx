@@ -47,7 +47,7 @@ plugins {
 rootProject.name = "myplugin"
 ```
 
-`so.alaz.taffy.repositories` declares every repository the build needs in `dependencyResolutionManagement`: Maven Central, Paper, `repo.alaz.so` releases and snapshots (for the `so.alaz` group and its subgroups only), FastStats, and the repositories of the integration APIs in the catalog, such as PlaceholderAPI, Oraxen, Nexo, EngineHub and JitPack. It also applies the foojay toolchain resolver, so Gradle downloads a Java 25 JDK for compiling when none is installed. It sets `RepositoriesMode.PREFER_SETTINGS`, so a `repositories` block in `build.gradle.kts` is ignored: add any extra repository to `dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
+`so.alaz.taffy.repositories` declares every repository the build needs in `dependencyResolutionManagement`: Maven Central, Paper, `repo.alaz.so` releases and snapshots (for the `so.alaz` group and its subgroups only), FastStats, and the repositories of the integration APIs in the catalog, such as PlaceholderAPI, Oraxen, Nexo, EngineHub and JitPack. From `0.2.0`, each of these except Maven Central is asked only for the groups the catalog takes from it, which [so.alaz.taffy.repositories](/docs/gradle-plugins#soalaztaffyrepositories) lists. It also applies the foojay toolchain resolver, so Gradle downloads a Java 25 JDK for compiling when none is installed. It sets `RepositoriesMode.PREFER_SETTINGS`, so a `repositories` block in `build.gradle.kts` is ignored: add any extra repository to `dependencyResolutionManagement.repositories` in `settings.gradle.kts`.
 
 </Step>
 <Step>
@@ -434,7 +434,7 @@ In a checkout of Taffy, publish the Gradle plugins, the catalog and every module
 ./gradlew publishToMavenLocal
 ```
 
-They are published at the version in Taffy's `gradle.properties`, the next release with `-SNAPSHOT` appended, written `<next>-SNAPSHOT` below. In the plugin, add `mavenLocal()` to both `pluginManagement.repositories`, for the Gradle plugins, and `dependencyResolutionManagement.repositories`, for the catalog and the modules, and apply the settings plugin at that version:
+They are published at the version in Taffy's `gradle.properties`, the next release with `-SNAPSHOT` appended, written `<next>-SNAPSHOT` below. In the plugin, add `mavenLocal()` to `pluginManagement.repositories`, for the Gradle plugins, set the URL of the `alazsoSnapshots` repository to the local Maven repository, for the catalog and the modules, and apply the settings plugin at that version:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
@@ -450,15 +450,15 @@ plugins {
 }
 
 dependencyResolutionManagement {
-    repositories {
-        mavenLocal()
+    repositories.named<MavenArtifactRepository>("alazsoSnapshots") {
+        url = uri(File(System.getProperty("user.home"), ".m2/repository"))
     }
 }
 
 rootProject.name = "myplugin"
 ```
 
-The catalog follows the settings plugin's version, so every `alaz.taffy.*` alias points at that version. The `mavenLocal()` in `dependencyResolutionManagement` comes after the repositories `so.alaz.taffy.repositories` declares, and Gradle takes a module from the first repository that holds it, so when `https://repo.alaz.so/snapshots` holds the same snapshot version, the catalog and the modules resolve from there rather than from the local publish. Run `./gradlew publishToMavenLocal` in Taffy again after each change there.
+The catalog follows the settings plugin's version, so every `alaz.taffy.*` alias points at that version. From `0.2.0`, the `so.alaz` groups resolve only from the `alazso` and `alazsoSnapshots` repositories, so a `mavenLocal()` in `dependencyResolutionManagement.repositories` is not asked for them; before `0.2.0` it was, after the repositories `so.alaz.taffy.repositories` declares. With the URL of `alazsoSnapshots` set as above, the catalog and the modules come from the local publish, and `https://repo.alaz.so/snapshots` is not asked. `~/.m2/repository` is where Maven keeps its local repository unless `settings.xml` or `maven.repo.local` moves it. Run `./gradlew publishToMavenLocal` in Taffy again after each change there.
 
 </Tab>
 <Tab value="Snapshot">
