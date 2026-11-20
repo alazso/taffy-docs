@@ -353,7 +353,7 @@ if (found.id() != null) {
 | `statuses()` | One `HookStatus` per `CustomItemPlugin`, read now: `LOADING`, `ON` or `NOT_ENABLED` for a plugin that is on, the detected state for every other. |
 | `close()` | From `0.3.1`. Unregisters every listener `detect` registered for the owner. A second call does nothing. |
 
-A plugin that is on but no longer enabled, or still loading its items, is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
+A plugin that is on but no longer enabled is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that is still loading its items is skipped by `create`. In `resolve`, ItemsAdder is skipped while it loads and counts as a failure, because it reads ids from the items it has loaded; from `0.3.1`, Nexo and Oraxen can also be loading, and `resolve` still asks them, because they read the id from the item's own data. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
 
 ### Why no item was built
 
@@ -388,7 +388,7 @@ A later version may add reasons, so a `switch` over `Built.Reason` keeps a `defa
 ### Per plugin
 
 - **ItemsAdder** is `LOADING` until ItemsAdder fires `ItemsAdderLoadDataEvent`, or `ON` at once when it had loaded its items before detection. Its integration registers a listener for the owner, so `detect` runs while the owner is enabled, normally in `onEnable`. The listener stays until the owner disables, or until `close()` is called on the `CustomItems`.
-- **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items.
+- **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items. From `0.3.1`, Nexo is `LOADING` until it fires `NexoItemsLoadedEvent` and Oraxen until it fires `OraxenItemsLoadedEvent`, or `ON` at once when the plugin already knows an item name at detection. While one of them is `LOADING`, `create` skips it, `build` gives `NOT_READY` and `ready()` is `false`, and `resolve` and `idOrNull` still read its ids. Each integration registers a listener for the owner, as the ItemsAdder one does. A Nexo or Oraxen that loaded with no item at all knows no item name, so after a later `detect` it reads `LOADING` until its next items-loaded event.
 - **HeadDatabase** only builds heads: `hdb:1234` builds head `1234`. It is never asked for an id and never counts as a failure in `resolve`. It knows no id until it has loaded its database shortly after startup, so `create` returns `null` until then.
 
 `CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item.
@@ -404,7 +404,7 @@ void reloadItems() {
 }
 ```
 
-Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
+Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo and Oraxen listeners. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
 
 ## Economy
 
