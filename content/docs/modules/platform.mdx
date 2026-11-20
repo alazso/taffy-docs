@@ -607,10 +607,23 @@ skulls.fromName("Notch").thenAccept(head ->
 The executor must run tasks off the calling thread, since a lookup blocks on the network, and must throw
 `RejectedExecutionException` when it cannot take a task, as `Scheduler.asyncExecutor()` does. The future completes
 on the executor's thread, or on the calling thread for a cached texture, so inventory or entity work is scheduled
-back onto the owning thread. Resolved textures are cached per instance; failed lookups are not. A lookup the
-executor accepted but never runs, as can happen to a task scheduled just before the plugin disables, leaves its
-future, and every later future for the same name or uuid from that instance, incomplete. A lookup that throws an
-`Error` completes its future exceptionally.
+back onto the owning thread. A lookup the executor accepted but never runs, as can happen to a task scheduled just
+before the plugin disables, leaves its future, and every later future for the same name or uuid from that
+instance, incomplete. A lookup that throws an `Error` completes its future exceptionally.
+
+Lookups are cached per instance. From `0.2.0`, the cache expires and has a size bound:
+
+| Lookup | Kept for | Calls in that time |
+| --- | --- | --- |
+| Resolved a texture | 60 minutes from the moment it completed | get a head with that texture, with no lookup |
+| Found no texture, or threw | 2 minutes from the moment it completed | get a blank head, with no lookup |
+| Threw an `Error` | 2 minutes from the moment it completed | complete exceptionally, with no lookup |
+| Rejected by the executor | not kept | start a new lookup |
+
+After that time the next call looks the name or uuid up again, so a skin change shows within 60 minutes. One
+`SkullBuilder` caches at most 1000 names and uuids: a new one past that drops the one whose lookup started longest
+ago. In `0.1` a resolved texture stayed for the life of the instance and a failed lookup was not cached, so a call
+right after a blank head looked the name up again. From `0.2.0` that call gets the same blank head for 2 minutes.
 
 ### Items, InventoryFit and PdcKey
 
