@@ -628,8 +628,36 @@ round-trips exactly:
 | `isSerialized(String)` | whether the reference starts with the prefix |
 | `serialize(ItemStack)` | the item as a `serialized:<base64>` reference |
 | `deserialize(String)` | the exact item, or `null` when the reference is malformed or from an incompatible server version |
+| `deserializeOrThrow(String)` | the exact item, or an `IllegalArgumentException` that says why there is none (from `0.3.1`) |
 
 `deserialize` skips the prefix by length without checking it, so check the reference with `isSerialized` first.
+It returns `null` for every failure, a `null` reference included, and logs nothing.
+
+From `0.3.1`, `deserializeOrThrow` reads the same reference and throws `IllegalArgumentException` where
+`deserialize` returns `null`. Its message tells three failures apart, and the original exception is the cause:
+
+| Failure | Message starts with | Cause |
+|---|---|---|
+| the reference does not start with `serialized:` | `Item reference does not start with 'serialized:'` | none |
+| the text after the prefix is not base64 | `Item reference holds invalid base64 after 'serialized:'` | the decoder's `IllegalArgumentException` |
+| the server refused the bytes, which are corrupt or were written by a newer data version | `The server refused the bytes of the item reference` | the exception the server threw |
+
+Unlike `deserialize`, it checks the prefix, and a `null` reference throws `NullPointerException`. A plugin that
+stores items uses it to log why a stored item is gone, such as after a server downgrade:
+
+```java
+try {
+    ItemStack item = ItemBuilder.deserializeOrThrow(stored);
+    give(player, item);
+} catch (IllegalArgumentException ex) {
+    getLogger().log(Level.WARNING, "Listing " + id + " holds an item that cannot be read", ex);
+}
+```
+
+`serialize` hands the item to `ItemStack.serializeAsBytes()` as it is and catches nothing that call throws. An
+empty stack (air, or an amount of 0) has no reference: the server throws for it, and a `null` item throws
+`NullPointerException`. Check `item.isEmpty()` first and store the absence of an item your own way, such as a
+`NULL` column.
 
 ### SkullBuilder
 
