@@ -346,10 +346,12 @@ plugins {
 | [Menu settings, layouts and parts are built through factories](#menu-settings-layouts-and-parts-are-built-through-factories) | every plugin that builds a `MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` or `Menus.Parts` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
 | [MenuLayout takes its items as a collection](#menulayout-takes-its-items-as-a-collection) | a plugin that passed a map of items to `MenuLayout` | pass `map.values()` or a list |
 | [Menus and Prompts register their own listeners](#menus-and-prompts-register-their-own-listeners) | every plugin that builds a `Menus` | pass the plugin to `Menus.Parts.of` and delete both `registerEvents` calls |
+| [Menus.listener() and Prompts.listener() register nothing](#menuslistener-and-promptslistener-register-nothing) | a plugin that passes `menus.listener()` or `prompts.listener()` to `registerEvents` | delete the `registerEvents` calls |
 | [A click just after a redraw is dropped](#a-click-just-after-a-redraw-is-dropped) | a menu whose list rows change their icon on a redraw, such as an animated row, and a plugin with a record pattern over `Frame.Entry` | give each clickable row a `key`, and add a fifth component to the pattern |
 | [Menus and Prompts check the calling thread](#menus-and-prompts-check-the-calling-thread) | a plugin that calls `Menus.open`, `Menus.rerender`, `Menus.load` or `Prompts.ask` from a thread that does not own the viewer, such as a storage callback | call `openLater`, `rerenderLater` or `askLater`, and hop to the viewer's thread before `load` |
 | [PromptRequest has a fifth component](#promptrequest-has-a-fifth-component) | a plugin with a record pattern over `PromptRequest`; every `new PromptRequest(question, initial, origin, answer)` still compiles | add a fifth component to the pattern |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
+| [Answer has a third result](#answer-has-a-third-result) | a plugin with a `switch` over `Answer` that has no `default` branch | add a `default` branch, or a case for `Answer.Later` |
 | [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
 
 ### Menus refuse a material that is not an item
@@ -363,6 +365,21 @@ stack trace.
 **Migration:** give each of these an item material. A plugin that reads layouts or settings from a file catches
 the `IllegalArgumentException` of `register` and `reload` and shows its message to the owner, as
 [Reload](/docs/modules/gui#reload) shows; a refused `reload` leaves the layouts as they were.
+
+```java title="0.2"
+// MenuLayouts.shop() holds ItemLayout.of("buy", List.of(13), Material.WALL_TORCH).action("buy")
+menus.register(new ShopMenu(menus));   // registers, and every open of the shop menu fails
+```
+
+```java title="0.3.0"
+// MenuLayouts.shop() holds ItemLayout.of("buy", List.of(13), Material.TORCH).action("buy")
+try {
+    menus.register(new ShopMenu(menus));
+} catch (IllegalArgumentException e) {
+    // "item buy of the shop menu has the material WALL_TORCH, which is not an item" for the layout of 0.2
+    getLogger().warning("The shop menu is not registered: " + e.getMessage());
+}
+```
 
 ### Menu settings, layouts and parts are built through factories
 
@@ -384,8 +401,22 @@ default.
 | `new MenuLayout(menu, rows, filler, pager, items, title)` | `MenuLayout.of(menu, rows).filler(filler).pager(pager).items(items.values()).title(title)` | no filler, list, items or title |
 | `new Menus.Parts(layouts, settings, messages, locales, server, preview, tasks, entity, sounds, home, logger, errors)` | `Menus.Parts.of(plugin, messages, tasks, entity, errors).layouts(layouts).settings(settings).locales(locales).sounds(sounds).home(home)` | no layouts, `MenuSettings.DEFAULTS`, `Player::locale`, no sounds, no home menu, and the plugin's own server, logger and `new NamespacedKey(plugin, "preview")` |
 
-[Building a layout in code](/docs/modules/gui#building-a-layout-in-code) and
-[Enable and disable](/docs/modules/gui#enable-and-disable) show each in a plugin.
+```java title="0.2"
+MenuSettings settings = new MenuSettings(28, Material.GRAY_STAINED_GLASS_PANE, Duration.ofMillis(400),
+    Material.CLOCK);
+PagerLayout list = new PagerLayout(List.of(10, 11, 12, 13, 14, 15, 16), 13, Material.PAPER);
+ItemLayout close = new ItemLayout("close", List.of(26), Material.BARRIER, MenuKind.CLOSE, null, true, null, null);
+```
+
+```java title="0.3.0"
+MenuSettings settings = MenuSettings.DEFAULTS.pageSize(28).clickDebounce(Duration.ofMillis(400));
+PagerLayout list = PagerLayout.of(List.of(10, 11, 12, 13, 14, 15, 16)).emptySlot(13).emptyMaterial(Material.PAPER);
+ItemLayout close = ItemLayout.of("close", List.of(26), Material.BARRIER).action(MenuKind.CLOSE);
+```
+
+`ItemLayout.of(id, slots, material)` and the `ItemLayout` methods that replace a value are there in `0.2` too, so
+an item built through them needs no change. [Building a layout in code](/docs/modules/gui#building-a-layout-in-code)
+and [Enable and disable](/docs/modules/gui#enable-and-disable) show each type in a plugin.
 
 ### MenuLayout takes its items as a collection
 
@@ -396,6 +427,22 @@ twice". `MenuLayout.item(ItemLayout)` adds one item, or replaces the item of the
 `MenuLayout.items()` still returns the map.
 
 **Migration:** pass `map.values()` where the plugin built a map, or build a list.
+
+```java title="0.2"
+Map<String, ItemLayout> items = new LinkedHashMap<>();
+items.put("back", ItemLayout.of("back", List.of(45), Material.ARROW).action(MenuKind.BACK));
+items.put("close", ItemLayout.of("close", List.of(53), Material.BARRIER).action(MenuKind.CLOSE));
+MenuLayout layout = new MenuLayout("warps", 6, Material.BLACK_STAINED_GLASS_PANE, list, items, null);
+```
+
+```java title="0.3.0"
+MenuLayout layout = MenuLayout.of("warps", 6)
+    .filler(Material.BLACK_STAINED_GLASS_PANE)
+    .pager(list)
+    .items(List.of(
+        ItemLayout.of("back", List.of(45), Material.ARROW).action(MenuKind.BACK),
+        ItemLayout.of("close", List.of(53), Material.BARRIER).action(MenuKind.CLOSE)));
+```
 
 ### Menus and Prompts register their own listeners
 
@@ -410,17 +457,43 @@ The server, the logger and the preview key are no longer required: they default 
 that is not enabled with an `IllegalPluginAccessException`, so the menus are built while the plugin is enabled,
 such as in `onEnable`.
 
-`Menus.listener()` and `Prompts.listener()` are deprecated and a later release removes them. Each returns a
-listener with no event handler, so a `registerEvents` call left in a plugin registers nothing and cannot register
-the menus or the prompts twice.
-
 **Migration:** pass the plugin to `Menus.Parts.of`, add `.preview(key)` when the plugin's preview key is not
 `new NamespacedKey(plugin, "preview")`, and delete both `registerEvents` calls.
 
-```java
-menus = new Menus(Menus.Parts.of(this, messages, scheduler::entity, EntityThread.on(scheduler, getServer()), errors)
-    .layouts(layouts));
+```java title="0.2"
+menus = new Menus(new Menus.Parts(layouts, MenuSettings.DEFAULTS, messages, Player::locale, getServer(),
+    new NamespacedKey(this, "preview"), scheduler::entity, EntityThread.on(scheduler, getServer()),
+    () -> sounds, null, getLogger(), errors));
 Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
+getServer().getPluginManager().registerEvents(menus.listener(), this);
+getServer().getPluginManager().registerEvents(prompts.listener(), this);
+```
+
+```java title="0.3.0"
+menus = new Menus(Menus.Parts.of(this, messages, scheduler::entity, EntityThread.on(scheduler, getServer()), errors)
+    .layouts(layouts)
+    .sounds(() -> sounds));
+Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
+```
+
+### Menus.listener() and Prompts.listener() register nothing
+
+`Menus.listener()` and `Prompts.listener()` are deprecated and a later release removes them. Each returns a
+listener with no event handler, so a `registerEvents` call left in a plugin registers nothing and cannot register
+the menus or the prompts twice. In `0.2` each returned the listener that guards the menus or takes the prompt
+answers, for the plugin to register.
+
+**Migration:** delete the calls that pass them to `registerEvents`. `new Menus(parts)` and
+`new Prompts(menus, ...)` have registered both listeners by then.
+
+```java title="0.2"
+Prompts prompts = new Prompts(menus, PromptMode.CHAT, BedrockPlayers.NONE, scheduler::delayedAsync);
+getServer().getPluginManager().registerEvents(menus.listener(), this);
+getServer().getPluginManager().registerEvents(prompts.listener(), this);
+```
+
+```java title="0.3.0"
+Prompts prompts = new Prompts(menus, PromptMode.CHAT, BedrockPlayers.NONE, scheduler::delayedAsync);
 ```
 
 ### Menus and Prompts check the calling thread
@@ -436,6 +509,18 @@ once `Menus.shutdown` ran.
 `Menus.openLater`, `Menus.rerenderLater` or `Prompts.askLater`, which schedule the work on the viewer's entity
 thread. Call `Menus.load` from `Menu.opened` or a click handler, or hop to the viewer's thread first through
 `EntityThread.call`.
+
+```java title="0.2"
+storage.save(warp).thenRun(() -> menus.rerender(session));
+storage.find(name).thenAccept(warp -> menus.open(player, new Route("warp", warp, null)));
+storage.count(owner).thenRun(() -> prompts.ask(player, request));
+```
+
+```java title="0.3.0"
+storage.save(warp).thenRun(() -> menus.rerenderLater(session));
+storage.find(name).thenAccept(warp -> menus.openLater(player, new Route("warp", warp, null)));
+storage.count(owner).thenRun(() -> prompts.askLater(player, request));
+```
 
 ### A click just after a redraw is dropped
 
@@ -455,6 +540,20 @@ component.
 redraw, such as an animated one, otherwise drops the clicks of the window after each redraw.
 [Frame](/docs/modules/gui#frame) shows a keyed list.
 
+```java title="0.2"
+Frame.Entry row = Frame.Entry.click(icon(listing), click -> buy(click, listing));
+if (row instanceof Frame.Entry(var icon, var handler, var clicks, var exclusive)) {
+    // ...
+}
+```
+
+```java title="0.3.0"
+Frame.Entry row = Frame.Entry.click(icon(listing), click -> buy(click, listing)).key(listing.id().toString());
+if (row instanceof Frame.Entry(var icon, var handler, var clicks, var exclusive, var key)) {
+    // ...
+}
+```
+
 ### PromptRequest has a fifth component
 
 `PromptRequest` has `abandoned` as a fifth record component: a `Consumer<PromptEnd>` that runs once when an ask
@@ -469,6 +568,18 @@ in a later release.
 `PromptMode` keeps a `default` branch. A menu that hands something to an ask, such as escrowed items, releases it
 in the `abandoned` step.
 
+```java title="0.2"
+if (request instanceof PromptRequest(var question, var initial, var origin, var answer)) {
+    // ...
+}
+```
+
+```java title="0.3.0"
+if (request instanceof PromptRequest(var question, var initial, var origin, var answer, var abandoned)) {
+    // ...
+}
+```
+
 ### Menus read their text through a TextSource
 
 The menus and prompts hold a [`TextSource`](/docs/modules/gui#text-source), a function from a locale, a lang key
@@ -481,6 +592,39 @@ and `MenuText.messages()` are gone; `Menus.Parts.text()` and `MenuText.source()`
 `menus.text().messages().render(locale, key)`, and keep the plugin's own `Messages` field for anything else it
 read from them.
 
+```java title="0.2"
+Component note = menus.text().messages().render(locale, "gui.shop.note");
+```
+
+```java title="0.3.0"
+Component note = menus.text().source().render(locale, "gui.shop.note");
+```
+
+### Answer has a third result
+
+`Answer.Later(CompletableFuture<Answer>)` is a third result of a `PromptRequest` answer function, as
+[Text prompts](/docs/modules/gui#text-prompts) describes. `Answer` is sealed, so a `switch` over it that names
+`Accept` and `Retry` and has no `default` branch no longer compiles. An answer function that returns an `Accept`
+or a `Retry` needs no change.
+
+**Migration:** give the `switch` a `default` branch, which also covers a result a later release adds, or a case
+for `Answer.Later`.
+
+```java title="0.2"
+String outcome = switch (answer) {
+    case Answer.Accept accept -> "accepted";
+    case Answer.Retry retry -> "refused";
+};
+```
+
+```java title="0.3.0"
+String outcome = switch (answer) {
+    case Answer.Accept accept -> "accepted";
+    case Answer.Retry retry -> "refused";
+    default -> "pending";
+};
+```
+
 ### EconomyProvider.vault takes a folia flag
 
 `EconomyProvider.vault(Plugin, ErrorReports, boolean switchedOn, boolean folia, Integer scale)` takes the server
@@ -488,3 +632,12 @@ kind as a flag, `true` on Folia, so a plugin with no Taffy `Scheduler` can look 
 takes a `Scheduler.Mode` still works, gives the same result and is deprecated; a later release removes it.
 
 **Migration:** pass `scheduler.mode() == Scheduler.Mode.FOLIA` in place of `scheduler.mode()`.
+
+```java title="0.2"
+Detected<EconomyProvider> economy = EconomyProvider.vault(this, errors, true, scheduler.mode(), null);
+```
+
+```java title="0.3.0"
+Detected<EconomyProvider> economy =
+    EconomyProvider.vault(this, errors, true, scheduler.mode() == Scheduler.Mode.FOLIA, null);
+```
