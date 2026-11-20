@@ -317,7 +317,7 @@ A `Menu<S>` is the code side of one menu, where `S` is the state it shows (a pag
 | `Component title(Frame<S> frame)` | Once, when the menu opens. By default the layout's title, or the lang key `gui.<id>.title`. A redraw keeps the title, so a new title takes a new open. |
 | `void render(Frame<S> frame)` | On every draw. Places the actions, list rows and states. |
 | `void opened(MenuSession<S> session, Player viewer)` | After the inventory opened. The place to start loads. Does nothing by default. |
-| `void closed(MenuSession<S> session, boolean left)` | Once the session ended. `left` is `true` when the viewer closed it, quit, died, or another plugin's inventory replaced it, and `false` when these menus replaced it or are stopping. Does nothing by default. |
+| `void closed(MenuSession<S> session, boolean left)` | Once the session ended. `left` is `true` when the viewer closed it, quit, died, or another plugin's inventory replaced it, and `false` when these menus opened another menu in its place, a prompt took over through `Prompts.ask`, or the menus are stopping. The session never opens again after this call, whatever `left` is. Does nothing by default. |
 
 ```java title="WarpsMenu.java"
 import net.kyori.adventure.text.Component;
@@ -652,7 +652,9 @@ storage.save(warp).thenRun(() -> menus.rerenderLater(session));
 
 A `Route(menu, state, back)` is a menu with the state it shows and the route its back button returns to. The menu registered under `menu` must accept the type of `state`, which a menu that overrides `stateType()` checks when the route opens. `MenuSession.route()` gives the open menu with its current state, for a back route or a prompt to return to.
 
-Opening a menu while the viewer has another open is a hand-off: the previous session's `closed` gets `left = false`. Opening a menu also ends a pending prompt for that viewer.
+Opening a menu while the viewer has another open is a hand-off: the previous session's `closed` gets `left = false`. A prompt that takes over through `Prompts.ask` is a hand-off too. Opening a menu also ends a pending prompt for that viewer.
+
+A session never resumes once its `closed` ran. The menu a hand-off opens, and the origin a prompt opens when its ask ends, is a new session built from a `Route`, so `closed` is the last call a session gets. A menu that holds something outside its state, such as escrowed items, releases it in `closed` or moves it out there, whatever `left` is. When a prompt takes over, `left = false` does not promise that the menu comes back: the viewer can quit, die, or have another plugin's inventory open when the ask ends. From `0.3.0`, the [`abandoned` step of the `PromptRequest`](#when-an-ask-opens-no-menu) runs in those cases.
 
 ### MenuSession
 
@@ -749,7 +751,7 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, sche
 | Constructor argument | Meaning |
 |---|---|
 | `menus` | The plugin's menus. The prompts read their text source, locale function, entity-thread seams, logger and error reports. |
-| `mode` | `PromptMode.CHAT` (the next chat line) or `PromptMode.ANVIL` (the name field of an anvil the prompts build). It holds for the life of the prompts. |
+| `mode` | `PromptMode.CHAT` (the next chat line) or `PromptMode.ANVIL` (the name field of an anvil the prompts build). It holds for the life of the prompts. A later release may add a mode, so a plugin's own `switch` over `PromptMode` keeps a `default` branch. |
 | `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat. |
 | `timer` | Runs a task on any thread after a delay: `scheduler::delayedAsync`. |
 
@@ -782,11 +784,39 @@ Behaviour of an ask:
 - An ask waits `Prompts.TIMEOUT` (30 seconds) from when it was asked. A refused answer keeps the first deadline.
 - An answer is stripped of surrounding whitespace and cut to `Prompts.MAX_LENGTH` (256) characters.
 - The cancel word from `gui.prompt.cancel-word` cancels, and so does `Prompts.DEFAULT_CANCEL_WORD` (`cancel`) in every locale. A chat ask also shows a clickable `gui.prompt.cancel-button` link after the hint (not for Bedrock players), which works for one click while the ask waits.
-- Submit, cancel and timeout open a menu again unless the player is dead or offline, has another plugin's inventory open, or the plugin is stopping. An ask ended by another menu, another plugin's inventory, a newer ask or a quit opens nothing.
+- Submit, cancel and timeout open a menu again unless the player is dead or offline, has another plugin's inventory open, or the plugin is stopping. An ask ended by another menu, another plugin's inventory, a newer ask or a quit opens nothing. From `0.3.0`, an ask that opens no menu runs the request's `abandoned` step, see [When an ask opens no menu](#when-an-ask-opens-no-menu).
 - An answer function that throws a `RuntimeException` or returns `null` is logged, reported under `gui.prompt`, and the player is told `gui.error` and returned to `origin`.
 - The chat handlers run at `LOWEST` with `ignoreCancelled = false`, so a mute plugin cannot leave a prompt waiting. The answer line is cancelled and never modified. From `0.3.0`, its audience is emptied too (`AsyncChatEvent.viewers()` and `AsyncPlayerChatEvent.getRecipients()`, where the set can be changed), so a chat plugin that delivers cancelled lines has nobody to deliver the answer to. The event still reaches every handler that does not ignore cancelled events, at any priority, and such a handler can read the answer. A line from a player with no chat prompt is left alone.
 - Paper posts the legacy `AsyncPlayerChatEvent` and then `AsyncChatEvent` for one chat line. From `0.3.0`, the line is judged once: after a refused answer, or an answer whose function asked again, the second event no longer answers the ask waiting by then with the same text.
 - The anvil is a virtual anvil at a repair cost of 0, holding a marked paper. Every click and drag on it is cancelled, a click on its result slot submits the name field, and closing it cancels the ask. Another inventory opening over it ends the ask with no message.
+
+### When an ask opens no menu
+
+An ask ends in one of two ways. Either the prompts open a menu, the origin after a cancel, a timeout or a failed answer and the route of an `Answer.Accept` after an accepted one, or they open none. Before `0.3.0` nothing told the plugin about the second case, so a menu that had handed its session to an ask, with `closed(session, false)`, never learned that the ask would not open it again.
+
+From `0.3.0`, `PromptRequest.abandoned(Consumer<PromptEnd>)` gives a question a step that runs once when its ask ended and the prompts opened no menu for it, with how it ended:
+
+| `PromptEnd` | The ask ended because |
+|---|---|
+| `TIMED_OUT` | it reached its deadline and the origin did not open: the player is dead or has another plugin's inventory open. |
+| `CANCELLED` | the player cancelled it (the cancel word, the cancel link or a closed anvil) and the origin did not open, or `Menus.shutdown()` ended it. |
+| `LEFT` | the player quit while it waited, was gone when it was to end, or was dead or offline when an accepted or failed answer was to open its menu. |
+| `REPLACED` | something took its place: a menu of these menus opened, a newer ask started, another inventory opened over the prompt's anvil, the player had another inventory open when an accepted, refused or failed answer was to show its menu or its anvil, or the server refused to show the anvil of a refused answer again. |
+
+```java
+// In a click handler of a sell menu that holds the item the viewer is pricing
+ItemStack held = escrow.take(session);
+prompts.askLater(click.player(), new PromptRequest(question, "100", session.route(), text -> price(text, held))
+    .abandoned(end -> escrow.giveBack(click.player().getUniqueId(), held)));
+```
+
+- The step runs on the player's entity thread, except `LEFT` for a player who is gone, which runs on the thread that found the player gone, where the player must not be used. At `Menus.shutdown()` it runs with `CANCELLED` on the disabling thread, and only for a player that thread owns, as a menu's `closed` does.
+- It is not called for an ask that opens a menu, and not for one that never started: an ask after `Menus.shutdown()`, or one whose anvil the server refused to open, which closes the menu with `left = true`.
+- A step that throws a `RuntimeException` is logged and reported under `gui.prompt`.
+- `PromptRequest` has `abandoned` as a fifth record component. `new PromptRequest(question, initial, origin, answer)` still compiles and gives a request whose step does nothing.
+- A later release may add a `PromptEnd`, so a `switch` over it keeps a `default` branch.
+
+### Prompt lang keys
 
 | Lang key | Constant | Placeholders |
 |---|---|---|

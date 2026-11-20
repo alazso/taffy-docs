@@ -348,6 +348,7 @@ plugins {
 | [Menus and Prompts register their own listeners](#menus-and-prompts-register-their-own-listeners) | every plugin that builds a `Menus` | pass the plugin to `Menus.Parts.of` and delete both `registerEvents` calls |
 | [A click just after a redraw is dropped](#a-click-just-after-a-redraw-is-dropped) | a menu whose list rows change their icon on a redraw, such as an animated row, and a plugin with a record pattern over `Frame.Entry` | give each clickable row a `key`, and add a fifth component to the pattern |
 | [Menus and Prompts check the calling thread](#menus-and-prompts-check-the-calling-thread) | a plugin that calls `Menus.open`, `Menus.rerender`, `Menus.load` or `Prompts.ask` from a thread that does not own the viewer, such as a storage callback | call `openLater`, `rerenderLater` or `askLater`, and hop to the viewer's thread before `load` |
+| [PromptRequest has a fifth component](#promptrequest-has-a-fifth-component) | a plugin with a record pattern over `PromptRequest`; every `new PromptRequest(question, initial, origin, answer)` still compiles | add a fifth component to the pattern |
 | [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
 | [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
 
@@ -453,6 +454,20 @@ component.
 `Frame.Entry.click(icon, handler).key(listing.id().toString())`. A row with no key whose icon changes on every
 redraw, such as an animated one, otherwise drops the clicks of the window after each redraw.
 [Frame](/docs/modules/gui#frame) shows a keyed list.
+
+### PromptRequest has a fifth component
+
+`PromptRequest` has `abandoned` as a fifth record component: a `Consumer<PromptEnd>` that runs once when an ask
+ended and the prompts opened no menu for it, as
+[When an ask opens no menu](/docs/modules/gui#when-an-ask-opens-no-menu) describes. Every
+`new PromptRequest(question, initial, origin, answer)` compiles and behaves as in `0.2`, with a step that does
+nothing, and `request.abandoned(step)` gives a copy with a step. `PromptEnd` and `PromptMode` may gain constants
+in a later release.
+
+**Migration:** a record pattern over `PromptRequest` takes a fifth component, as in
+`PromptRequest(var question, var initial, var origin, var answer, var abandoned)`, and a `switch` over
+`PromptMode` keeps a `default` branch. A menu that hands something to an ask, such as escrowed items, releases it
+in the `abandoned` step.
 
 ### Menus read their text through a TextSource
 
