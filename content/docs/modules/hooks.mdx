@@ -333,16 +333,30 @@ if (found.id() != null) {
 | `available(String hint)` | `true` when the plugin a key or alias names is on and still enabled. |
 | `active()` | The plugins whose integration is on, in `CustomItemPlugin` order, whether or not each is still enabled. |
 | `statuses()` | One `HookStatus` per `CustomItemPlugin`, read now: `LOADING`, `ON` or `NOT_ENABLED` for a plugin that is on, the detected state for every other. |
+| `close()` | From `0.3.1`. Unregisters every listener `detect` registered for the owner. A second call does nothing. |
 
 A plugin that is on but no longer enabled, or still loading its items, is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
 
 ### Per plugin
 
-- **ItemsAdder** is `LOADING` until ItemsAdder fires `ItemsAdderLoadDataEvent`, or `ON` at once when it had loaded its items before detection. Its integration registers a listener for the owner, so `detect` runs while the owner is enabled, normally in `onEnable`. The listener stays until the owner disables, so each further `detect` (such as one from a reload command) leaves at most one more small listener.
+- **ItemsAdder** is `LOADING` until ItemsAdder fires `ItemsAdderLoadDataEvent`, or `ON` at once when it had loaded its items before detection. Its integration registers a listener for the owner, so `detect` runs while the owner is enabled, normally in `onEnable`. The listener stays until the owner disables, or until `close()` is called on the `CustomItems`.
 - **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items.
 - **HeadDatabase** only builds heads: `hdb:1234` builds head `1234`. It is never asked for an id and never counts as a failure in `resolve`. It knows no id until it has loaded its database shortly after startup, so `create` returns `null` until then.
 
 `CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item.
+
+### Detecting again
+
+Detection runs once, so a plugin that should pick up an item plugin enabled later, or reloaded, detects again from its own reload command. From `0.3.1`, `CustomItems.close()` unregisters every listener the earlier `detect` registered, so close the `CustomItems` that is held, then detect:
+
+```java
+void reloadItems() {
+    items.close();
+    items = CustomItems.detect(this, errors, EnumSet.allOf(CustomItemPlugin.class));
+}
+```
+
+Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
 
 ## Economy
 
@@ -647,6 +661,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
+| `CustomItems.close` | The server thread, before the plugin detects again. |
 | `EconomyProvider` calls | The thread `thread(UUID)` names. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. |
 | `RegionProvider.regionsAt` | Any thread. |
