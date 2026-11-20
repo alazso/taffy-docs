@@ -266,7 +266,7 @@ A status read after a connect that reached `ON` moves to `NOT_ENABLED` while the
 | `rules` | Optional. The plugin's own checks, merged after the mapper's issues by `validate`. An error refuses the proposal. It runs on the bridge worker thread, must not touch the main thread, and returns a result for every proposal: a `null` result makes `validate` throw. |
 | `logger` | The plugin's logger. It receives the apply lines and the activation failures with their stacks. |
 
-`build` reads the file once for the values in effect since startup, so it is called after the plugin loaded the file in `onEnable`. A file that cannot be read then gives no startup values, and every later restart-only change is reported as waiting. The `Builder` is not thread-safe: build it on one thread.
+`build` reads the file once for the values in effect since startup, so it is called after the plugin loaded the file in `onEnable`. A file that cannot be read then gives no startup values, and every later restart-only change is reported as waiting by the apply that makes it and by no later apply. The `Builder` is not thread-safe: build it on one thread.
 
 ### What the bridge calls
 
@@ -280,7 +280,7 @@ Only the fields the mapper declares are read and written. Comments, keys the sch
 
 ### The apply result
 
-Nothing after the write throws. The result is `applied` only when the activation returned `true` and no restart-only change waits. A restart-only change that waits gives `savedRestartRequired` with the waiting paths. A `false` or `null` from the activation, an exception or error it threw, and a `callSync` that timed out or was interrupted all give `savedRestartRequired` with the message that the values were saved but not loaded. An activation failure and a timed-out or interrupted `callSync` are logged as a warning with the stack and never reported to `ErrorReports`, because the message of a failed loader can quote a configuration value.
+Nothing after the write throws. The result is `applied` only when the activation returned `true` and no restart-only change waits. A restart-only change that waits gives `savedRestartRequired` with the waiting paths, also when the apply itself changes only live fields. A `false` or `null` from the activation, an exception or error it threw, and a `callSync` that timed out or was interrupted all give `savedRestartRequired` with the message that the values were saved but not loaded. An activation failure and a timed-out or interrupted `callSync` are logged as a warning with the stack and never reported to `ErrorReports`, because the message of a failed loader can quote a configuration value.
 
 <Callout type="info" title="Keep the schema and rules as strict as the loader">
 The result is true only when the schema and `rules` accept no more than the loader the activation runs. Each schema constraint is no looser than the matching `ConfigReader` call, or the reader replaces an accepted value with its fallback while the result says `applied`. `rules` refuses every proposal the loader rejects, cross-field checks included, or the file is saved with values the loader refuses and the next start of the plugin fails on the file.
@@ -290,7 +290,11 @@ The loader the activation runs must not write the file: a write there changes th
 
 ### Restart-only fields
 
-A changed field declared `restartRequired()` is reported as waiting for a restart unless its new value equals the value the file held when the provider was built. A change inside an object list has a path through the index of its item, so such a change may be reported as waiting even when its new value equals its startup value. A restart-only change is never reported as in effect while its value differs from the value at startup. The report is true only when the code using a restart-only value reads `ConfigHolder.startup()`; code reading `ConfigHolder.get()` sees the new value at once, and the `savedRestartRequired` result is then untrue.
+From `0.2.2`, each apply compares the whole proposal with the values the file held when the provider was built. Every field declared `restartRequired()` whose value differs from its startup value is reported as waiting for a restart, whether this apply changed it or an earlier apply or an edit of the file did. An apply that changes only live fields therefore still gives `savedRestartRequired` with the waiting paths, and gives `applied` once the file holds the startup values again. Up to `0.2.1`, only the fields the apply itself changed were reported, so a later live-only apply answered `applied` while an earlier restart-only change still waited.
+
+A field declared `restartRequired()` that holds other fields is reported under its own path when a value inside it differs. An item of an object list is compared with the startup item of the same item key, and with the item at the same index where the list declares no item key; an item with no such item at startup has no startup values. A change of this apply inside an object list has a path through the index of its item, so it is reported as waiting even when its new value equals its startup value. A restart-only change is never reported as in effect while its value differs from the value at startup. A provider built while the file could not be read has no startup values: each apply then reports the restart-only changes it makes itself and no others.
+
+The report is true only when the code using a restart-only value reads `ConfigHolder.startup()`; code reading `ConfigHolder.get()` sees the new value at once, and the `savedRestartRequired` result is then untrue.
 
 ## Reloads and the plugin's own writes
 
