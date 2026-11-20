@@ -1,0 +1,207 @@
+---
+title: Upgrading from 0.1
+description: Each change since Taffy 0.1 that needs an action from a plugin, with what changed and the line that migrates or opts in.
+---
+
+This page lists every change since `0.1.0` that needs an action from a plugin, release by release. Each section
+says what changed, who it affects and what to do. No patch of `0.1` (`0.1.1`, `0.1.2`) needs an action. The
+[changelog](/docs/versioning#reading-the-changelog) holds every other change, and each later release adds its own
+part to this page.
+
+## 0.2.0
+
+Change the version of the settings plugin, and the rest of Taffy follows, as
+[One version for plugins, catalog and modules](/docs/versioning#one-version-for-plugins-catalog-and-modules)
+describes:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.2.0"
+}
+```
+
+| Change | Affects | Action |
+|---|---|---|
+| [Paper 26.2 build 135 and paper-api 26.3](#paper-262-build-135-and-paper-api-263) | every plugin | run on a supported server and recompile |
+| [Filtered repositories](#filtered-repositories) | a build that took another group from a Taffy repository, or uses `mavenLocal()` for Taffy | declare the repository, or point `alazsoSnapshots` at the local repository |
+| [PlaceholderAPI output is inserted as text](#placeholderapi-output-is-inserted-as-text) | a plugin that renders placeholders whose output holds MiniMessage tags | render through `text.withPlaceholderFormatting()` |
+| [Webhook mentions ping no one](#webhook-mentions-ping-no-one) | a post or payload that is meant to ping | pass `PostOptions`, or give the template `allowed_mentions` |
+| [DiscordWebhook.close waits at most 5 seconds](#discordwebhookclose-waits-at-most-5-seconds) | a plugin whose last posts need longer | call `close(Duration)` |
+| [WebhookPayload.render refuses unknown value types](#webhookpayloadrender-refuses-unknown-value-types) | a template holding another type of value | convert the value first |
+| [SkullBuilder remembers a failed lookup](#skullbuilder-remembers-a-failed-lookup) | a plugin that retries right after a blank head | ask again later |
+| [Scheduler.close completes unstarted dispatches](#schedulerclose-completes-unstarted-dispatches) | a plugin that awaits a `dispatch` future | handle the refusal |
+| [Shutdown.closeQuietly logs the stack trace](#shutdownclosequietly-logs-the-stack-trace) | a log filter or test that matched the failure text | read the failure from the record's thrown |
+
+### Paper 26.2 build 135 and paper-api 26.3
+
+Taffy compiles against `paper-api` `26.3.build.256-stable` and supports Paper 26.2 build 135 or newer and Folia
+26.3 build 8 or newer. Paper 26.1.2 is no longer supported. The `paper` version of the `alaz` catalog moves from
+`26.1.2.build.66-stable` to `26.3.build.256-stable`, so a plugin that declares `alaz.paper.api` compiles against
+that build, which brings Adventure 5.2.0 in place of 4.26.1. [Servers](/docs/versioning#servers) lists the builds
+for each release line.
+
+**Migration:** run the plugin on Paper 26.2 build 135 or newer, or Folia 26.3 build 8 or newer, and recompile it
+against `paper-api` 26.3. Adventure 5 makes `ClickEvent` generic, so a raw `ClickEvent` compiles with a rawtypes
+warning until it is written `ClickEvent<?>`.
+
+`compileJava` accepts a call that exists in `paper-api` 26.3 and not on Paper 26.2. The new
+[`compileAgainstPaperFloor`](/docs/gradle-plugins#compiling-against-the-oldest-supported-paper) task compiles the
+plugin against `paper-api` `26.2.build.135-stable` and fails on such a call. No task depends on it, so add it to
+`check` to run it with every build:
+
+```kotlin title="build.gradle.kts"
+tasks.check {
+    dependsOn("compileAgainstPaperFloor")
+}
+```
+
+### Filtered repositories
+
+`so.alaz.taffy.repositories` asks each repository it declares, Maven Central apart, only for the groups the `alaz`
+catalog takes from it, and `jitpack` moves to the end of the list. In `0.1` only the two `repo.alaz.so`
+repositories and the three hologram repositories had a filter, so a module an earlier repository lacked was looked
+up on every other host. Every entry of the `alaz` catalog resolves to the same modules as before, and
+[so.alaz.taffy.repositories](/docs/gradle-plugins#soalaztaffyrepositories) lists the groups of each repository.
+
+**Migration:** a build that took a module of another group from one of these repositories fails with
+`Could not find` for that module. Declare the repository in `settings.gradle.kts`:
+
+```kotlin title="settings.gradle.kts"
+dependencyResolutionManagement {
+    repositories {
+        maven("https://repo.example.org/releases") { name = "example" }
+    }
+}
+```
+
+The `so.alaz` group and its subgroups resolve from `alazso` and `alazsoSnapshots` and from no other repository,
+Maven Central and a repository the build adds included. A `mavenLocal()` in
+`dependencyResolutionManagement.repositories` is therefore no longer asked for a locally published Taffy.
+
+**Migration:** a build that added `mavenLocal()` there to use a locally published Taffy sets the URL of
+`alazsoSnapshots` to the local repository instead, as
+[Build against a snapshot or a local publish](/docs/getting-started#build-against-a-snapshot-or-a-local-publish)
+shows in full:
+
+```kotlin title="settings.gradle.kts"
+dependencyResolutionManagement {
+    repositories.named<MavenArtifactRepository>("alazsoSnapshots") {
+        url = uri(File(System.getProperty("user.home"), ".m2/repository"))
+    }
+}
+```
+
+### PlaceholderAPI output is inserted as text
+
+`Text` and `Messages` insert what a PlaceholderAPI placeholder returns as text and no longer parse it as
+MiniMessage. In `0.1` a player-set value such as a nickname could carry
+`<click:run_command:'/pay Mallory 100000'>`, or the `<name>` of a supplied value, into a message. Now every tag in
+placeholder output is shown as written, on `Text.render`, `Text.send`, `Text.plain` and on the template and the
+prefix of `Messages.render(Text, ...)` and `Messages.renderTemplate`.
+
+- Section-sign colour and format codes in the output still apply, to that output only. A colour a placeholder
+  returns no longer colours the template after it: write the colour in the template.
+- Each run between two `%` signs is given to PlaceholderAPI on its own, so a placeholder inside a tag argument
+  that MiniMessage does not parse, such as a click value, is no longer filled in.
+- `Text.resolve` is unchanged and returns what PlaceholderAPI gave, tags included.
+
+**Opt-in:** where an expansion returns MiniMessage formatting on purpose, such as a rank prefix with a gradient,
+render through `text.withPlaceholderFormatting()`. It returns a `Text` that parses colour tags, decoration tags,
+`<gradient>`, `<rainbow>` and `<reset>` in placeholder output and shows every other tag as written:
+
+```java
+Text text = new Text(getLogger());
+Text ownerText = text.withPlaceholderFormatting();
+```
+
+No option brings back click, hover or any other tag from placeholder output: write those in the template, around
+the placeholder. [Placeholder output](/docs/modules/platform#placeholder-output) has the details.
+
+### Webhook mentions ping no one
+
+`DiscordWebhook.post(String, String, Consumer<String>)` sends `"allowed_mentions": {"parse": []}` with the content,
+and `WebhookPayload.render` adds the same key to the top level of a template that has no `allowed_mentions` key of
+its own. In `0.1` neither sent the key, so Discord's default applied and player text in a post, such as an item
+renamed to `@everyone free nitro`, pinged the guild. Now `@everyone`, `@here`, role mentions and user mentions in
+such a post are shown as text and ping no one. A template with an `allowed_mentions` key keeps its value
+unchanged, and `DiscordWebhook.postBody` still sends its body as given and adds nothing.
+
+**Opt-in:** where a post is meant to ping, name the mention types to allow:
+
+```java
+webhook.post(url, content, PostOptions.allowing(Mention.ROLES), onError);
+```
+
+For a payload template, give it its own `allowed_mentions` object, such as this one in the server owner's config:
+
+```yaml title="config.yml"
+payload:
+  content: '<@&123456789012345678> {buyer} bought {item}'
+  allowed_mentions:
+    parse: [roles]
+```
+
+[Mentions](/docs/modules/platform#mentions) lists the mention types.
+
+### DiscordWebhook.close waits at most 5 seconds
+
+`DiscordWebhook.close()` waits at most 5 seconds for the posts still in flight and then aborts them, so each fails
+through its callback. In `0.1` it had no upper bound, and a Discord that sent its response headers and then stalled
+kept the disabling thread blocked.
+
+**Migration:** call `close(Duration)` with a longer wait where a plugin must give its last posts more than 5
+seconds:
+
+```java
+webhook.close(Duration.ofSeconds(15));
+```
+
+### WebhookPayload.render refuses unknown value types
+
+`WebhookPayload.render` throws `IllegalArgumentException` for a template value that is not a `String`, `Number`,
+`Boolean`, `null`, `Map`, `List` or Bukkit `ConfigurationSection`. The message names the value by its key path,
+such as `embeds[0].timestamp`. In `0.1` such a value was handed to the JSON serializer, which wrote whatever its
+reflection found.
+
+**Migration:** turn the value into a `String`, `Number` or `Boolean` before the template is given to `render`.
+[Discord](/docs/modules/platform#discord) lists how each type is rendered.
+
+### SkullBuilder remembers a failed lookup
+
+`SkullBuilder.fromName` and `SkullBuilder.fromUuid` remember a failed lookup for 2 minutes and reuse a resolved
+texture for 60 minutes, and one `SkullBuilder` caches at most 1000 names and uuids.
+
+- In `0.1` a failed lookup was not cached, so the next call for the same name or uuid looked it up again at once.
+  Now a lookup that found no texture or threw is kept for 2 minutes from the moment it completed: calls in that
+  time start no lookup and complete with a blank head, or exceptionally when the lookup threw an `Error`. A lookup
+  the executor rejected is still not remembered.
+- In `0.1` a resolved texture stayed for the life of the instance. Now it is looked up again once 60 minutes have
+  passed since its lookup completed, and past 1000 entries the one whose lookup started longest ago is dropped.
+
+**Migration:** a plugin that called `fromName` or `fromUuid` again right after a blank head to retry gets the same
+blank head for 2 minutes. Show the blank head and ask again later, or use a new `SkullBuilder`, which starts with
+an empty cache. [SkullBuilder](/docs/modules/platform#skullbuilder) has the full table.
+
+### Scheduler.close completes unstarted dispatches
+
+`Scheduler.close()` completes every future `Scheduler.dispatch` returned whose task has not started, as a refused
+call does: with `RejectedExecutionException` for `ThreadTag.GLOBAL` and `ThreadTag.ASYNC`, and with
+`EntityUnavailableException` for an entity tag, which covers `EntityThread.call` over a `Scheduler`. In `0.1` such
+a future stayed incomplete for good when Paper accepted the task and dropped it as the plugin disabled, so a caller
+waiting on it never returned. A task refused this way never runs, and a task that has started completes its future
+with its own result. A dispatch Paper accepts as the plugin stops being enabled is refused the same way.
+
+**Migration:** call `Scheduler.close()` in `onDisable`, handle the refusal where a dispatched future is awaited,
+and drop an `orTimeout` that was there only for this case.
+[Dispatcher, ThreadTag and EntityThread](/docs/modules/platform#dispatcher-threadtag-and-entitythread) describes
+the refusals.
+
+### Shutdown.closeQuietly logs the stack trace
+
+`Shutdown.closeQuietly` logs a failed step with its stack trace. The warning reads
+`Failed to <what> during shutdown` and carries the failure as the record's thrown. In `0.1` the failure's
+`toString()` was appended to the message and no trace was logged.
+
+**Migration:** a log filter or test that matched the failure text in the message matches
+`Failed to <what> during shutdown` and reads the failure from `LogRecord.getThrown()`.
+[Shutdown.closeQuietly](/docs/modules/platform#shutdownclosequietly) describes the step.
