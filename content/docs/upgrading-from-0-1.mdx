@@ -25,6 +25,7 @@ plugins {
 | [Paper 26.2 build 135 and paper-api 26.3](#paper-262-build-135-and-paper-api-263) | every plugin | run on a supported server and recompile |
 | [Filtered repositories](#filtered-repositories) | a build that took another group from a Taffy repository, or uses `mavenLocal()` for Taffy | declare the repository, or point `alazsoSnapshots` at the local repository |
 | [PlaceholderAPI output is inserted as text](#placeholderapi-output-is-inserted-as-text) | a plugin that renders placeholders whose output holds MiniMessage tags, or a template with a placeholder inside a click value or a tag argument | render through `text.withPlaceholderFormatting()`; supply a click or a colour as a `Placeholder.styling` value |
+| [A colour code ends the format codes before it](#a-colour-code-ends-the-format-codes-before-it) | a config or language file with a format code written before a colour code | write the colour first |
 | [Webhook mentions ping no one](#webhook-mentions-ping-no-one) | a post or payload that is meant to ping | pass `PostOptions`, or give the template `allowed_mentions` |
 | [DiscordWebhook.close waits at most 5 seconds](#discordwebhookclose-waits-at-most-5-seconds) | a plugin whose last posts need longer | call `close(Duration)` |
 | [WebhookPayload.render refuses unknown value types](#webhookpayloadrender-refuses-unknown-value-types) | a template holding another type of value | convert the value first |
@@ -131,6 +132,16 @@ text.render("<msg>Reply</msg>", player,
 ```
 
 [Placeholder output](/docs/modules/platform#placeholder-output) has the details.
+
+### A colour code ends the format codes before it
+
+`LegacyText.toMiniMessage`, `LegacyText.sectionToMiniMessage` and every `Text` and `Messages` render follow a
+legacy colour code with the negation of each decoration a format code before it opened, as legacy text does. In
+`0.1` the decoration stayed open, so text written format first, such as `&l&6Title` or a prefix of `§l§6`, was
+bold. Now the colour code ends the bold.
+
+**Migration:** write the colour first, `&6&lTitle`, where the text is meant to keep its format.
+[LegacyText](/docs/modules/platform#legacytext) describes the conversion.
 
 ### Webhook mentions ping no one
 

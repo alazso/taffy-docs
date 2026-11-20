@@ -589,7 +589,8 @@ From `0.2.0`, a colour code ends the format codes before it, as it does in legac
 by the negation of each decoration (`<!bold>`, `<!italic>`, `<!underlined>`, `<!strikethrough>`, `<!obfuscated>`)
 that a format code earlier in the same call opened, and `&r` becomes `<reset>`. In `0.1`, `<bold>` stayed open, so
 `Steve` above was bold. Only format codes count: a decoration opened by a tag in the input, or by a format code in
-a string converted by another call, such as a `Placeholder.parsed` value, stays open after a colour code.
+a string converted by another call, such as a `Placeholder.parsed` value, stays open after a colour code, unless a
+format code earlier in the same call opened the same decoration: the negation tag then ends both.
 
 The input is scanned without regard to MiniMessage tags, so a code inside a tag, such as a query string in a
 click URL, is converted too. The paired hex form `§x§R§R§G§G§B§B` is read; the `&x&R&R&G&G&B&B` form is not, and
