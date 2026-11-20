@@ -325,7 +325,7 @@ Every FastStats error tracker of this module applies these rules to the messages
 | 3 | An email address. | `[email hidden]` |
 | 4 | A bearer token. | `Bearer [token hidden]` |
 | 5 | An AWS access key id. | `[aws-key hidden]` |
-| 6 | A UUID in either letter case, with its dashes or as 32 hex digits without them. | `[uuid hidden]` |
+| 6 | A UUID in either letter case, with its dashes, also inside a longer word such as `data_<uuid>`, or as 32 hex digits without them that no further hex digit touches. | `[uuid hidden]` |
 | 7 | The quoted user and host of a MySQL or MariaDB account, as in `'mc_prod'@'db.example.net'`. | `[user hidden]@[host hidden]` |
 | 8 | An `api_key`, `apikey`, `token` or `secret` query value. | `?token=[redacted]` |
 | 9 | The value after `=` or `:` of a key that holds `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `access_key` or `private_key`, in either letter case and with `-` or nothing in place of the `_`. The value `YES` or `NO` stays, so `(using password: YES)` reads as the driver wrote it. | `db_password=[redacted]` |
