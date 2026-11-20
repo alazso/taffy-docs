@@ -750,7 +750,7 @@ try {
 `menus.shutdown()` ends every prompt first, then closes the open menus and anvils of the viewers the calling thread owns and runs each menu's `closed` with `left = false` itself, since no close event arrives while the plugin disables. Nothing opens and nothing is asked afterwards, and a second call does nothing.
 
 <Callout type="warn" title="Folia">
-On Folia the disabling thread does not own every player. The menus and anvils of viewers it does not own are forgotten and stay open with no listener guarding them, so such a viewer can take the copies that menu shows. Each copy carries the preview key, and the listener of a later enable deletes one when a click meets it outside a menu. On Paper the disabling thread owns every player, so this does not happen.
+On Folia the disabling thread does not own every player. The menus and anvils of viewers it does not own are forgotten and stay open with no listener guarding them. From `0.3.0`, `shutdown()` empties the inventory of each such menu and anvil, so its viewer is left with an empty menu and has no copy to take. Before `0.3.0` such a menu stayed stocked, and a copy taken from it was deleted only when a click met it outside a menu after a later enable. On Paper the disabling thread owns every player, so this does not happen.
 </Callout>
 
 ## Failure reporting
