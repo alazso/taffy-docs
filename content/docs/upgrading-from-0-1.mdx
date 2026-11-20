@@ -676,9 +676,11 @@ Detected<EconomyProvider> economy =
 
 ## 0.3.1
 
-`0.3.1` needs no action from a plugin: change the version of the settings plugin and rebuild. Every signature of
-`0.3.0` is still there and no call needs a change. Every change but one is in
-[taffy-hooks](/docs/modules/hooks), and each addition is unused until a plugin calls it.
+`0.3.1` needs no change to a call: change the version of the settings plugin and rebuild. Every signature of
+`0.3.0` is still there. Every change but one is in
+[taffy-hooks](/docs/modules/hooks), and each addition is unused until a plugin calls it. One case needs a look: a
+plugin that waits for `CustomItems.ready()` on a server whose Nexo, Oraxen or HeadDatabase holds nothing, described
+under the table.
 
 ```kotlin title="settings.gradle.kts"
 plugins {
@@ -697,6 +699,13 @@ A plugin that uses `CustomItems`, `Detected` or `RegionProvider` reads four thin
 
 The Nexo, Oraxen and HeadDatabase integrations each register a listener for the plugin, as the ItemsAdder one
 already did, so `CustomItems.detect` still runs while the plugin is enabled, normally in `onEnable`.
+
+A Nexo or Oraxen that loaded with no item at all, and a HeadDatabase whose database holds no head, give `detect`
+nothing to tell a finished load from one still running. When `detect` runs after their load, and no earlier `detect`
+of the plugin heard that load end in this server run, the integration reads `LOADING` and `ready()` reads `false`
+until their next items-loaded event, where `0.3.0` read `ON` and `true`. A plugin that waits for `ready()` before it
+builds bounds the wait, and builds what it can once the wait ends.
+[Per plugin](/docs/modules/hooks#per-plugin) describes each of the three.
 
 Three additions let a plugin deliver custom items it could only guess at before:
 
