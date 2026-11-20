@@ -300,7 +300,29 @@ FastStats clears every report it holds once a scheduled error submission is acce
 
 ### Anonymizing
 
-Every FastStats error tracker of this module hides email addresses, bearer tokens, AWS access key ids, UUIDs, `api_key`, `apikey`, `token` and `secret` query values, whole jdbc URLs, SQL statements and Windows paths. These rules come on top of what the SDK hides by itself in every report: IPv4 and IPv6 addresses, the user name in a home directory path, Discord webhook ids and tokens, the password in a jdbc URL, and the JVM's `user.name`. FastStats data is pseudonymous.
+Every FastStats error tracker of this module applies these rules to the messages of a report, in this order:
+
+| | Hidden | Sent as |
+|---|---|---|
+| 1 | A whole jdbc URL. | `jdbc:[redacted]` |
+| 2 | The user name and password before the `@` of a URI of any scheme, when both are present. | `redis://[credentials hidden]@cache:6379` |
+| 3 | An email address. | `[email hidden]` |
+| 4 | A bearer token. | `Bearer [token hidden]` |
+| 5 | An AWS access key id. | `[aws-key hidden]` |
+| 6 | A UUID in either letter case, with its dashes or as 32 hex digits without them. | `[uuid hidden]` |
+| 7 | The quoted user and host of a MySQL or MariaDB account, as in `'mc_prod'@'db.example.net'`. | `[user hidden]@[host hidden]` |
+| 8 | An `api_key`, `apikey`, `token` or `secret` query value. | `?token=[redacted]` |
+| 9 | The value after `=` or `:` of a key that holds `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `access_key` or `private_key`, in either letter case and with `-` or nothing in place of the `_`. The value `YES` or `NO` stays, so `(using password: YES)` reads as the driver wrote it. | `db_password=[redacted]` |
+| 10 | An SQL statement, from `SELECT`, `INSERT`, `UPDATE` or `DELETE` as a whole word to the end of the line or 200 characters. | `[sql hidden]` |
+| 11 | A Windows path that starts with a drive letter and a backslash. | `[path hidden]` |
+| 12 | An absolute Unix path of two or more segments, such as `/home/mc/server/plugins`. | `[path hidden]` |
+| 13 | A host name of two or more labels that ends in `com`, `net`, `org`, `io`, `gg`, `dev`, `me`, `co`, `xyz`, `eu`, `de`, `uk`, `us`, `fr`, `nl`, `ca`, `au`, `ru`, `br`, `pl`, `internal`, `local` or `lan`. | `[host hidden]` |
+
+A host name of one label, such as `cache` or `localhost`, stays as written, and so does a host name with another ending, a relative path, and a dotted name that a further label follows, such as the class name `org.apache.commons.io.FileUtils`.
+
+From `0.2.1`, rules 2, 7, 9, 12 and 13 are new, rule 6 also hides a UUID in upper case or without dashes, and the jdbc rule runs first: before, a jdbc URL with a user name before an `@` kept its path and query behind the email placeholder. Reports whose messages differ only in a value these rules hide now merge into one kind.
+
+These rules come on top of what the SDK hides by itself in every report: IPv4 and IPv6 addresses, the user name in a home directory path, Discord webhook ids and tokens, the password in a jdbc URL, and the JVM's `user.name`. FastStats data is pseudonymous.
 
 ### Uncaught exceptions
 
