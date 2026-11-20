@@ -158,6 +158,7 @@ tasks.register<JavaCompile>("compileAgainstPaperFloor") {
     description = "Compiles the main Java sources against paper-api 26.2.build.135-stable."
     source = sourceSets.main.get().java
     classpath = paperFloorCompileClasspath
+    javaCompiler.set(javaToolchains.compilerFor(java.toolchain))
     options.annotationProcessorPath = configurations.annotationProcessor.get()
     destinationDirectory.set(layout.buildDirectory.dir("classes/java/paperFloor"))
 }
@@ -168,6 +169,7 @@ tasks.check {
 ```
 
 - The configuration resolves what `compileOnly` and `implementation` declare, as `compileClasspath` does, and answers every request for `paper-api` with the floor build. The attributes are the ones `compileClasspath` asks for, so each Taffy module resolves to its API jar.
+- `javaCompiler` is the compiler of the project's Java 25 toolchain. A `JavaCompile` task registered by hand otherwise compiles with the JVM Gradle runs on.
 - The class files go to `build/classes/java/paperFloor` and into no jar.
 - The last block makes the task part of `check`. Without it the task runs only when named.
 - It compiles only: a method that exists on Paper 26.2 and behaves differently there is found by running the plugin on that server. Taffy's own calls are checked by Taffy's build, which compiles every module against the same `paper-api` build.

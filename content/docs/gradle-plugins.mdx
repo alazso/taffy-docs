@@ -259,6 +259,7 @@ tasks.check {
 ```
 
 - Its classpath is the `paperFloorCompileClasspath` configuration: what `compileOnly` and `implementation` declare, with every request for `io.papermc.paper:paper-api` answered by the floor build. Every other dependency, Taffy included, resolves as it does for `compileJava`.
+- It compiles with the compiler of the project's Java toolchain, as `compileJava` does.
 - It writes its class files to `build/classes/java/paperFloor`. They go into no jar.
 - It compiles Java sources only, and it only compiles: a method that exists on Paper 26.2 and behaves differently there is found by running the plugin on that server.
 - It checks the plugin's own calls. Taffy's calls are checked by Taffy's own build, which compiles every module against the same `paper-api` build.
