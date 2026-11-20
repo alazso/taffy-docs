@@ -215,7 +215,7 @@ Every method other than `connect` may be called from any thread. `status()`, `no
 | `boolean isRegistered()` | Whether the resource is still registered with the bridge. |
 | `void notifyChanged()` | Tells the bridge the resource changed outside ComfiConf, so open editors load the newer values. Does nothing once the resource is no longer registered. |
 | `void close()` | Unregisters the resource. Calling it more than once has no further effect. |
-| `Lock lockFor(Path file)` | The lock an apply of `file` holds from its revision check to the move of the new content over the file. The same path gives the same lock on every call. Never `null`. |
+| `Lock lockFor(Path file)` | The lock an apply of `file` holds from its read of the file to the move of the new content over the file, and a read of `file` holds while it reads. The same path gives the same lock on every call. Never `null`. |
 
 Implementations are thread-safe: `ComfiConfConnection` calls every method from whichever thread calls the connection. The link `register` returns is thread-safe. While the bridge plugin is enabled, `status()` reads `isRegistered()`: `false` gives `NOT_REGISTERED`, and a `RuntimeException` or `LinkageError` gives `FAILED`. A `null` lock or a `RuntimeException` or `LinkageError` from `lockFor` makes the connection give its own lock instead.
 
@@ -274,9 +274,9 @@ A status read after a connect that reached `ON` moves to `NOT_ENABLED` while the
 
 The bridge calls `describe()`, `read()`, `validate(ConfigValues)` and `apply(ApplyContext)` on its worker thread, and each call parses its own document.
 
-- `read()` takes the values and the revision from one read of the file, so edits by hand are detected. It throws `IOException` when the file cannot be read (a missing file included) and `ConfigLoadException` when the file is not UTF-8, not valid YAML or larger than 16 MiB. A YAML error names the line and column where the parser gives them and does not quote that line. It throws `IllegalStateException` when the mapper cannot read a stored value without losing data.
+- `read()` takes the values and the revision from one read of the file, so edits by hand are detected. From `0.2.2`, it holds the lock of the file for that read. It throws `IOException` when the file cannot be read (a missing file included) and `ConfigLoadException` when the file is not UTF-8, not valid YAML or larger than 16 MiB. A YAML error names the line and column where the parser gives them and does not quote that line. It throws `IllegalStateException` when the mapper cannot read a stored value without losing data.
 - `validate` returns the text the file cannot store unchanged, then the issues of `rules`.
-- `apply` checks the base revision against the current bytes (a mismatch is a conflict), refuses a proposal the mapper rejects, merges the proposal into the document parsed from the current bytes, refuses a value the file cannot store unchanged, and writes through ComfiConf's `SafeFileWriter`, which keeps the 10 newest backups in a `backups` folder beside the file. It then runs the activation on the main thread through `ApplyContext.callSync`, with no lock held. `IOException` and `ConfigLoadException` from `apply` mean nothing was written.
+- `apply` takes the lock of the file, reads the file, checks the base revision against the current bytes (a mismatch is a conflict), refuses a proposal the mapper rejects, merges the proposal into the document parsed from the current bytes, refuses a value the file cannot store unchanged, and writes through ComfiConf's `SafeFileWriter`, which keeps the 10 newest backups in a `backups` folder beside the file. It then releases the lock and runs the activation on the main thread through `ApplyContext.callSync`, with no lock held. `IOException` and `ConfigLoadException` from `apply` mean nothing was written.
 
 Only the fields the mapper declares are read and written. Comments, keys the schema does not declare and the file's line endings are kept on every write. A file that is not UTF-8 or not valid YAML is never written.
 
@@ -317,7 +317,7 @@ if (holder.reload() && comfiConf != null) {
 }
 ```
 
-A write of the exposed file by the plugin holds the lock `lockFor(file)` gives, from reading the file anew to saving it. While a resource is registered it is the lock an apply holds from its revision check to the move of the new content over the file, so an apply racing the write reports a conflict instead of replacing it. A write without the lock can be replaced by an apply with no conflict, and a write of values read before an apply reverts that apply.
+A write of the exposed file by the plugin holds the lock `lockFor(file)` gives, from reading the file anew to saving it. While a resource is registered it is the lock an apply holds from its read of the file to the move of the new content over the file, so an apply racing the write reports a conflict instead of replacing it. From `0.2.2`, `read()`, the first read of `apply` and the read of `build` hold that lock too, so none of them sees a file the plugin has written in part; up to `0.2.1` those reads took no lock. The lock is held for file access only, never while the activation runs. A write without the lock can be replaced by an apply with no conflict, and a write of values read before an apply reverts that apply.
 
 ```java
 void setRadius(Path configFile, int radius) throws IOException {
