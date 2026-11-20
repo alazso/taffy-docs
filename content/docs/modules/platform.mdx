@@ -126,6 +126,14 @@ scheduler.async(() -> {
 scheduler.repeatingAsync(this::saveDirtyAccounts, Duration.ofMinutes(1), Duration.ofMinutes(5));
 ```
 
+<Callout type="warn" title="The global region thread on Folia">
+  On Paper the global region thread is the main thread, which owns every chunk and entity, so a `global` task may
+  touch any world or entity. On Folia the global region thread owns no chunk and no entity: world and entity work
+  in a `global` task, or in a task dispatched with `ThreadTag.GLOBAL`, must hop to the thread that owns its target,
+  Paper's region scheduler for a location or `entity` for an entity. Use the global region thread for work bound to
+  no place, such as the console, world time and weather.
+</Callout>
+
 Delays and periods are passed to Paper in whole milliseconds. Paper throws `IllegalArgumentException` for a
 negative delay or a period below one millisecond.
 
@@ -165,7 +173,8 @@ scheduler.entity(player,
 
 `ThreadTag` is a sealed interface with three kinds: `ThreadTag.GLOBAL`, `ThreadTag.ASYNC` and
 `ThreadTag.entity(UUID)`, which names the region thread of the online player with that id. Their record types are
-`ThreadTag.Global`, `ThreadTag.Async` and `ThreadTag.Entity`; two entity tags are equal when their ids are.
+`ThreadTag.Global`, `ThreadTag.Async` and `ThreadTag.Entity`; two entity tags are equal when their ids are. On
+Folia the thread `ThreadTag.GLOBAL` names owns no chunk and no entity, as under [Running work](#running-work).
 
 The future completes with the task's result, or with what it threw, on the thread the tag names. When that thread
 does not take the task, the task never runs and the future completes with:
