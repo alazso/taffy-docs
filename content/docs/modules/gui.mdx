@@ -695,6 +695,7 @@ The menu listener keeps menu views safe. From `0.3.0` the menus register it them
 - An accepted click plays `Cue.CLICK`. A handler that throws a `RuntimeException` leaves the event cancelled, is logged and reported under `gui.click`, clears `busy` and plays `Cue.FAIL`.
 - In any view that is neither a menu nor a prompt anvil, a stack carrying the preview key on the clicked slot, the cursor, a number key's hotbar slot or the offhand is deleted, the click is cancelled and a `preview.leak` warning naming the player is logged. A drag outside menus with a marked cursor is cancelled and the cursor cleared on the next tick.
 - A close ends the session (watched at `MONITOR`), and a quit forgets the player's debounce, view memory, session and pending prompt.
+- From `0.3.0`, the listener sends a player's inventory again, through `Player.updateInventory()` on the next tick on the player's entity thread, after it cancelled the player's shift-click in a menu view and after the viewer's menu closed. The client moves a stack on its own screen before the server answers, so it could keep showing a stack the server never moved. A menu that another inventory replaces sends nothing more, since the server sends the new inventory in full.
 
 A `Click` record carries `session()`, `player()`, `type()` (the `ClickType`) and `slot()` (the raw slot), so one handler can act on left and right clicks differently:
 
@@ -865,7 +866,7 @@ try {
 
 ## Shutdown
 
-`menus.shutdown()` ends every prompt first, then closes the open menus and anvils of the viewers the calling thread owns and runs each menu's `closed` with `left = false` itself, since no close event arrives while the plugin disables. Nothing opens and nothing is asked afterwards, and a second call does nothing.
+`menus.shutdown()` ends every prompt first, then closes the open menus and anvils of the viewers the calling thread owns and runs each menu's `closed` with `left = false` itself, since no close event arrives while the plugin disables. From `0.3.0` it also sends each viewer whose menu it closed their inventory again, through `Player.updateInventory()`. Nothing opens and nothing is asked afterwards, and a second call does nothing.
 
 <Callout type="warn" title="Folia">
 On Folia the disabling thread does not own every player. The menus and anvils of viewers it does not own are forgotten and stay open with no listener guarding them. From `0.3.0`, `shutdown()` empties the inventory of each such menu and anvil, so its viewer is left with an empty menu and has no copy to take. Before `0.3.0` such a menu stayed stocked, and a copy taken from it was deleted only when a click met it outside a menu after a later enable. On Paper the disabling thread owns every player, so this does not happen.
