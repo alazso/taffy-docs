@@ -864,3 +864,211 @@ them can drop the workaround:
   reached that plugin. No money moves.
 
 [Economy](/docs/modules/hooks#economy) and [Permissions](/docs/modules/hooks#permissions) describe each of them.
+
+## 0.4.0
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.0"
+}
+```
+
+| Change | Affects | Action |
+|---|---|---|
+| [Storage settings are built through factories](#storage-settings-are-built-through-factories) | every plugin that builds a `StorageSettings`, `StorageSettings.Server` or `StorageSettings.Pool` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
+| [The version table is named after the plugin](#the-version-table-is-named-after-the-plugin) | a plugin on MySQL, MariaDB or PostgreSQL: its history moves to a table of its own on the first start, with no change in the plugin; a plugin, test or query that reads `<prefix>schema_version` | read the new name, or keep the earlier one with `StorageSettings.versionTable`; update every server that shares the database before the next migration ships |
+| [More database threads than connections stop the start](#more-database-threads-than-connections-stop-the-start) | a plugin whose `asyncThreads` can be above its `Pool.maxSize`, such as one that reads both from its config | set `maxSize` to `asyncThreads` or more, and show the owner the message |
+| [A script the splitter cannot read stops the start](#a-script-the-splitter-cannot-read-stops-the-start) | a plugin with a migration that has not run everywhere yet and holds a block comment, `$$`, a quoted string over several lines or a quote after a backslash | rewrite the script by the script rules |
+| [A commit the database rolled back is retried](#a-commit-the-database-rolled-back-is-retried) | a plugin that catches `CommitUnknownException` to retry a serialization failure, as PostgreSQL `SERIALIZABLE` work does | call `asyncRetrying` and drop that branch |
+| [A SQLite write takes the write lock when it begins](#a-sqlite-write-takes-the-write-lock-when-it-begins) | a plugin that passes work that only reads to `async` on SQLite, and a test over `Storage.over` | pass that work to `read`; add `transaction_mode=IMMEDIATE` to the test's properties |
+| [A SQLite backup is named with safe characters only](#a-sqlite-backup-is-named-with-safe-characters-only) | a tool that looks a backup up by a plugin version with a character such as `+` | replace those characters with an underscore |
+
+### Storage settings are built through factories
+
+`StorageSettings`, `StorageSettings.Server` and `StorageSettings.Pool` are final classes with no public constructor
+and are no longer records, so a value a later release adds to one breaks no plugin. Each is built through a static
+factory that takes what has no default, and a method named after each other value gives a copy with that value
+replaced. The methods that read a value keep their names, the three still compare by value, `Server.toString()`
+still hides the password, and every check a constructor made is made by the factory or the method that takes the
+value. A record pattern over one of the three no longer compiles, `sqliteFile()` is empty for a server, and
+`StorageSettings.server(Dialect.SQLITE, server)` throws `IllegalArgumentException`.
+
+**Migration:** replace each `new` with the factory, and add a method call for each value that differs from the
+default.
+
+| `0.3` | `0.4.0` | Defaults left out |
+|---|---|---|
+| `new StorageSettings(Dialect.SQLITE, file, null, pool, threads, keep)` | `StorageSettings.sqlite(file).pool(pool).asyncThreads(threads).backupKeep(keep)` | `Pool.of(4)`, 2 threads, 5 backups |
+| `new StorageSettings(dialect, file, server, pool, threads, keep)` | `StorageSettings.server(dialect, server).pool(pool).asyncThreads(threads)` | `Pool.of(4)`, 2 threads |
+| `new StorageSettings.Server(host, port, database, user, password, sslMode, prefix)` | `StorageSettings.Server.of(host, port, database, user, password, sslMode).tablePrefix(prefix)` | no table prefix |
+| `new StorageSettings.Pool(maxSize, minIdle, timeout)` | `StorageSettings.Pool.of(maxSize).minIdle(minIdle).connectionTimeout(timeout)` | 1 idle connection, 10 seconds |
+
+```java title="0.3"
+StorageSettings.Server server = new StorageSettings.Server("db.example.net", 3306, "minecraft", "plugin", "secret",
+    StorageSettings.SslMode.VERIFY_FULL, "myplugin_");
+StorageSettings settings = new StorageSettings(Dialect.MARIADB, "data.db", server,
+    new StorageSettings.Pool(8, 2, Duration.ofSeconds(10)), 4, 0);
+```
+
+```java title="0.4.0"
+StorageSettings.Server server = StorageSettings.Server
+    .of("db.example.net", 3306, "minecraft", "plugin", "secret", StorageSettings.SslMode.VERIFY_FULL)
+    .tablePrefix("myplugin_");
+StorageSettings settings = StorageSettings.server(Dialect.MARIADB, server)
+    .pool(StorageSettings.Pool.of(8).minIdle(2))
+    .asyncThreads(4);
+```
+
+[Settings](/docs/modules/storage#settings) lists every value with its default and its rule.
+
+### The version table is named after the plugin
+
+On MySQL, MariaDB and PostgreSQL, storage records the applied migrations in `<prefix><plugin>_schema_version`,
+where `<plugin>` is the plugin's name in lowercase with every character other than a lowercase letter, a digit or
+an underscore replaced by an underscore. In `0.3` the table was `<prefix>schema_version` for every plugin, so two
+plugins that shared a database and a table prefix shared one history and one migration lock, and the second to
+start stopped with `set up by a newer version of the plugin` or `changed after it ran on this database`. SQLite
+keeps `schema_version`.
+
+The first start under `0.4.0` finds the plugin's earlier table by its content: a `<prefix>schema_version` in
+storage's layout that records at least one migration with the checksum of one of this plugin's scripts. It copies
+the rows into the new table and logs one line that names both. The earlier table stays as it was and is not read
+again, so a server that still runs a build on `0.3` against the same database keeps starting. A
+`<prefix>schema_version` of another plugin is left alone.
+
+**Migration:** a plugin that only starts storage changes nothing. Two things need a look:
+
+- A plugin, a test or an owner's query that reads `<prefix>schema_version` reads the new name. A plugin that must
+  keep the earlier name sets it.
+- A migration applied under `0.4.0` is recorded only in the new table. A build on `0.3` that holds the same
+  migration and starts afterwards runs it again, so update every server that shares the database before the plugin
+  ships its next migration.
+
+```java title="0.3"
+// records migrations in myplugin_schema_version, the table of every plugin under the prefix myplugin_
+StorageSettings settings = new StorageSettings(Dialect.MYSQL, "data.db", server, pool, 2, 0);
+```
+
+```java title="0.4.0"
+// records migrations in myplugin_my_plugin_schema_version for the plugin My-Plugin
+StorageSettings settings = StorageSettings.server(Dialect.MYSQL, server).pool(pool);
+
+// keeps the table of 0.3
+StorageSettings pinned = settings.versionTable(settings.tablePrefix() + "schema_version");
+```
+
+`StorageSettings.versionTable(String)` also gives a plugin whose tables have fixed names a version table beside
+them, as [The version table](/docs/modules/storage#the-version-table) describes.
+
+### More database threads than connections stop the start
+
+`Storage.start` throws `IllegalArgumentException` when `asyncThreads` is above `Pool.maxSize`. Each database
+thread uses one connection at a time, so in `0.3` the threads beyond the pool's size waited for a connection
+another thread held and failed with a connection timeout under load.
+
+**Migration:** set `maxSize` to `asyncThreads` or more. A plugin that reads both from its config catches the
+exception, or checks the two, and shows the owner the message.
+
+```java title="0.3"
+// starts, and under load a third and fourth thread wait 10 seconds for a connection and fail
+StorageSettings settings = new StorageSettings(Dialect.SQLITE, "data.db", null,
+    new StorageSettings.Pool(2, 1, Duration.ofSeconds(10)), 4, 5);
+```
+
+```java title="0.4.0"
+// "asyncThreads is 4, above the pool's maxSize of 2; ..." from Storage.start for Pool.of(2)
+StorageSettings settings = StorageSettings.sqlite("data.db").pool(StorageSettings.Pool.of(4)).asyncThreads(4);
+```
+
+### A script the splitter cannot read stops the start
+
+A migration script that is still to run stops the start, before the SQLite backup and before any migration, when
+it holds what the [script rules](/docs/modules/storage#script-rules) cannot read: a single-quoted string that does
+not end on the line it starts, the start of a block comment or `$$` outside a quoted string, or a quote directly
+after a backslash. The `StorageException` names the file and the line. In `0.3` such a script was split at the
+wrong place, or ran only because the construct held no semicolon. A script that already ran on a database is only
+compared by its checksum, so it never stops a start for this.
+
+**Migration:** write comments as `--`, keep each quoted string on one line, write a quote inside a string as two
+quotes, and create a function or trigger outside the migration scripts.
+
+```sql title="0.3"
+/* accounts of the shop */
+CREATE TABLE ${prefix}accounts (
+    player BINARY(16) NOT NULL PRIMARY KEY,
+    note VARCHAR(64) NOT NULL DEFAULT 'the owner\'s account'
+) ENGINE = InnoDB;
+```
+
+```sql title="0.4.0"
+-- accounts of the shop
+CREATE TABLE ${prefix}accounts (
+    player BINARY(16) NOT NULL PRIMARY KEY,
+    note VARCHAR(64) NOT NULL DEFAULT 'the owner''s account'
+) ENGINE = InnoDB;
+```
+
+### A commit the database rolled back is retried
+
+A commit the database refuses because it rolled the transaction back, an `SQLTransactionRollbackException` or an
+`SQLException` whose SQLState (or that of a cause) starts with `40`, completes the future of `async` and `read`
+with that exception, and `asyncRetrying` and `readRetrying` run the work again. Nothing was written by such a
+commit. In `0.3` it completed the future with a `CommitUnknownException`, which is never retried, so PostgreSQL
+`SERIALIZABLE` work, which learns of a serialization failure (`40001`) at its commit, could not use `asyncRetrying`.
+Any other failed commit is a `CommitUnknownException` as before.
+
+**Migration:** code that caught `CommitUnknownException` to retry a serialization failure itself calls
+`asyncRetrying` and drops that branch. Code that treats every `CommitUnknownException` as unknown needs no change.
+
+```java title="0.3"
+storage.async(work).exceptionallyCompose(failure -> {
+    Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
+    if (cause instanceof CommitUnknownException unknown && "40001".equals(unknown.getSQLState())) {
+        return storage.async(work);   // the plugin's own retry
+    }
+    return CompletableFuture.failedFuture(cause);
+});
+```
+
+```java title="0.4.0"
+storage.asyncRetrying(work);
+```
+
+### A SQLite write takes the write lock when it begins
+
+On SQLite storage from `Storage.start`, a write transaction (`async`, `asyncRetrying`) begins with
+`BEGIN IMMEDIATE`: the writer connection is opened with `transaction_mode=IMMEDIATE`. While another process holds
+the file's write lock, the work waits for it up to the busy timeout of 5 seconds and then reads what that process
+wrote. In `0.3` the transaction began deferred, and work that read and then wrote failed at once with
+`SQLITE_BUSY`.
+
+**Migration:** work passed to `async` holds the write lock for as long as it runs, so work that only reads goes to
+`read`. A test that opens `Storage.over` on SQLite and should behave as `start` adds the property.
+
+```java title="0.3"
+storage.async(tx -> tx.queryOne("SELECT balance FROM accounts WHERE player = ?",
+    params -> params.uuid(player), row -> row.money("balance")));
+```
+
+```java title="0.4.0"
+storage.read(tx -> tx.queryOne("SELECT balance FROM accounts WHERE player = ?",
+    params -> params.uuid(player), row -> row.money("balance")));
+```
+
+### A SQLite backup is named with safe characters only
+
+The file name of a SQLite backup holds the plugin version with every character other than an ASCII letter, a
+digit, a dot, an underscore or a hyphen written as an underscore, so a version with a path separator cannot leave
+the `backups` folder. Backups an earlier release wrote are still counted and pruned.
+
+**Migration:** a tool that looks a backup up by the version replaces those characters the same way.
+
+```text title="0.3"
+backups/data-1.4.0+build.7-20261102-101530.db
+```
+
+```text title="0.4.0"
+backups/data-1.4.0_build.7-20261102-101530.db
+```
