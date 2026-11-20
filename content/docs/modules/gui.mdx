@@ -3,14 +3,14 @@ title: taffy-gui
 description: Chest menus with layouts from code or the plugin's own files, pagination, a footer, click safety and text prompts in chat or an anvil.
 ---
 
-`taffy-gui` gives a plugin chest menus. A menu's look (its rows, filler, list slots and items) is a layout the plugin builds in code or reads from its own files, and the menu's code only says what each action does and what the list holds. The module opens every menu on the viewer's entity thread, pages lists, draws a footer with back, page arrows, refresh and close, loads slow data in the background, and keeps the items a menu shows from leaving it. `Prompts` asks a player for one line of text in chat or in an anvil and returns to the menu with the answer. Names and lore come from the plugin's lang files through `Messages` from [taffy-platform](/docs/modules/platform), where a YAML list is one lore line per entry.
+`taffy-gui` gives a plugin chest menus. A menu's look (its rows, filler, list slots and items) is a layout the plugin builds in code or reads from its own files, and the menu's code only says what each action does and what the list holds. The module opens every menu on the viewer's entity thread, pages lists, draws a footer with back, page arrows, refresh and close, loads slow data in the background, and keeps the items a menu shows from leaving it. `Prompts` asks a player for one line of text in chat or in an anvil and returns to the menu with the answer. Names and lore come from the plugin's lang files through `Messages` from [taffy-platform](/docs/modules/platform), where a YAML list is one lore line per entry. From `0.3.0`, a plugin that keeps its text elsewhere passes its own [`TextSource`](#text-source) in their place.
 
 Every type is in `so.alaz.taffy.gui`.
 
 | Area | Types |
 |---|---|
 | Layouts | `MenuLayout`, `ItemLayout`, `PagerLayout`, `MenuKind` |
-| Drawing | `Icon` (`Icon.Button`, `Icon.Filler`, `Icon.Real`, `Icon.Saved`), `MenuText`, `Frame` (`Frame.Spec`, `Frame.Entry`), `Pager` (`Pager.Page`) |
+| Drawing | `Icon` (`Icon.Button`, `Icon.Filler`, `Icon.Real`, `Icon.Saved`), `MenuText`, `TextSource`, `Frame` (`Frame.Spec`, `Frame.Entry`), `Pager` (`Pager.Page`) |
 | Runtime | `Menus` (`Menus.Parts`), `Menu`, `MenuSession`, `MenuSettings`, `Route`, `Click`, `ClickHandler`, `ClickGuard`, `Cue`, `ViewMemory` |
 | Text prompts | `Prompts`, `PromptRequest`, `Answer` (`Answer.Accept`, `Answer.Retry`), `PromptMode`, `BedrockPlayers` |
 
@@ -35,30 +35,33 @@ dependencies {
 
 The plugin builds one `Menus` at enable from a `Menus.Parts`, builds its `Prompts` over it when it asks for text, registers each `Menu`, and registers both listeners.
 
-| `Menus.Parts` component | Type | What to pass |
+From `0.3.0`, `Menus.Parts` is built through `Menus.Parts.of(server, preview, logger, text, tasks, entity, errors)`, which takes what has no default, and a method per other value, each of which gives a copy with that value replaced. Before `0.3.0` it was a record built with `new Menus.Parts(...)` and all twelve values by position. The methods that read a value (`layouts()`, `settings()` and the rest) keep their names.
+
+| Argument of `Menus.Parts.of` | Type | What to pass |
 |---|---|---|
-| `layouts` | `Map<String, MenuLayout>` | The layout of each menu, keyed by menu id. Each key equals its layout's `menu()`, or the constructor throws `IllegalArgumentException`. |
-| `settings` | `MenuSettings` | The page size, filler, click debounce and loading item. `MenuSettings.DEFAULTS` or values from the plugin's config. |
-| `messages` | `Messages` | The plugin's lang files. |
-| `locales` | `Function<Player, Locale>` | The locale menu and prompt text renders in, such as `Player::locale`. |
 | `server` | `Server` | `getServer()`. It creates each menu inventory and tells whether the calling thread owns a player. |
 | `preview` | `NamespacedKey` | The key every shown stack carries: `new NamespacedKey(plugin, "preview")`. |
+| `logger` | `Logger` | `getLogger()`. |
+| `text` | `TextSource`, or `Messages` | The text of each lang key: the plugin's `Messages`, or its own [`TextSource`](#text-source). |
 | `tasks` | `BiConsumer<Player, Runnable>` | Runs work on a player's entity thread on the next tick: `scheduler::entity`. |
 | `entity` | `EntityThread` | Runs load results and prompt answers on the player's entity thread: `EntityThread.on(scheduler, getServer())`. |
-| `sounds` | `Supplier<Map<Cue, Sound>>` | The Adventure `Sound` of each `Cue`, read every time one plays. |
-| `home` | `String`, nullable | The id of the menu the back button opens when a menu has no back route, or `null`. |
-| `logger` | `Logger` | `getLogger()`. |
 | `errors` | `ErrorReports` | The plugin's error sink. |
+
+| Method of `Menus.Parts` | Type | What to pass | Default |
+|---|---|---|---|
+| `layouts` | `Map<String, MenuLayout>` | The layout of each menu, keyed by menu id. Each key equals its layout's `menu()`, or the method throws `IllegalArgumentException`. | no layouts |
+| `settings` | `MenuSettings` | The page size, filler, click debounce and loading item, from the plugin's config. | `MenuSettings.DEFAULTS` |
+| `locales` | `Function<Player, Locale>` | The locale menu and prompt text renders in. | `Player::locale` |
+| `sounds` | `Supplier<Map<Cue, Sound>>` | The Adventure `Sound` of each `Cue`, read every time one plays. | no sounds |
+| `home` | `String`, nullable | The id of the menu the back button opens when a menu has no back route, or `null`. | `null` |
 
 ```java title="WarpsPlugin.java"
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.sound.Sound;
 import org.bukkit.NamespacedKey;
-import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import so.alaz.taffy.gui.BedrockPlayers;
 import so.alaz.taffy.gui.Cue;
-import so.alaz.taffy.gui.MenuSettings;
 import so.alaz.taffy.gui.Menus;
 import so.alaz.taffy.gui.PromptMode;
 import so.alaz.taffy.gui.Prompts;
@@ -100,19 +103,10 @@ public final class WarpsPlugin extends JavaPlugin {
     public void onEnable() {
         scheduler = new Scheduler(this, errors);
         messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger());
-        menus = new Menus(new Menus.Parts(
-            Map.of(WarpsMenu.KIND.id(), MenuLayouts.warps()),
-            MenuSettings.DEFAULTS,
-            messages,
-            Player::locale,
-            getServer(),
-            new NamespacedKey(this, "preview"),
-            scheduler::entity,
-            EntityThread.on(scheduler, getServer()),
-            () -> sounds,
-            null,
-            getLogger(),
-            errors));
+        menus = new Menus(Menus.Parts.of(getServer(), new NamespacedKey(this, "preview"), getLogger(), messages,
+                scheduler::entity, EntityThread.on(scheduler, getServer()), errors)
+            .layouts(Map.of(WarpsMenu.KIND.id(), MenuLayouts.warps()))
+            .sounds(() -> sounds));
         Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, scheduler::delayedAsync);
         menus.register(new WarpsMenu(menus, prompts, warps));
         getServer().getPluginManager().registerEvents(menus.listener(), this);
@@ -148,7 +142,7 @@ The footer actions are the constants `BACK` (`back`), `PREVIOUS_PAGE` (`previous
 
 ### Building a layout in code
 
-`MenuLayout`, `ItemLayout` and `PagerLayout` are records that check themselves in their constructors.
+From `0.3.0`, `MenuLayout`, `ItemLayout`, `PagerLayout`, `MenuSettings` and `Menus.Parts` are final classes with no public constructor. Each is built through a static factory that takes what has no default, and a method named after each other value gives a copy with that value replaced, so a value a later release adds breaks no plugin. Before `0.3.0` they were records built with `new` and every value by position. Each still checks what it is given, and the three layout types and `MenuSettings` still compare by value.
 
 ```java title="MenuLayouts.java"
 import org.bukkit.Material;
@@ -157,41 +151,42 @@ import so.alaz.taffy.gui.MenuKind;
 import so.alaz.taffy.gui.MenuLayout;
 import so.alaz.taffy.gui.PagerLayout;
 
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 final class MenuLayouts {
 
     static MenuLayout warps() {
-        Map<String, ItemLayout> items = new LinkedHashMap<>();
-        for (ItemLayout item : List.of(
-            ItemLayout.of("header", List.of(4), Material.COMPASS).name("<aqua>Warps"),
-            ItemLayout.of("back", List.of(45), Material.ARROW).action(MenuKind.BACK),
-            ItemLayout.of("previous", List.of(48), Material.ARROW).action(MenuKind.PREVIOUS_PAGE),
-            ItemLayout.of("create", List.of(49), Material.EMERALD).action("create").permission("warps.create"),
-            ItemLayout.of("next", List.of(50), Material.ARROW).action(MenuKind.NEXT_PAGE),
-            ItemLayout.of("refresh", List.of(52), Material.SUNFLOWER).action(MenuKind.REFRESH),
-            ItemLayout.of("close", List.of(53), Material.BARRIER).action(MenuKind.CLOSE))) {
-            items.put(item.id(), item);
-        }
-        PagerLayout list = new PagerLayout(
-            List.of(10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34),
-            22, Material.PAPER);
-        return new MenuLayout("warps", 6, Material.BLACK_STAINED_GLASS_PANE, list, items, null);
+        PagerLayout list = PagerLayout.of(
+                List.of(10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33, 34))
+            .emptySlot(22)
+            .emptyMaterial(Material.PAPER);
+        return MenuLayout.of("warps", 6)
+            .filler(Material.BLACK_STAINED_GLASS_PANE)
+            .pager(list)
+            .items(List.of(
+                ItemLayout.of("header", List.of(4), Material.COMPASS).name("<aqua>Warps"),
+                ItemLayout.of("back", List.of(45), Material.ARROW).action(MenuKind.BACK),
+                ItemLayout.of("previous", List.of(48), Material.ARROW).action(MenuKind.PREVIOUS_PAGE),
+                ItemLayout.of("create", List.of(49), Material.EMERALD).action("create").permission("warps.create"),
+                ItemLayout.of("next", List.of(50), Material.ARROW).action(MenuKind.NEXT_PAGE),
+                ItemLayout.of("refresh", List.of(52), Material.SUNFLOWER).action(MenuKind.REFRESH),
+                ItemLayout.of("close", List.of(53), Material.BARRIER).action(MenuKind.CLOSE)));
     }
 }
 ```
 
-| Record | Components | Checks |
-|---|---|---|
-| `MenuLayout` | `menu`, `rows` (1 to 6), `filler` (nullable: the settings' filler), `pager` (nullable: no list), `items` keyed by item id, `title` (nullable: the lang title) | Rows in range, each key equal to its item's `id()`, every item slot and list slot inside `rows * 9`. `size()` gives `rows * 9`, `items(action)` the items of one action. |
-| `ItemLayout` | `id`, `slots` (not empty), `material`, `action` (nullable: decoration), `permission` (nullable), `enabled`, `name` (nullable), `lore` (nullable) | `ItemLayout.of(id, slots, material)` gives a shown item with no action, permission, name or lore. The withers `action`, `permission`, `name`, `lore` and `enabled` each return a copy with one value replaced. |
-| `PagerLayout` | `slots` (in fill order), `emptySlot` (nullable), `emptyMaterial` (nullable: `PAPER`) | Slots not empty, each from 0 to 53, none twice, and `emptySlot` one of them. |
+| Type | Factory | Methods that replace a value | Checks |
+|---|---|---|---|
+| `MenuLayout` | `MenuLayout.of(menu, rows)`, with `rows` from 1 to 6: no items, no list, the settings' filler and the lang title | `filler` (nullable: the settings' filler), `pager` (nullable: no list), `items` (a collection, in the order `items()` keeps), `item` (adds one item, or replaces the item of the same id in its place), `title` (nullable: the lang title) | Rows in range, no item id twice, every item slot and list slot inside `rows * 9`. `items()` gives the items keyed by item id, `size()` gives `rows * 9`, `items(action)` the items of one action. |
+| `ItemLayout` | `ItemLayout.of(id, slots, material)`, with `slots` not empty: a shown item with no action, permission, name or lore | `action` (nullable: decoration), `permission` (nullable), `enabled`, `name` (nullable), `lore` (nullable) | At least one slot. |
+| `PagerLayout` | `PagerLayout.of(slots)`, the slots in fill order: no empty state | `emptySlot` (nullable), `emptyMaterial` (nullable: `PAPER`) | Slots not empty, each from 0 to 53, none twice, and `emptySlot` one of them. |
+| `MenuSettings` | `MenuSettings.DEFAULTS` | `pageSize`, `filler`, `clickDebounce`, `loadingItem` | See [Click safety](#click-safety). |
+
+Each method returns a new value and leaves the one it was called on unchanged, so a layout or `MenuSettings.DEFAULTS` is safe to share.
 
 A bad value throws `IllegalArgumentException` (or `NullPointerException` for a missing required part) with a message that names the value it refuses: the menu and item for a `MenuLayout`, the item for an `ItemLayout`, the slot for a `PagerLayout`. A plugin that reads layouts from files catches it and shows the message to the owner.
 
-The records do not check that a material is an item, since that needs a running server. From `0.3.0`, `Menus.register` and `Menus.reload` do: they throw `IllegalArgumentException` for a material that is not an item a slot can show, air included, whether it is the material of an `ItemLayout` (shown or not), the `filler` of a `MenuLayout`, the `emptyMaterial` of a `PagerLayout` or, in `register`, the `filler` or `loadingItem` of the `MenuSettings`. The message names the menu and the item, such as `item buy of the shop menu has the material WALL_TORCH, which is not an item`. Before `0.3.0` such a layout registered and every open of the menu failed with a stack trace.
+The layouts do not check that a material is an item, since that needs a running server. From `0.3.0`, `Menus.register` and `Menus.reload` do: they throw `IllegalArgumentException` for a material that is not an item a slot can show, air included, whether it is the material of an `ItemLayout` (shown or not), the `filler` of a `MenuLayout`, the `emptyMaterial` of a `PagerLayout` or, in `register`, the `filler` or `loadingItem` of the `MenuSettings`. The message names the menu and the item, such as `item buy of the shop menu has the material WALL_TORCH, which is not an item`. Before `0.3.0` such a layout registered and every open of the menu failed with a stack trace.
 
 Behaviour of a layout:
 
@@ -203,7 +198,7 @@ Behaviour of a layout:
 
 ### Reading a layout from the plugin's files
 
-The format of a layout file is the plugin's choice. This file and the loader below it are one consistent example: every key the YAML uses is read by the loader, and the loader passes each value to the record component of the same meaning.
+The format of a layout file is the plugin's choice. This file and the loader below it are one consistent example: every key the YAML uses is read by the loader, and the loader passes each value to the layout method of the same meaning.
 
 ```yaml title="menus/warps.yml"
 rows: 6
@@ -259,8 +254,8 @@ import so.alaz.taffy.gui.PagerLayout;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 final class LayoutFiles {
 
@@ -271,7 +266,7 @@ final class LayoutFiles {
     }
 
     static MenuLayout layout(String menu, ConfigurationSection file) {
-        Map<String, ItemLayout> items = new LinkedHashMap<>();
+        List<ItemLayout> items = new ArrayList<>();
         ConfigurationSection section = file.getConfigurationSection("items");
         if (section != null) {
             for (String id : section.getKeys(false)) {
@@ -279,18 +274,23 @@ final class LayoutFiles {
                 if (item == null) {
                     throw new IllegalArgumentException("items." + id + " of the " + menu + " menu is not a section");
                 }
-                items.put(id, new ItemLayout(id, item.getIntegerList("slots"), material(item.getString("material")),
-                    item.getString("action"), item.getString("permission"), item.getBoolean("enabled", true),
-                    item.getString("name"), item.isList("lore") ? item.getStringList("lore") : null));
+                items.add(ItemLayout.of(id, item.getIntegerList("slots"), material(item.getString("material")))
+                    .action(item.getString("action"))
+                    .permission(item.getString("permission"))
+                    .enabled(item.getBoolean("enabled", true))
+                    .name(item.getString("name"))
+                    .lore(item.isList("lore") ? item.getStringList("lore") : null));
             }
         }
         ConfigurationSection list = file.getConfigurationSection("list");
-        PagerLayout pager = list == null ? null : new PagerLayout(list.getIntegerList("slots"),
-            list.isInt("empty-slot") ? list.getInt("empty-slot") : null,
-            list.isString("empty-item") ? material(list.getString("empty-item")) : null);
-        return new MenuLayout(menu, file.getInt("rows", 6),
-            file.isString("filler") ? material(file.getString("filler")) : null,
-            pager, items, file.getString("title"));
+        PagerLayout pager = list == null ? null : PagerLayout.of(list.getIntegerList("slots"))
+            .emptySlot(list.isInt("empty-slot") ? list.getInt("empty-slot") : null)
+            .emptyMaterial(list.isString("empty-item") ? material(list.getString("empty-item")) : null);
+        return MenuLayout.of(menu, file.getInt("rows", 6))
+            .filler(file.isString("filler") ? material(file.getString("filler")) : null)
+            .pager(pager)
+            .items(items)
+            .title(file.getString("title"));
     }
 
     private static Material material(String name) {
@@ -303,7 +303,7 @@ final class LayoutFiles {
 }
 ```
 
-The YAML keys of `items` become the item ids, which keeps each key equal to its item's `id()`. A missing `slots` list reaches `ItemLayout` as an empty list and is refused with "item `<id>` fills no slot". The plugin writes its default file with `saveResource("menus/warps.yml", false)` and reads it at enable and on reload. [taffy-config](/docs/modules/config) has `YamlFolder` for a plugin that keeps one file per menu in a folder.
+The YAML keys of `items` become the item ids, and a YAML section holds no key twice, so no item id is given twice. A missing `slots` list reaches `ItemLayout` as an empty list and is refused with "item `<id>` fills no slot". The plugin writes its default file with `saveResource("menus/warps.yml", false)` and reads it at enable and on reload. [taffy-config](/docs/modules/config) has `YamlFolder` for a plugin that keeps one file per menu in a folder.
 
 ## Writing a menu
 
@@ -486,7 +486,7 @@ Every stack a menu or prompt anvil shows carries the plugin's preview key (`Menu
 
 ## Text
 
-`MenuText` gives a menu's title and each item's name and lore. Text written in the layout wins in every language; otherwise it comes from the first lang key base that holds the key, as `Messages` resolves it for the viewer's locale. `Frame.text()` and `Menus.text()` return it.
+`MenuText` gives a menu's title and each item's name and lore. Text written in the layout wins in every language; otherwise it comes from the first lang key base that holds the key, as the menus' [`TextSource`](#text-source) resolves it for the viewer's locale. `Frame.text()` and `Menus.text()` return it.
 
 | Method | Gives |
 |---|---|
@@ -496,12 +496,32 @@ Every stack a menu or prompt anvil shows carries the plugin's preview key (`Menu
 | `label(locale, key, placeholders...)` | A lang key as a name. |
 | `line(locale, key, placeholders...)` | A lang key as one lore line. |
 | `lines(locale, key, placeholders...)` | A lang key as lore, one component per line. |
-| `has(locale, key)` | Whether the key resolves for the locale, the bundled English text included. |
-| `messages()` | The `Messages` behind it. |
+| `has(locale, key)` | Whether the text source holds the key for the locale. With `Messages` that includes the bundled English text. |
+| `source()` | The `TextSource` behind it. From `0.3.0` it replaces `messages()`, which returned the `Messages`. |
 
-Names are not italic. Lore lines are not italic and are gray unless the text sets a colour. A lang key that no file holds renders as the marker `<red>missing:key`.
+Names are not italic. Lore lines are not italic and are gray unless the text sets a colour. With `Messages` as the text source, a lang key that no file holds renders as the marker `<red>missing:key`.
 
 Text written in the layout or the lang files is trusted MiniMessage from the owner. Values go in through placeholders after the template is parsed, so a player-typed value passed as `Placeholder.unparsed` or `Placeholder.component` shows as typed. A lang template may write a value as `{name}` or `<name>` and may write `<prefix>`; text written in the layout reads only `<name>` and does not read `<prefix>`. A section-sign colour code in either is converted to MiniMessage.
+
+### Text source
+
+From `0.3.0`, the menus and prompts read the text of a lang key through a `TextSource`, a function from the viewer's locale, the key and the placeholders to a `Component`. Before `0.3.0` they required Taffy's `Messages`, so a plugin had to move its lang files to Taffy before it could show a menu.
+
+| Way to pass the text | What the menus read |
+|---|---|
+| `Menus.Parts.of(..., messages, ...)` with the plugin's `Messages` | `Messages.render`, `has` and `lines`, as before `0.3.0`. `TextSource.of(messages)` gives the same source as a value. |
+| `Menus.Parts.of(..., text, ...)` with a lambda or the plugin's own `TextSource` | The plugin's function. |
+
+```java
+TextSource text = (locale, key, placeholders) -> lang.component(locale, key, placeholders);
+```
+
+`TextSource` has two more methods with defaults, which a source of the plugin's own overrides when it can do better:
+
+- `has(locale, key)` tells whether the source holds a key, and defaults to `true`. The menus ask it before they read text that is optional: an item's lore, each lang key base but the last of an item's name, a list's empty state and the word that cancels a prompt. With the default, each of these is rendered whatever the function gives for a key it does not hold, so a source that can tell overrides `has` to leave that text out.
+- `lines(locale, key, placeholders...)` gives lore one component per line, and defaults to the one component `render` gives.
+
+The menus and prompts call the source on the viewer's entity thread.
 
 ### Lang keys
 
@@ -670,7 +690,7 @@ frame.action("amount", Frame.Spec.click(click -> {
 
 `Click.session()` is a `MenuSession<?>`, so a handler that sets the state uses the typed session from `frame.session()`.
 
-`MenuSettings(pageSize, filler, clickDebounce, loadingItem)` holds the shared limits: `pageSize` from 1 to `MenuSettings.MAX_PAGE_SIZE` (45), `clickDebounce` from `MIN_DEBOUNCE` (50 ms) to `MAX_DEBOUNCE` (2 s). `MenuSettings.DEFAULTS` is a page size of 45, `GRAY_STAINED_GLASS_PANE` as filler, a 250 ms debounce and `CLOCK` while loading. The constructor throws `IllegalArgumentException` for a value outside its range.
+`MenuSettings` holds the shared limits: `pageSize` from 1 to `MenuSettings.MAX_PAGE_SIZE` (45), `filler`, `clickDebounce` from `MIN_DEBOUNCE` (50 ms) to `MAX_DEBOUNCE` (2 s), and `loadingItem`. `MenuSettings.DEFAULTS` is a page size of 45, `GRAY_STAINED_GLASS_PANE` as filler, a 250 ms debounce and `CLOCK` while loading. From `0.3.0`, a plugin starts from `MenuSettings.DEFAULTS` and replaces what its config sets, such as `MenuSettings.DEFAULTS.pageSize(28).clickDebounce(Duration.ofMillis(400))`; before `0.3.0` it called `new MenuSettings(pageSize, filler, clickDebounce, loadingItem)`. A method throws `IllegalArgumentException` for a value outside its range.
 
 ## Text prompts
 
@@ -682,7 +702,7 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, sche
 
 | Constructor argument | Meaning |
 |---|---|
-| `menus` | The plugin's menus. The prompts read their lang files, locale function, entity-thread seams, logger and error reports. |
+| `menus` | The plugin's menus. The prompts read their text source, locale function, entity-thread seams, logger and error reports. |
 | `mode` | `PromptMode.CHAT` (the next chat line) or `PromptMode.ANVIL` (the name field of an anvil the prompts build). It holds for the life of the prompts. |
 | `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat. |
 | `timer` | Runs a task on any thread after a delay: `scheduler::delayedAsync`. |

@@ -343,6 +343,10 @@ plugins {
 | Change | Affects | Action |
 |---|---|---|
 | [Menus refuse a material that is not an item](#menus-refuse-a-material-that-is-not-an-item) | a plugin whose menu layouts or `MenuSettings` name a material that is not an item, or air | give an item material, and catch the exception where layouts are read |
+| [Menu settings, layouts and parts are built through factories](#menu-settings-layouts-and-parts-are-built-through-factories) | every plugin that builds a `MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` or `Menus.Parts` with `new` | replace each `new` with the factory and the methods for the values that differ from the defaults |
+| [MenuLayout takes its items as a collection](#menulayout-takes-its-items-as-a-collection) | a plugin that passed a map of items to `MenuLayout` | pass `map.values()` or a list |
+| [Menus read their text through a TextSource](#menus-read-their-text-through-a-textsource) | a plugin that calls `Menus.Parts.messages()` or `MenuText.messages()` | call `MenuText.source()`, or keep the plugin's own `Messages` |
+| [EconomyProvider.vault takes a folia flag](#economyprovidervault-takes-a-folia-flag) | a plugin that calls `EconomyProvider.vault`; the old call still compiles, with a deprecation warning | pass `scheduler.mode() == Scheduler.Mode.FOLIA` |
 
 ### Menus refuse a material that is not an item
 
@@ -355,3 +359,56 @@ stack trace.
 **Migration:** give each of these an item material. A plugin that reads layouts or settings from a file catches
 the `IllegalArgumentException` of `register` and `reload` and shows its message to the owner, as
 [Reload](/docs/modules/gui#reload) shows; a refused `reload` leaves the layouts as they were.
+
+### Menu settings, layouts and parts are built through factories
+
+`MenuSettings`, `ItemLayout`, `MenuLayout`, `PagerLayout` and `Menus.Parts` are final classes with no public
+constructor and are no longer records, so a value a later release adds to one breaks no plugin. Each is built
+through a static factory that takes what has no default, and a method named after each other value gives a copy
+with that value replaced. The methods that read a value keep their names, the layouts and `MenuSettings` still
+compare by value, and every check a constructor made is made by the factory or the method that takes the value.
+`Menus.Parts` compares by identity, and a record pattern over one of the five no longer compiles.
+
+**Migration:** replace each `new` with the factory, and add a method call for each value that differs from the
+default.
+
+| `0.2` | `0.3.0` | Defaults left out |
+|---|---|---|
+| `new MenuSettings(28, filler, debounce, loading)` | `MenuSettings.DEFAULTS.pageSize(28).filler(filler).clickDebounce(debounce).loadingItem(loading)` | the values of `MenuSettings.DEFAULTS` |
+| `new ItemLayout(id, slots, material, action, permission, enabled, name, lore)` | `ItemLayout.of(id, slots, material).action(action).permission(permission).enabled(enabled).name(name).lore(lore)` | no action, permission, name or lore, and shown |
+| `new PagerLayout(slots, emptySlot, emptyMaterial)` | `PagerLayout.of(slots).emptySlot(emptySlot).emptyMaterial(emptyMaterial)` | no empty state |
+| `new MenuLayout(menu, rows, filler, pager, items, title)` | `MenuLayout.of(menu, rows).filler(filler).pager(pager).items(items.values()).title(title)` | no filler, list, items or title |
+| `new Menus.Parts(layouts, settings, messages, locales, server, preview, tasks, entity, sounds, home, logger, errors)` | `Menus.Parts.of(server, preview, logger, messages, tasks, entity, errors).layouts(layouts).settings(settings).locales(locales).sounds(sounds).home(home)` | no layouts, `MenuSettings.DEFAULTS`, `Player::locale`, no sounds, no home menu |
+
+[Building a layout in code](/docs/modules/gui#building-a-layout-in-code) and
+[Enable and disable](/docs/modules/gui#enable-and-disable) show each in a plugin.
+
+### MenuLayout takes its items as a collection
+
+`MenuLayout.items(Collection<ItemLayout>)` takes the items themselves, in the order `MenuLayout.items()` keeps,
+and keys each by its own id. In `0.2` the constructor took a map and refused a key that differed from its item's
+id. Two items with one id are refused with an `IllegalArgumentException` such as "item buy is in the shop menu
+twice". `MenuLayout.item(ItemLayout)` adds one item, or replaces the item of the same id in its place.
+`MenuLayout.items()` still returns the map.
+
+**Migration:** pass `map.values()` where the plugin built a map, or build a list.
+
+### Menus read their text through a TextSource
+
+The menus and prompts hold a [`TextSource`](/docs/modules/gui#text-source), a function from a locale, a lang key
+and its placeholders to a `Component`, and no longer the `Messages`. `Menus.Parts.of` still takes the plugin's
+`Messages` and reads them as before, so a plugin that passes them changes nothing there. `Menus.Parts.messages()`
+and `MenuText.messages()` are gone; `Menus.Parts.text()` and `MenuText.source()` give the `TextSource`, whose
+`render`, `has` and `lines` take the same arguments as those of `Messages`.
+
+**Migration:** call `menus.text().source().render(locale, key)` where a menu called
+`menus.text().messages().render(locale, key)`, and keep the plugin's own `Messages` field for anything else it
+read from them.
+
+### EconomyProvider.vault takes a folia flag
+
+`EconomyProvider.vault(Plugin, ErrorReports, boolean switchedOn, boolean folia, Integer scale)` takes the server
+kind as a flag, `true` on Folia, so a plugin with no Taffy `Scheduler` can look the economy up. The overload that
+takes a `Scheduler.Mode` still works, gives the same result and is deprecated; a later release removes it.
+
+**Migration:** pass `scheduler.mode() == Scheduler.Mode.FOLIA` in place of `scheduler.mode()`.

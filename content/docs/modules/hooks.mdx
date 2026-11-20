@@ -169,7 +169,7 @@ public final class ShopPlugin extends JavaPlugin {
     }
 
     private Detected<EconomyProvider> lookUpEconomy() {
-        return EconomyProvider.vault(this, errors, true, scheduler.mode(), null);
+        return EconomyProvider.vault(this, errors, true, scheduler.mode() == Scheduler.Mode.FOLIA, null);
     }
 
     private @Nullable String balanceText(Player player) {
@@ -346,9 +346,9 @@ A plugin that is on but no longer enabled, or still loading its items, is skippe
 
 ## Economy
 
-`EconomyProvider.vault(Plugin owner, ErrorReports errors, boolean switchedOn, Scheduler.Mode mode, @Nullable Integer scale)` looks up the economy registered with Vault. It reads the registration once and calls nothing in the economy.
+`EconomyProvider.vault(Plugin owner, ErrorReports errors, boolean switchedOn, boolean folia, @Nullable Integer scale)` looks up the economy registered with Vault. It reads the registration once and calls nothing in the economy.
 
-- `mode` is `scheduler.mode()`. It decides what each reason asks the owner to install: on `Scheduler.Mode.FOLIA` the reasons name VaultUnlocked and an economy plugin that supports Folia.
+- `folia` tells whether the server is Folia: `scheduler.mode() == Scheduler.Mode.FOLIA` for a plugin with a Taffy `Scheduler`. It decides what each reason asks the owner to install: on Folia the reasons name VaultUnlocked and an economy plugin that supports Folia. From `0.3.0` the entry point takes this flag, so a plugin with no Taffy `Scheduler` can look the economy up. The overload that takes a `Scheduler.Mode` in its place is deprecated and a later release removes it; it gives the same result.
 - `scale` is the number of decimal places to use, from 0 to `EconomyProvider.MAX_SCALE` (4), or `null` to use the economy's own fractional digits, capped at 4, or 2 when it reports none. A scale finer than the economy keeps is warned about on first use. A scale outside 0 to 4 throws `IllegalArgumentException`, also when switched off.
 
 Vault itself need not be enabled: only the API and the registration are read. The status's plugin is always `Vault`, and each state but `SWITCHED_OFF` and `ON` carries a reason:
