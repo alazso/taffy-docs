@@ -191,6 +191,8 @@ final class MenuLayouts {
 
 A bad value throws `IllegalArgumentException` (or `NullPointerException` for a missing required part) with a message that names the value it refuses: the menu and item for a `MenuLayout`, the item for an `ItemLayout`, the slot for a `PagerLayout`. A plugin that reads layouts from files catches it and shows the message to the owner.
 
+The records do not check that a material is an item, since that needs a running server. From `0.3.0`, `Menus.register` and `Menus.reload` do: they throw `IllegalArgumentException` for a material that is not an item a slot can show, air included, whether it is the material of an `ItemLayout` (shown or not), the `filler` of a `MenuLayout`, the `emptyMaterial` of a `PagerLayout` or, in `register`, the `filler` or `loadingItem` of the `MenuSettings`. The message names the menu and the item, such as `item buy of the shop menu has the material WALL_TORCH, which is not an item`. Before `0.3.0` such a layout registered and every open of the menu failed with a stack trace.
+
 Behaviour of a layout:
 
 - An item with an action is a button the menu draws for that action. An item without one is decoration, drawn as written, with its tooltip hidden when it has no name.
@@ -752,7 +754,7 @@ Sort sort = menus.memory().get(viewer.getUniqueId(), "warps", Sort.class); // nu
 | Layouts | `menus.reload(layouts)` | Every menu opened afterwards. Open sessions keep their layout. |
 | Sounds | A new map behind the `sounds` supplier | The next cue played. |
 
-`reload` checks the new map as `register` does and throws `IllegalArgumentException` when a key differs from its layout's menu, a registered menu has no layout, or a layout does not fit its kind. A refused map leaves the layouts as they were:
+`reload` checks the new map as `register` does and throws `IllegalArgumentException` when a key differs from its layout's menu, a registered menu has no layout, a layout does not fit its kind or, from `0.3.0`, a registered menu's layout holds a material that is not an item. A refused map leaves the layouts as they were:
 
 ```java
 try {

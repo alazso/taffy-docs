@@ -329,3 +329,29 @@ The release also documents a move that needs no new Taffy version: a plugin that
 `JavaPlugin.getConfig()` beside a `ConfigHolder` keeps old values after a reload and after a save in the editor.
 [Moving a plugin off getConfig()](/docs/modules/config#moving-a-plugin-off-getconfig) describes the move and what
 the server owner sees after it.
+
+## 0.3.0
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.3.0"
+}
+```
+
+| Change | Affects | Action |
+|---|---|---|
+| [Menus refuse a material that is not an item](#menus-refuse-a-material-that-is-not-an-item) | a plugin whose menu layouts or `MenuSettings` name a material that is not an item, or air | give an item material, and catch the exception where layouts are read |
+
+### Menus refuse a material that is not an item
+
+`Menus.register` and `Menus.reload` throw `IllegalArgumentException` for a material that is not an item a slot
+can show, air included: the material of an `ItemLayout` (shown or not), the `filler` of a `MenuLayout`, the
+`emptyMaterial` of a `PagerLayout`, and, in `register`, the `filler` and `loadingItem` of the `MenuSettings`. The
+message names the menu and the item. In `0.2` such a layout registered and every open of the menu failed with a
+stack trace.
+
+**Migration:** give each of these an item material. A plugin that reads layouts or settings from a file catches
+the `IllegalArgumentException` of `register` and `reload` and shows its message to the owner, as
+[Reload](/docs/modules/gui#reload) shows; a refused `reload` leaves the layouts as they were.
