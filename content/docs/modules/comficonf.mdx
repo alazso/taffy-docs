@@ -125,6 +125,8 @@ final class MyComfiConf {
 
 It throws `IllegalArgumentException` when the id or a text is invalid or the id is already registered, and `IllegalStateException` when the bridge or `owner` is not enabled or the bridge's API service is not the one the plugin sees. It is called from `onEnable`, never from `onLoad`, a constructor or a static initializer. When it runs inside the supplier given to `connect`, a thrown exception becomes the `FAILED` state instead of leaving `connect`.
 
+From `0.2.2`, `register` compares the bridge's `ComfiConfApi.apiVersion()` with the `ComfiConfApi.API_VERSION` Taffy is compiled against before it registers anything. A bridge with a lower version makes it throw an `IllegalStateException` that names both versions, and nothing is registered. Inside the supplier given to `connect` that exception becomes the `API_MISSING` state, not `FAILED`. A bridge with the same or a higher version registers as before.
+
 ## At enable
 
 At the end of `onEnable`, after the settings file loaded and after any migration that writes it, the main class connects. A method that fills the supplier field on its first call keeps the integration class unloaded until `connect` asks for it:
@@ -186,7 +188,7 @@ No plugin named `ComfiConf` is installed: `NOT_INSTALLED`. It is installed but n
 The API is not visible to the plugin, or the plugin's jar holds its own copy: `NOT_VISIBLE`, with one warning. The installed bridge lacks an API class the plugin was built against: `API_MISSING`, with one warning that asks the owner to update ComfiConf.
 </Step>
 <Step>
-The supplier runs, at most once, on the calling thread. A `LinkageError` from it whose message names a `com.comficonf` class, or that has no message, means the bridge lacks an API class: `API_MISSING`, with the same warning. Any other `RuntimeException` or `LinkageError` (a class of the plugin that failed to initialize included), or a `null` result, logs one warning with the stack, is reported to `errors` under the source `hook.comficonf`, and gives `FAILED`. A supplier that returns a link logs `Registered <id> with ComfiConf` and gives `ON`.
+The supplier runs, at most once, on the calling thread. A `LinkageError` from it whose message names a `com.comficonf` class, or that has no message, means the bridge lacks an API class: `API_MISSING`, with the same warning. From `0.2.2`, a bridge whose API version is lower than the one Taffy is compiled against, which `ComfiConfRegistration.register` refuses, gives `API_MISSING` too: the warning names both API versions, nothing is registered and nothing is reported to `errors`. Any other `RuntimeException` or `LinkageError` (a class of the plugin that failed to initialize included), or a `null` result, logs one warning with the stack, is reported to `errors` under the source `hook.comficonf`, and gives `FAILED`. A supplier that returns a link logs `Registered <id> with ComfiConf` and gives `ON`.
 </Step>
 </Steps>
 
