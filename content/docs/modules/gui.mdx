@@ -434,6 +434,7 @@ A `Frame<S>` is one render. It reads `state()`, `viewer()`, `locale()`, `layout(
 |---|---|
 | `action(action, spec)` | Every enabled layout item with that action the viewer has the permission for. Throws `IllegalArgumentException` for an action the kind does not have. |
 | `list(entries, requestedPage)` | The page of `entries` nearest `requestedPage` in the first `capacity()` list slots. Returns the `Pager.Page` shown. |
+| `list(count, requestedPage, entryAt)` | From `0.3.0`: the same page of a list of `count` entries, asking the `IntFunction<Frame.Entry>` only for the entries on that page, each once and in order. Use it for a long list, so a render builds no icon for a row it does not show. Throws `NullPointerException` when `entryAt` gives `null`. |
 | `capacity()` | How many rows a page shows: the smaller of the page size and the number of list slots. |
 | `loading()` | The settings' loading item, named by `Frame.LOADING` (`gui.common.loading.name`), in the first `capacity()` list slots. Clicks on it do nothing. |
 | `empty()` | The empty state in the list's `emptySlot`, named and described by `gui.<id>.empty.name` and `gui.<id>.empty.lore` where the lang files hold them. Nothing when the list has no empty slot. |
