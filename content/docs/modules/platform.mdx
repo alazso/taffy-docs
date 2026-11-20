@@ -732,8 +732,9 @@ closed jar, counts as absent and is logged as a warning; an absent class is not 
 
 | Member | Behaviour |
 |---|---|
-| `post(String url, String content, Consumer<String> onError)` | Posts `content` as the message text, cut to 2000 characters. |
-| `postBody(String url, String body, Consumer<String> onError)` | Posts a ready JSON body. |
+| `post(String url, String content, Consumer<String> onError)` | Posts `content` as the message text, cut to 2000 characters. From `0.2.0`, no mention in it pings. |
+| `post(String url, String content, PostOptions options, Consumer<String> onError)` | From `0.2.0`. The same, with the mention types of `options` allowed to ping. |
+| `postBody(String url, String body, Consumer<String> onError)` | Posts a ready JSON body as given, with nothing added. |
 | `isWebhookUrl(String)` | Static. Whether the URL is an `https` Discord webhook URL on `discord.com` or `discordapp.com`, with optional `canary.` or `ptb.` and API version. |
 | `close()` | Closes the client and blocks until every in-flight request has finished. |
 
@@ -754,6 +755,37 @@ that does not parse it reaches the caller of the post method. Neither post metho
 Discord:
 apply `isWebhookUrl` when reading the URL from config.
 
+### Mentions
+
+From `0.2.0`, `post` sends `"allowed_mentions": {"parse": []}` with the content, so `@everyone`, `@here`, a role
+mention such as `<@&roleId>` and a user mention such as `<@userId>` are shown as text and ping no one. In `0.1` the
+key was not sent, Discord's default applied, and player text in a post (an item renamed to `@everyone free nitro`,
+a reason, a chat line) could ping the whole guild.
+
+A post that is meant to ping names the mention types to allow in a `DiscordWebhook.PostOptions`:
+
+| `DiscordWebhook.Mention` | Allows | Name in `allowed_mentions.parse` |
+|---|---|---|
+| `EVERYONE` | `@everyone` and `@here` | `everyone` |
+| `ROLES` | role mentions | `roles` |
+| `USERS` | user mentions | `users` |
+
+```java
+import so.alaz.taffy.platform.DiscordWebhook.Mention;
+import so.alaz.taffy.platform.DiscordWebhook.PostOptions;
+
+webhook.post(url, "<@&" + restockRoleId + "> the shop restocked",
+    PostOptions.allowing(Mention.ROLES),
+    reason -> getLogger().warning("Discord webhook failed: " + reason));
+```
+
+`PostOptions` is a record of a `Set<Mention>`; `PostOptions.allowing(Mention...)` and `PostOptions.noMentions()`
+build one. An allowed type covers every mention of that type in the content, the ones in player text too, so allow
+a type only for content the plugin or the server owner wrote.
+
+`postBody` passes its body through raw: it is sent as given, with nothing added, removed or checked. A body without
+an `allowed_mentions` key leaves Discord's default in force, under which every mention in it pings.
+
 Each request fails when no response headers arrive within 15 seconds, but `close()` has no upper bound: a server
 that sends headers and then stalls keeps it blocked longer. An interrupt ends the wait, aborts the in-flight
 requests through their callbacks and stays set. `close()` is meant to be the last step of a shutdown before metrics.
@@ -761,6 +793,17 @@ requests through their callbacks and stays set. `close()` is meant to be the las
 `WebhookPayload.render(Map<String, Object> template, UnaryOperator<String> resolve)` turns a payload template (nested
 maps, lists, strings, numbers and booleans) into the JSON body `postBody` sends. Every string goes through
 `resolve` first, and the structure is then serialized, so a resolved value cannot change the JSON structure.
+
+From `0.2.0`, `render` adds `"allowed_mentions": {"parse": []}` to the top level of a template that has no
+`allowed_mentions` key of its own, so a mention in a resolved value pings no one. A template that has the key keeps
+its value unchanged. That is how a server owner allows mentions from config:
+
+```yaml title="config.yml"
+payload:
+  content: '<@&123456789012345678> {buyer} bought {item}'
+  allowed_mentions:
+    parse: [roles]
+```
 
 ```java
 Map<String, Object> template = Map.of(
