@@ -142,7 +142,7 @@ A snapshot carries changes that the `[Unreleased]` section of the changelog desc
 | Java | 25. `so.alaz.taffy.java` sets the Java 25 toolchain on each module that applies it, directly or through another Taffy convention plugin. |
 | Gradle's own JVM | Java 25, because the Taffy Gradle plugins are Java 25 class files. |
 | Server | Paper and Folia, at the builds [Servers](#servers) gives for each release line. `Scheduler` uses only schedulers that both provide. |
-| Paper API | `io.papermc.paper:paper-api` `26.1.2.build.66-stable`, the `paper` version of the `alaz` catalog (`alaz.paper.api`). |
+| Paper API | `io.papermc.paper:paper-api` `26.3.build.256-stable` from `0.2.0` and `26.1.2.build.66-stable` in `0.1.x`, the `paper` version of the `alaz` catalog (`alaz.paper.api`). |
 
 Gradle picks a Java 25 JVM whatever `JAVA_HOME` is when the plugin project holds this file:
 
@@ -165,9 +165,9 @@ The catalog pins the versions of the rest of the stack the same way (HikariCP, t
 | Release line | Compiled against | Servers |
 |---|---|---|
 | `0.1.x` | `paper-api` `26.1.2.build.66-stable` | Links statically against the `paper-api` of 26.2 and 26.3. Untested on a server, Paper or Folia. |
-| From `0.2.0` | the newest 26.3 stable `paper-api` | Paper 26.2 build 135 (the final 26.2 build) or newer, and Folia 26.3 build 8 or newer, since Folia 26.2 has no stable build. |
+| `0.2.x` | `paper-api` `26.3.build.256-stable` | Paper 26.2 build 135 (the final 26.2 build) or newer, and Folia 26.3 build 8 (the first stable Folia 26.3 build) or newer, since Folia 26.2 has no stable build. Paper 26.1.2 is not supported. |
 
-The `paper-api` pin and the oldest supported server stay the same for every patch of a release line.
+The `paper-api` pin and the oldest supported server stay the same for every patch of a release line. From `0.2.0`, `alaz.paper.api` brings Adventure 5.2.0 in place of 4.26.1, so a plugin moving from `0.1.x` recompiles against it. Adventure 5 makes `ClickEvent` generic, so a raw `ClickEvent` compiles with a rawtypes warning until it is written `ClickEvent<?>`.
 
 ## Reading the changelog
 
