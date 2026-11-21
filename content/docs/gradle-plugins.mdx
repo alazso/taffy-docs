@@ -248,6 +248,14 @@ so.alaz.taffy.paper-plugin relocates Taffy under <group>.libs, and the project g
 
 Before `0.4.1`, a project without a group built a jar whose Taffy classes sat under `/libs/taffy/`, which no server loads. The group is read when one of the two tasks is configured or run, so a `group = "..."` line in `build.gradle.kts` after the `plugins` block counts. A group that is not a Java package name, such as `com.example.my-plugin`, builds as long as the plugin lists no [runtime library](#runtime-libraries).
 
+From `0.4.2`, `shadowJar` also fails when the project group is `so.alaz.taffy` or a package inside it, such as `so.alaz.taffy.shop`:
+
+```text
+so.alaz.taffy.paper-plugin relocates Taffy under <group>.libs, and the project group "so.alaz.taffy.shop" is so.alaz.taffy or inside it, so the relocated copy would still be inside so.alaz.taffy and Taffy refuses it when the plugin enables. Set group in gradle.properties to a package outside so.alaz.taffy, for example group=com.example.myplugin.
+```
+
+Before `0.4.2`, such a project built a jar with Taffy under `so/alaz/taffy/shop/libs/taffy/`. [`Relocation.check()`](/docs/consuming-by-coordinates#relocation) counts a copy inside `so.alaz.taffy` as not relocated, so the plugin threw `IllegalStateException` when it enabled. A group that only starts with the name, such as `so.alaz.taffyshop`, builds. `generateRuntimeLibraries` does not make this check.
+
 With `group=com.example.myplugin`, Taffy's `so.alaz.taffy.platform.Scheduler` ships as `com.example.myplugin.libs.taffy.platform.Scheduler`. Each plugin carries its own copy of Taffy, so plugins built on different Taffy versions share no Taffy classes on one server. bStats refuses to start from classes that were not relocated, so a build that shades `taffy-metrics` without this plugin relocates the same three packages itself and keeps `META-INF/faststats.properties` in its shadow jar ([metrics](/docs/modules/metrics) has the details, and [Without the Gradle plugins](/docs/consuming-by-coordinates#the-shadow-jar) the whole shadow jar setup).
 
 From `0.4.1`, Taffy refuses to run unrelocated inside a plugin: a jar built another way that leaves Taffy in `so.alaz.taffy` fails on the server with an `IllegalStateException` that names the plugin and the missing `relocate("so.alaz.taffy", ...)` line. A jar this plugin builds passes the check. [Relocation](/docs/consuming-by-coordinates#relocation) has the message and the rule.
