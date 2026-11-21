@@ -1517,11 +1517,13 @@ change. `0.4.2` moves one failure from the server to the build and corrects two 
 |---|---|---|
 | [A group inside so.alaz.taffy is refused](/docs/gradle-plugins#the-shadow-jar) | a build whose project group is `so.alaz.taffy` or a package inside it, such as `so.alaz.taffy.shop`: `shadowJar` fails, where the build passed and the plugin threw `IllegalStateException` from `Relocation.check()` when it enabled | set `group` in `gradle.properties` to a package outside `so.alaz.taffy` |
 | [The Prompts of one plugin share a player's ask](/docs/modules/gui#text-prompts) | a plugin that builds a `Prompts` over each of two `Menus`: `ask` and `askLater` of one also end the ask the other holds for the player, whose `PromptRequest.abandoned()` gets `PromptEnd.REPLACED`, where the player held one ask in each and one chat line answered both | nothing, unless the plugin counted on a player holding two asks at once: ask one question at a time |
-| [The secret key rule leaves a plain token word as written](/docs/modules/metrics#anonymizing) | a plugin whose own exception message writes a secret after the plain word `token`, `tokens`, `secret` or `secrets` and a `:` in the middle of a line, such as `the token: abc`: the value was sent as `[redacted]` and is now sent | name the key in full, as in `bot-token: abc`, or leave the value out of the message |
+| [The secret key rule leaves a plain token word as written](/docs/modules/metrics#anonymizing) | a plugin whose own exception message writes a secret after another word, a space, the plain word `token`, `tokens`, `secret` or `secrets` and a `:`, such as `the token: abc`: the value was sent as `[redacted]` and is now sent. After any other character, as in `login failed, token: abc`, it is still `[redacted]` | name the key in full, as in `bot-token: abc`, or leave the value out of the message |
 
 The error reports of `taffy-metrics` also hide more with no change in the plugin: a Windows path with a space or
-forward slashes, a `file:` URL, an email address with a long last label, a URI password that holds a `/`, the
-database name of PostgreSQL's `pg_hba.conf` message and the host of a URI. Package names such as `java.io` and
-two-letter pairs such as `pt.br` are no longer hidden as host names. Reports whose messages differ only in a
-value these rules hide merge into one kind.
+forward slashes, a `file:` URL, a jdbc URL of a path with a space, an email address with a long last label, a URI
+password that holds a `/`, the database name of PostgreSQL's `pg_hba.conf` message, the host of a URI, and a
+dotted name after a connection word such as `Connection to` or a key such as `host=`. Package names such as
+`java.io` and two-letter pairs such as `pt.br` are no longer hidden as host names, so a host such as `mc.gg` is
+sent outside a URI and those words. Reports whose messages differ only in a value these rules hide merge into one
+kind.
 [Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.2`.
