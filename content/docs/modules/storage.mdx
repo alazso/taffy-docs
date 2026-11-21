@@ -589,6 +589,28 @@ On MySQL, MariaDB and PostgreSQL, starts that share a database and a version tab
 
 When a SQLite database already holds a table and has a pending migration, `start` first copies it with `VACUUM INTO` to `backups/data-<version>-<yyyyMMdd-HHmmss>.db` under the plugin's data path, with the plugin version and the UTC time. From `0.4.0`, every character of the version other than an ASCII letter, a digit, a dot, an underscore or a hyphen is written as an underscore, so `1.4.0+build.7` gives `data-1.4.0_build.7-<time>.db`. It then keeps the newest `backupKeep` files of that pattern by modification time and leaves other files in the folder alone. With `backupKeep` at 0 no copy is taken.
 
+#### Restoring a backup
+
+A copy is one complete database file as it was when that start began, before any of its pending migrations ran: `VACUUM INTO` writes no `-wal` or `-shm` file beside it. The version in its name is the plugin version that took the copy, not the one that last wrote the data in it. Whatever was written after the copy is not in it. Storage has no restore call: the owner restores with the server stopped.
+
+<Steps>
+<Step>
+Stop the server. Storage holds the database file open while the plugin runs.
+</Step>
+<Step>
+In the plugin's data folder, move the database file out of the way, together with the two files SQLite keeps beside it in WAL mode when they exist. The file has the name the plugin passed to `StorageSettings.sqlite`, so for `data.db` these are `data.db`, `data.db-wal` and `data.db-shm`. A `-wal` file left beside a restored database belongs to the database it replaced.
+</Step>
+<Step>
+Copy the chosen `backups/data-<version>-<yyyyMMdd-HHmmss>.db` to the name of the database file. The time in the name is UTC. Copy it instead of moving it, so the backup stays in the folder.
+</Step>
+<Step>
+Install the plugin version to run on it. A version that has migrations the copy does not record, such as the version in the file name, takes a new copy and runs those migrations at the start. A version whose newest migration is the newest the copy records, usually the one that ran before the version in the file name, starts on the copy as it is. A version whose newest migration is older than that stops the start with `the database is at schema version <n>, set up by a newer version of the plugin`.
+</Step>
+<Step>
+Start the server.
+</Step>
+</Steps>
+
 ## Taking over another runner's version table
 
 A plugin that kept its schema with its own migration runner passes a `Baseline` naming that runner's version table to the second `start` overload. On a database that has no [version table](#the-version-table) yet, and none `0.1.0` to `0.3.2` wrote for this plugin, storage takes the database over before any migration runs; once its version table exists, the baseline is ignored, so it can stay in the plugin's start for good.

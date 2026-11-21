@@ -4,7 +4,8 @@ description: Each change since Taffy 0.1 that needs an action from a plugin, wit
 ---
 
 This page lists every change since `0.1.0` that needs an action from a plugin, release by release. Each section
-says what changed, who it affects and what to do. No patch of `0.1` (`0.1.1`, `0.1.2`) needs an action. The
+says what changed, who it affects and what to do. No patch of `0.1` (`0.1.1`, `0.1.2`) needs an action: the one
+entry `0.1.1` lists under Changed is about how Taffy is released, in a build job that holds no credentials. The
 [changelog](/docs/versioning#reading-the-changelog) holds every other change, and each later release adds its own
 part to this page.
 
@@ -43,7 +44,8 @@ for each release line.
 
 **Migration:** run the plugin on Paper 26.2 build 135 or newer, or Folia 26.3 build 8 or newer, and recompile it
 against `paper-api` 26.3. Adventure 5 makes `ClickEvent` generic, so a raw `ClickEvent` compiles with a rawtypes
-warning until it is written `ClickEvent<?>`.
+warning until it is written `ClickEvent<?>`. Inside `taffy-gui` the package-private `CancelLink.link` returns
+`ClickEvent<?>` for the same reason: its erasure is the same and no public signature changes.
 
 `compileJava` accepts a call that exists in `paper-api` 26.3 and not on Paper 26.2. The new
 [`compileAgainstPaperFloor`](/docs/gradle-plugins#compiling-against-the-oldest-supported-paper) task compiles the
@@ -108,6 +110,7 @@ prefix of `Messages.render(Text, ...)` and `Messages.renderTemplate`.
   is still filled in.
 - A placeholder written as an unquoted tag argument, such as `<color:%team_color%>`, or inside the URL of
   `<click:open_url:...>`, no longer forms the tag, which is then shown as text.
+- Tag names that start with `taffy_papi_` are reserved for the render.
 - `Text.resolve` is unchanged and returns what PlaceholderAPI gave, tags included.
 
 **Opt-in:** where an expansion returns MiniMessage formatting on purpose, such as a rank prefix with a gradient,
@@ -186,10 +189,11 @@ webhook.close(Duration.ofSeconds(15));
 
 `WebhookPayload.render` throws `IllegalArgumentException` for a template value that is not a `String`, `Number`,
 `Boolean`, `null`, `Map`, `List` or Bukkit `ConfigurationSection`. The message names the value by its key path,
-such as `embeds[0].timestamp`. In `0.1` such a value was handed to the JSON serializer, which wrote whatever its
-reflection found.
+such as `embeds[0].timestamp`. It throws the same way for a `Double` or `Float` that is `NaN` or infinite. In
+`0.1` such a value was handed to the JSON serializer, which wrote whatever its reflection found.
 
-**Migration:** turn the value into a `String`, `Number` or `Boolean` before the template is given to `render`.
+**Migration:** turn the value into a `String`, `Number` or `Boolean` before the template is given to `render`,
+and a `NaN` or infinite number into a finite one or a `String`.
 [Discord](/docs/modules/platform#discord) lists how each type is rendered.
 
 ### SkullBuilder remembers a failed lookup
@@ -325,8 +329,9 @@ Two additions are there for a plugin that wants them:
   full copy of the file, secrets included, as [What the bridge calls](/docs/modules/comficonf#what-the-bridge-calls)
   states.
 
-The release also documents a move that needs no new Taffy version: a plugin that still reads
-`JavaPlugin.getConfig()` beside a `ConfigHolder` keeps old values after a reload and after a save in the editor.
+The docs of this release also describe a move that needs no new Taffy version and has no changelog entry: a
+plugin that still reads `JavaPlugin.getConfig()` beside a `ConfigHolder` keeps old values after a reload and after
+a save in the editor.
 [Moving a plugin off getConfig()](/docs/modules/config#moving-a-plugin-off-getconfig) describes the move and what
 the server owner sees after it.
 
@@ -530,7 +535,7 @@ button in that slot, as a click within that window of the menu opening already i
 just after `Menus.rerender` or a load redrew the menu ran the handler of whatever the slot showed by then, so a
 viewer aiming at one listing bought the one that had moved into its slot. Another button is a list row with
 another `Frame.Entry.key`, for a row with no key a row with another icon, a button of another layout item, or any
-button in a slot that had none. A layout action that redraws with other text keeps taking clicks.
+button in a slot that had none. A layout action that redraws with other text or another icon keeps taking clicks.
 
 `Frame.Entry` has `key` as a fifth record component. `Entry.click`, `Entry.display` and the four-argument
 constructor still compile and give a row with no key; a record pattern over `Frame.Entry` needs a fifth
@@ -636,8 +641,9 @@ Component note = menus.text().source().render(locale, "gui.shop.note");
 
 `Answer.Later(CompletableFuture<Answer>)` is a third result of a `PromptRequest` answer function, as
 [Text prompts](/docs/modules/gui#text-prompts) describes. `Answer` is sealed, so a `switch` over it that names
-`Accept` and `Retry` and has no `default` branch no longer compiles. An answer function that returns an `Accept`
-or a `Retry` needs no change.
+`Accept` and `Retry` and has no `default` branch no longer compiles, and one compiled against `0.2.2` throws a
+`MatchException` when it is given a `Later`. An answer function that returns an `Accept` or a `Retry` needs no
+change.
 
 **Migration:** give the `switch` a `default` branch, which also covers a result a later release adds, or a case
 for `Answer.Later`.
@@ -1005,8 +1011,8 @@ plugin and is left alone, and the start logs one warning that names it.
   `0.4.0` release whether to keep the earlier name. A plugin that ships one release on the default name and pins
   the earlier name afterwards is stopped at start with `the table <table> continues the migrations
   <prefix>schema_version records and holds newer ones`, since the earlier table no longer holds the whole history.
-- Two plugin names that differ only in characters the default replaces, such as `My-Plugin` and `My_Plugin`, give
-  the same default name. One of the two plugins sets a name.
+- Two plugin names that differ only in characters the default replaces, such as `My-Plugin` and `My_Plugin`, or
+  only after the cut at 54 characters, give the same default name. One of the two plugins sets a name.
 
 ```java title="0.3"
 // records migrations in myplugin_schema_version, the table of every plugin under the prefix myplugin_
@@ -1474,8 +1480,8 @@ plugins {
 
 Every signature of `0.4.0` is still there, and a plugin built with `so.alaz.taffy.paper-plugin` on Gradle 9.2.0 or
 newer, with a group set, rebuilds with no change. `0.4.1` stops two things that worked on `0.4.0` (a Gradle
-older than 9.2.0 and Taffy left in its original package), moves three failures from the server to the build with a message that names the fix, and corrects
-three answers of `FakeItems`.
+older than 9.2.0 and Taffy left in its original package), moves three failures from the server to the build with
+a message that names the fix, corrects three answers of `FakeItems`, and makes two checks of `ApiRules` find more.
 
 | Change | Affects | Action |
 |---|---|---|
@@ -1485,6 +1491,7 @@ three answers of `FakeItems`.
 | [A runtime library is `group:name:version`](/docs/gradle-plugins#runtime-libraries) | a build that passes `runtimeLibrary` a catalog entry without a version: `generateRuntimeLibraries` fails and names the entry, where Paper rejected the coordinate at server start | pass an entry that has a version |
 | [The group is checked](/docs/gradle-plugins#the-shadow-jar) | a build with a blank group or one with an empty segment: `shadowJar` and `generateRuntimeLibraries` fail, where the jar held Taffy under `/libs/taffy/`; a build that lists a runtime library under a group that is not a Java package name: `generateRuntimeLibraries` fails before javac does | set `group` in `gradle.properties`, as [Set the group and version](/docs/getting-started#set-the-group-and-version) shows |
 | [FakeItems answers add, subtract and isEmpty like an ItemStack](/docs/modules/test#fakeitems) | a test that expected `add()`, `add(int)`, `subtract()` or `subtract(int)` of a `FakeItems` item to return `null` and leave the amount, or `item(Material.AIR, 1).isEmpty()` to be `false` | expect the item back with the amount changed, and `true` for an item made from `Material.AIR`, `Material.CAVE_AIR` or `Material.VOID_AIR` |
+| [ApiRules walks inherited interfaces and follows static fields](/docs/modules/test#apirules) | a test that runs `ApiRules` over a module in a subpackage of `so.alaz.taffy`, the only code the checks accept: `ApiRules.signatureViolations` also checks the module interfaces an exported class inherits members from, whatever their visibility, and `ApiRules.staticHolderViolations` follows a static field that names a module class into the instance fields of that class, so a test that passed on `0.4.0` can report a violation. No Taffy module does, and a plugin's own classes are not checked with `ApiRules` | change the signature or the field the reported line names |
 
 A plugin built with `so.alaz.taffy.paper-plugin` gets four corrections in its jar with no change in the build: the
 `META-INF/services` files of shaded jars are merged, `META-INF/LICENSE` is the root project's own file with each
@@ -1492,3 +1499,29 @@ dependency's license under `META-INF/licenses/`, a package such as `so.alaz.taff
 `so.alaz.taffy`, and a backslash in `paper-plugin.yml` stays as written.
 [The shadow jar](/docs/gradle-plugins#the-shadow-jar) and [paper-plugin.yml](/docs/gradle-plugins#paper-pluginyml)
 describe them. A server owner changes nothing for `0.4.1`.
+
+## 0.4.2
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.2"
+}
+```
+
+Every signature of `0.4.1` is still there, and a plugin whose group is outside `so.alaz.taffy` rebuilds with no
+change. `0.4.2` moves one failure from the server to the build and corrects two behaviours a plugin can see.
+
+| Change | Affects | Action |
+|---|---|---|
+| [A group inside so.alaz.taffy is refused](/docs/gradle-plugins#the-shadow-jar) | a build whose project group is `so.alaz.taffy` or a package inside it, such as `so.alaz.taffy.shop`: `shadowJar` fails, where the build passed and the plugin threw `IllegalStateException` from `Relocation.check()` when it enabled | set `group` in `gradle.properties` to a package outside `so.alaz.taffy` |
+| [The Prompts of one plugin share a player's ask](/docs/modules/gui#text-prompts) | a plugin that builds a `Prompts` over each of two `Menus`: `ask` and `askLater` of one also end the ask the other holds for the player, whose `PromptRequest.abandoned()` gets `PromptEnd.REPLACED`, where the player held one ask in each and one chat line answered both | nothing, unless the plugin counted on a player holding two asks at once: ask one question at a time |
+| [The secret key rule leaves a plain token word as written](/docs/modules/metrics#anonymizing) | a plugin whose own exception message writes a secret after the plain word `token`, `tokens`, `secret` or `secrets` and a `:` in the middle of a line, such as `the token: abc`: the value was sent as `[redacted]` and is now sent | name the key in full, as in `bot-token: abc`, or leave the value out of the message |
+
+The error reports of `taffy-metrics` also hide more with no change in the plugin: a Windows path with a space or
+forward slashes, a `file:` URL, an email address with a long last label, a URI password that holds a `/`, the
+database name of PostgreSQL's `pg_hba.conf` message and the host of a URI. Package names such as `java.io` and
+two-letter pairs such as `pt.br` are no longer hidden as host names. Reports whose messages differ only in a
+value these rules hide merge into one kind.
+[Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.2`.
