@@ -881,15 +881,19 @@ plugins {
 | [SslMode has a fourth constant](#sslmode-has-a-fourth-constant) | a plugin with a `switch` over `StorageSettings.SslMode`, or one that stores a mode by its ordinal | add a `default` branch, and store the mode by its name |
 | [The version table is named after the plugin](#the-version-table-is-named-after-the-plugin) | a plugin on MySQL, MariaDB or PostgreSQL: its history moves to a table of its own on the first start, with no change in the plugin; a plugin, test or query that reads `<prefix>schema_version` | read the new name, or keep the earlier one with `StorageSettings.versionTable`; update every server that shares the database before the next migration ships |
 | [More database threads than connections stop the start](#more-database-threads-than-connections-stop-the-start) | a plugin whose `asyncThreads` can be above its `Pool.maxSize`, such as one that reads both from its config | set `maxSize` to `asyncThreads` or more, and show the owner the message |
-| [A script the splitter cannot read stops the start](#a-script-the-splitter-cannot-read-stops-the-start) | a plugin with a migration that has not run everywhere yet and holds a block comment, `$$`, a quoted string over several lines or a quote after a backslash | rewrite the script by the script rules |
+| [A script the splitter cannot read stops the start](#a-script-the-splitter-cannot-read-stops-the-start) | a plugin with a migration script that holds an unclosed or nested block comment, `$$`, a quoted string over several lines, or on MySQL and MariaDB a quote after a backslash | correct a script that has not shipped; never edit one that ran on any database |
 | [A commit the database rolled back is retried](#a-commit-the-database-rolled-back-is-retried) | a plugin that catches `CommitUnknownException` to retry a serialization failure, as PostgreSQL `SERIALIZABLE` work does | call `asyncRetrying` and drop that branch |
 | [A SQLite write takes the write lock when it begins](#a-sqlite-write-takes-the-write-lock-when-it-begins) | a plugin that passes work that only reads to `async` on SQLite, and a test over `Storage.over` | pass that work to `read`; add `transaction_mode=IMMEDIATE` to the test's properties |
 | [A SQLite backup is named with safe characters only](#a-sqlite-backup-is-named-with-safe-characters-only) | a tool that looks a backup up by a plugin version with a character such as `+` | replace those characters with an underscore |
+| [The checksum ignores line endings and a byte order mark](#the-checksum-ignores-line-endings-and-a-byte-order-mark) | a test that compares the stored checksum with the SHA-256 of a script's bytes; servers on `0.3` and `0.4.0` builds that share a version table | compare with the SHA-256 of the normalized text; update every server before a migration is applied |
+| [A SQLite migration ignores rows that already broke a foreign key](#a-sqlite-migration-ignores-rows-that-already-broke-a-foreign-key) | a plugin that relied on a start stopping for rows that broke a foreign key before the migration | run `PRAGMA foreign_key_check` after `Storage.start` |
+| [A PostgreSQL start waits at most a day for the migration lock](#a-postgresql-start-waits-at-most-a-day-for-the-migration-lock) | a plugin or test that expects a PostgreSQL start to wait for the lock without limit | handle the `StorageException` and start again |
 | [A shipped config.yml needs a config-version](#a-shipped-configyml-needs-a-config-version) | a plugin on `ConfigLoader` whose shipped `config.yml` has no `config-version`, or a quoted one | write `config-version: 1` without quotes, and set `baselineVersion(1)` when released versions shipped the file without the key |
 | [The message for a file that is not UTF-8 names the line](#the-message-for-a-file-that-is-not-utf-8-names-the-line) | code or a test that compares the whole message of `StrictYaml.read`, `ConfigLoader.load` or a `YamlFolder` error line | compare the start of the message |
 | [Read and write failures name the file, not its path](#read-and-write-failures-name-the-file-not-its-path) | code or a test that reads a path out of a `cannot read` or `cannot write` message of `taffy-config` | take the path from the `Path` passed, or from the cause |
 | [YamlFolder skips dot files and reports .yaml files](#yamlfolder-skips-dot-files-and-reports-yaml-files) | a plugin whose entry files start with a dot, or whose owners keep `.yaml` files in a `YamlFolder` folder | rename the files, or drop the line from `errors()` |
 | [Owner-keyed sections are checked](#owner-keyed-sections-are-checked) | a plugin that passes `ConfigLoader` a blank owner-keyed path or one section inside another | list each section once and none inside another |
+| [ConfigReader.parsed treats a DateTimeException as a rejection](#configreaderparsed-treats-a-datetimeexception-as-a-rejection) | a plugin that catches the `DateTimeException` of a `parsed` parser around its load | drop that branch |
 | [CustomItemPlugin may gain a constant](#customitemplugin-may-gain-a-constant) | a plugin with a `switch` over `CustomItemPlugin` | add a `default` branch |
 
 A server owner changes nothing for `0.4.0`. [The first start on 0.4.0](#the-first-start-on-040) lists what the
@@ -978,16 +982,31 @@ keeps `schema_version`.
 The first start under `0.4.0` finds the plugin's earlier table by its content: a `<prefix>schema_version` in
 storage's layout that records at least one migration with the checksum of one of this plugin's scripts. It copies
 the rows into the new table and logs one line that names both. The earlier table stays as it was and is not read
-again, so a server that still runs a build on `0.3` against the same database keeps starting. A
-`<prefix>schema_version` of another plugin is left alone.
+again, so a server that still runs a build on `0.3` against the same database keeps starting.
 
-**Migration:** a plugin that only starts storage changes nothing. Two things need a look:
+A `<prefix>schema_version` that records this plugin's migrations by version and name, but none under the checksum
+of the current script, is taken as the plugin's earlier table whose scripts changed: the start stops before
+anything is copied or run, as `changed after it ran on this database` stopped it in `0.3`. The message starts with
+`the table <prefix>schema_version records migration <id> with another checksum` and names both checksums. Another
+plugin under the same prefix whose migrations carry the same versions and names gives the same rows, so the message
+names that case as well: that plugin starts once the plugin that owns the table has started on `0.4.0` and copied
+it. A `<prefix>schema_version` whose rows match neither by checksum nor by version and name belongs to another
+plugin and is left alone, and the start logs one warning that names it.
+
+**Migration:** a plugin that only starts storage changes nothing. Four things need a look:
 
 - A plugin, a test or an owner's query that reads `<prefix>schema_version` reads the new name. A plugin that must
   keep the earlier name sets it.
 - A migration applied under `0.4.0` is recorded only in the new table. A build on `0.3` that holds the same
   migration and starts afterwards runs it again, so update every server that shares the database before the plugin
   ships its next migration.
+- The name must not change after the first start on a database, and neither must the plugin name the default is
+  built from: under another name storage finds no history and runs every migration again. Decide before the first
+  `0.4.0` release whether to keep the earlier name. A plugin that ships one release on the default name and pins
+  the earlier name afterwards is stopped at start with `the table <table> continues the migrations
+  <prefix>schema_version records and holds newer ones`, since the earlier table no longer holds the whole history.
+- Two plugin names that differ only in characters the default replaces, such as `My-Plugin` and `My_Plugin`, give
+  the same default name. One of the two plugins sets a name.
 
 ```java title="0.3"
 // records migrations in myplugin_schema_version, the table of every plugin under the prefix myplugin_
@@ -1029,16 +1048,19 @@ StorageSettings settings = StorageSettings.sqlite("data.db").pool(StorageSetting
 
 A migration script that is still to run stops the start, before the SQLite backup and before any migration, when
 it holds what the [script rules](/docs/modules/storage#script-rules) cannot read: a single-quoted string that does
-not end on the line it starts, the start of a block comment or `$$` outside a quoted string, or a quote directly
-after a backslash. The `StorageException` names the file and the line. In `0.3` such a script was split at the
-wrong place, or ran only because the construct held no semicolon. A script that already ran on a database is only
-compared by its checksum, so it never stops a start for this.
+not end on the line it starts, a block comment that never closes or holds another block comment, `$$` outside a
+quoted string and outside a block comment, or, on MySQL and MariaDB, a quote directly after a backslash. The
+`StorageException` names the file and the line. In `0.3` such a script was split at the wrong place, or ran only
+because the construct held no semicolon. A block comment that closes is kept and sent with its statement, and a
+quote after a backslash ends the string on SQLite and PostgreSQL, as both did in `0.3`. A script that already ran
+on a database is only compared by its checksum, so it never stops a start for this.
 
-**Migration:** write comments as `--`, keep each quoted string on one line, write a quote inside a string as two
-quotes, and create a function or trigger outside the migration scripts.
+**Migration:** in a script that has not shipped yet, close each block comment, keep each quoted string on one line,
+write a quote inside a string as two quotes, and create a function or trigger outside the migration scripts. Do not
+edit a script that already ran on any database: its checksum would no longer match there, and that database would
+stop with `changed after it ran on this database`. Put the corrected statement into a new migration instead.
 
-```sql title="0.3"
-/* accounts of the shop */
+```sql title="0.3: a MySQL or MariaDB script that has not shipped yet"
 CREATE TABLE ${prefix}accounts (
     player BINARY(16) NOT NULL PRIMARY KEY,
     note VARCHAR(64) NOT NULL DEFAULT 'the owner\'s account'
@@ -1046,7 +1068,6 @@ CREATE TABLE ${prefix}accounts (
 ```
 
 ```sql title="0.4.0"
--- accounts of the shop
 CREATE TABLE ${prefix}accounts (
     player BINARY(16) NOT NULL PRIMARY KEY,
     note VARCHAR(64) NOT NULL DEFAULT 'the owner''s account'
@@ -1060,7 +1081,8 @@ A commit the database refuses because it rolled the transaction back, an `SQLTra
 with that exception, and `asyncRetrying` and `readRetrying` run the work again. Nothing was written by such a
 commit. In `0.3` it completed the future with a `CommitUnknownException`, which is never retried, so PostgreSQL
 `SERIALIZABLE` work, which learns of a serialization failure (`40001`) at its commit, could not use `asyncRetrying`.
-Any other failed commit is a `CommitUnknownException` as before.
+Any other failed commit is a `CommitUnknownException` as before, and so is one with SQLState `40003` (statement
+completion unknown), which does not say whether the commit was written.
 
 **Migration:** code that caught `CommitUnknownException` to retry a serialization failure itself calls
 `asyncRetrying` and drops that branch. Code that treats every `CommitUnknownException` as unknown needs no change.
@@ -1116,6 +1138,82 @@ backups/data-1.4.0+build.7-20261102-101530.db
 backups/data-1.4.0_build.7-20261102-101530.db
 ```
 
+### The checksum ignores line endings and a byte order mark
+
+The checksum storage records for a migration script is the SHA-256 of its text without a leading byte order mark
+and with every line ending as a line feed. In `0.3` it was the SHA-256 of the script's exact bytes, and a script
+that differed from the one that ran even in its line endings stopped the start. A row `0.1.0` to `0.3.2` wrote is
+accepted when the script has the same text, with LF or CRLF endings and with or without a mark, so no row is
+rewritten. [Checksums](/docs/modules/storage#checksums) states the rule.
+
+**Migration:** a test that compares the stored checksum with the SHA-256 of the script's bytes compares it with the
+SHA-256 of the normalized text. A row written under `0.4.0` for a script with CRLF endings or a mark is not the
+SHA-256 of its bytes, so a build on `0.3` that reads the same version table stops with `changed after it ran on
+this database`: update every server that shares the database before a migration is applied.
+
+```java title="0.3"
+String expected = sha256(Files.readString(script));
+assertThat(storedChecksum).isEqualTo(expected);
+```
+
+```java title="0.4.0"
+String text = Files.readString(script);
+String normalized = (text.startsWith("\uFEFF") ? text.substring(1) : text).replace("\r\n", "\n").replace('\r', '\n');
+assertThat(storedChecksum).isEqualTo(sha256(normalized));
+```
+
+### A SQLite migration ignores rows that already broke a foreign key
+
+On SQLite, `PRAGMA foreign_key_check` runs before a migration and again before it commits, and the migration is
+rolled back only for a row the second check finds and the first did not. One warning per start names the tables of
+the rows that were already broken. In `0.3` every row the check found after the migration rolled it back and
+stopped the start, so one orphaned row from an earlier bug blocked every later migration. The rows of a
+`WITHOUT ROWID` table have no row id in that check, so they are counted per table, parent and foreign key.
+
+**Migration:** a plugin that relied on the start stopping for such rows runs the check itself after the start.
+
+```java title="0.3"
+// a row of child that refers to a missing parent stops the start at the next migration with a StorageException
+Storage.start(this, errors, settings, MIGRATIONS, Clock.systemUTC());
+```
+
+```java title="0.4.0"
+// the start succeeds with one warning that names child
+Storage.start(this, errors, settings, MIGRATIONS, Clock.systemUTC())
+    .thenCompose(storage -> storage.read(tx -> tx.query("PRAGMA foreign_key_check", Tx.Binder.NONE,
+        row -> row.text("table"))))
+    .thenAccept(tables -> {
+        if (!tables.isEmpty()) {
+            getLogger().severe("Rows with a broken foreign key in " + tables);
+        }
+    });
+```
+
+### A PostgreSQL start waits at most a day for the migration lock
+
+On PostgreSQL a start waits at most a day for the migration lock and then fails with a `StorageException`, as on
+MySQL and MariaDB. In `0.3` it waited with no limit for a holder that stayed connected.
+
+**Migration:** a plugin that holds the lock longer than a day on purpose, or a test that expects the start to wait
+without limit, handles the exception and starts again.
+
+```java title="0.3"
+// completes only once the other start has released the lock, however long that takes
+Storage.start(this, errors, settings, MIGRATIONS, Clock.systemUTC());
+```
+
+```java title="0.4.0"
+// "another start has held the migration lock of <version table> in database <schema> for a day; restart once
+// the other server has started"
+Storage.start(this, errors, settings, MIGRATIONS, Clock.systemUTC()).exceptionally(failure -> {
+    Throwable cause = failure instanceof CompletionException ? failure.getCause() : failure;
+    if (cause instanceof StorageException held) {
+        getLogger().severe("Cannot start the database: " + held.getMessage());
+    }
+    return null;
+});
+```
+
 ### A shipped config.yml needs a config-version
 
 `ConfigLoader.load()` throws `ConfigLoadException` with the message `the config.yml inside the plugin jar has no
@@ -1156,7 +1254,8 @@ A plugin whose shipped file always carried a whole-number `config-version` chang
 `StrictYaml.read` names the line of the first byte that is not UTF-8, counted from 1, in the message of its
 `ConfigLoadException`. The same message is the error line of a `YamlFolder` for such a file and the message of
 `ConfigLoader.load()` for such a `config.yml`. An owner who saved one line with an umlaut in a legacy code page
-now learns which line.
+now learns which line. `YamlFileProvider` keeps the message without the line for a file an editor read or save
+refuses.
 
 **Migration:** code or a test that compares the whole message compares its start.
 
@@ -1249,6 +1348,31 @@ Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"), "kits.sp
 Map<String, Set<String>> ownerKeyed = Map.of("kits", Set.of("default"));
 ```
 
+### ConfigReader.parsed treats a DateTimeException as a rejection
+
+`ConfigReader.parsed` treats a `DateTimeException` its parser throws as a rejection of the value, as it treats an
+`IllegalArgumentException`: the owner gets the warning and the fallback is used. In `0.3` the
+`DateTimeParseException` of `LocalTime::parse` or the `ZoneRulesException` of `ZoneId::of` left `parsed` and failed
+the load. Any other exception of the parser is still thrown on.
+
+**Migration:** a plugin that caught the exception around its load to report the value drops that branch. A parser
+that must stop the load throws another exception type, such as `IllegalStateException`.
+
+```java title="0.3"
+LocalTime resetAt;
+try {
+    resetAt = reader.parsed("reset-at", LocalTime.NOON, "a time such as 18:30", LocalTime::parse);
+} catch (DateTimeParseException invalid) {
+    getLogger().warning("reset-at is not a time such as 18:30, so 12:00 is used.");
+    resetAt = LocalTime.NOON;
+}
+```
+
+```java title="0.4.0"
+// "25:99" gives the fallback and the reader's own warning
+LocalTime resetAt = reader.parsed("reset-at", LocalTime.NOON, "a time such as 18:30", LocalTime::parse);
+```
+
 ### CustomItemPlugin may gain a constant
 
 The Javadoc of `CustomItemPlugin` states that constants may be added in any release. `0.4.0` adds none, and the four
@@ -1284,7 +1408,7 @@ them needs an action from the owner.
 
 | What | Who sees it | What the owner sees |
 |---|---|---|
-| The version table name | a server on MySQL, MariaDB or PostgreSQL | One console line, once, and a new table `<prefix><plugin>_schema_version` beside the earlier `<prefix>schema_version`, which stays. |
+| The version table name | a server on MySQL, MariaDB or PostgreSQL | One console line, once, and a new table `<prefix><plugin>_schema_version` beside the earlier `<prefix>schema_version`, which stays. Where the earlier table belongs to another plugin under the same prefix, one warning that names it instead. |
 | The checksum rule | a server whose plugin build holds scripts with other line endings than the build that set the database up | The start succeeds, where it stopped with `changed after it ran on this database`. Nothing is logged and no row is rewritten. |
 | The config upgrade | a server whose plugin gave its shipped `config.yml` a `config-version` for `0.4.0` without setting a baseline | One console line, a `config.yml` written anew with `config-version` in it, and the previous file as `config.yml.v0.bak`. |
 
@@ -1299,10 +1423,23 @@ Later starts log nothing, because the new table exists. A server on SQLite keeps
 A plugin that set `StorageSettings.versionTable` to the earlier name keeps that table, and no line is logged.
 [The version table](/docs/modules/storage#the-version-table) describes the copy.
 
+Where `<prefix>schema_version` holds only rows of another plugin, nothing is copied and the start logs once, for
+the same plugin and prefix:
+
+```text title="Console"
+[My-Plugin] The table myplugin_schema_version records migrations, but none under the checksum of one of this plugin's scripts, so it is read as another plugin's version table and this plugin starts a new history in myplugin_my_plugin_schema_version, which runs every migration. If myplugin_schema_version is this plugin's table, a script changed after it ran: stop the server, restore the script, and restore a backup of the database if a migration ran twice.
+```
+
 **The checksum rule.** The rows of the version table keep the checksums `0.1.0` to `0.3.2` wrote, and a script that
 still has the bytes it ran with is accepted as before. A build whose scripts differ from those bytes only in their
-line endings or a leading byte order mark now starts as well. A script whose text changed still stops the start
-with `changed after it ran on this database`. [Checksums](/docs/modules/storage#checksums) states the rule.
+line endings (LF or CRLF) or a leading byte order mark now starts as well, in either direction: a database a CRLF
+build recorded starts on an LF build too. One limit remains: a row recorded from a script with lone carriage returns
+or mixed line endings is accepted only while the script still has those exact bytes. A script whose text changed
+still stops the start with `changed after it ran on this database`. That holds on the first start under `0.4.0`
+too, while the rows are still in `<prefix>schema_version`: the start stops before anything is copied or run.
+[Checksums](/docs/modules/storage#checksums) states the rule, and
+[The checksum ignores line endings and a byte order mark](#the-checksum-ignores-line-endings-and-a-byte-order-mark)
+what it changes for a plugin.
 
 **The config upgrade.** What happens to an owner's `config.yml` depends on what the plugin did about
 [the shipped config-version](#a-shipped-configyml-needs-a-config-version):
@@ -1323,4 +1460,4 @@ An upgrade logs one line that names the versions and the copy, and the shipped k
 Every value of the owner's file is kept, and the way it is written can change: quotes, the form of a number, the
 place of an added key and comments inside a list, as
 [What an upgrade rewrites](/docs/modules/config#what-an-upgrade-rewrites) lists. From `0.4.0` a text longer than 80
-columns stays on one line in the saved file.
+columns stays on one line in the saved file, through an upgrade and through a save from the ComfiConf editor.

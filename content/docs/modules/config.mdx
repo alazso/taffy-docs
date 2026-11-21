@@ -258,7 +258,7 @@ The save of an upgrade writes the file anew from the parsed settings. Every valu
 | A text of several lines | A literal block (the `\|` style), also when it was a folded block (`>`). |
 | A number, a date, `true`/`false` | The plain form of the value: `0x10` becomes `16`, `yes` becomes `true` and `2026-12-31` becomes `2026-12-31T00:00:00Z`. |
 | A key the upgrade adds | After the keys the owner's file has in that section, not at the place it has in the shipped file. |
-| Comments | A comment inside a list is not written back. The indent of a list can change, and a comment or blank line elsewhere can move. |
+| Comments | A comment inside a list is not written back. The indent of a list can change, and a comment or blank line elsewhere can move. The last comment line of a file that holds no key is not written back. |
 | Line endings and a byte order mark | Every line ends in a line feed, and a byte order mark is not written back. |
 
 From `0.4.0`, the text of the upgraded file is produced, parsed again and compared with the upgraded settings before anything is written. When the text cannot be produced, or a value would not be read back as it is, nothing is written and no copy is made. A text with half of a surrogate pair (`"a\ud83db"`) is one the writer cannot write, and a text with a control character (`"ding\a"`) is one it turns into `!!binary`, which loads as bytes. Before `0.4.0` the first threw a `RuntimeException` out of `load()` after the copy was written, and the second was saved as `!!binary`.
@@ -281,7 +281,7 @@ ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoa
 | `1` | Read as it is. Nothing is written and no copy is made. |
 | `2` | Upgraded from version 1: the missing shipped keys and `config-version: 2` are added, and the previous file is kept as `config.yml.v1.bak`. |
 
-The baseline is the version of the layout those releases wrote, and the first shipped file with the key carries the same number. A file that holds a version is not affected. `version` is 0 or more, and a negative one throws `IllegalArgumentException`.
+The baseline is the version of the layout those releases wrote, and the first shipped file with the key carries the same number. A file that holds a version is not affected. `version` is 0 or more, and a negative one throws `IllegalArgumentException`. A baseline above the shipped `config-version` is a mistake in the plugin: every `load()` throws `ConfigLoadException` with `the baseline version 3 is above the config-version 2 of the config.yml inside the plugin jar` and writes nothing.
 
 ### Owner-keyed sections
 
@@ -555,7 +555,7 @@ Each byte sequence that is not UTF-8 is read as U+FFFD, the file loads, and `war
 
 ## StrictYaml
 
-`StrictYaml` never replaces a document it cannot use with an empty configuration. Both methods return a new `YamlConfiguration` with the document's comments kept, which is not thread-safe.
+`StrictYaml` never replaces a document it cannot use with an empty configuration. Both methods return a new `YamlConfiguration` with the document's comments kept, which is not thread-safe. From `0.4.0` its line width is `Integer.MAX_VALUE`, so `saveToString()` writes a text without a line break on one line whatever its length; before `0.4.0` it folded a text longer than 80 columns over several indented lines.
 
 - `static YamlConfiguration parse(String text, String source)` parses text. Empty text is an empty configuration.
 - `static YamlConfiguration read(Path file, String source)` reads a file as UTF-8 and parses it, blocking the calling thread.

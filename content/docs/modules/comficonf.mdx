@@ -294,7 +294,7 @@ YamlFileProvider.builder(file, mapper, holder::reload)
     .build(plugin.getLogger());
 ```
 
-Only the fields the mapper declares are read and written. Comments, keys the schema does not declare and the file's line endings are kept on every write. A file that is not UTF-8 or not valid YAML is never written.
+Only the fields the mapper declares are read and written. Comments, keys the schema does not declare and the file's line endings are kept on every write. From `0.4.0`, a text longer than 80 columns, such as a MiniMessage line, stays on one line through a write; before `0.4.0` every write folded such a text over several indented lines, also when another field changed, with its value unchanged. A file that is not UTF-8 or not valid YAML is never written.
 
 ### The apply result
 
