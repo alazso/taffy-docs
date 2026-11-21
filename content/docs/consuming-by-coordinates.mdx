@@ -97,9 +97,15 @@ The modules are Java 25 class files, so the plugin compiles with a Java 25 toolc
 ```kotlin title="build.gradle.kts"
 tasks.shadowJar {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    relocate("org.bstats", "com.example.myplugin.libs.bstats")
-    relocate("dev.faststats", "com.example.myplugin.libs.faststats")
-    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy")
+    relocate("org.bstats", "com.example.myplugin.libs.bstats") {
+        include("org.bstats.**")
+    }
+    relocate("dev.faststats", "com.example.myplugin.libs.faststats") {
+        include("dev.faststats.**")
+    }
+    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy") {
+        include("so.alaz.taffy.**")
+    }
 }
 
 tasks.processResources {
@@ -111,7 +117,15 @@ tasks.processResources {
 
 ### Relocation
 
-`relocate("so.alaz.taffy", "<group>.libs.taffy")` moves Taffy under the plugin's own package, here `com.example.myplugin.libs.taffy`, so two plugins built on different Taffy versions share no Taffy classes on one server. It sits next to the bStats and FastStats lines that [metrics](/docs/modules/metrics#relocation) requires: bStats refuses to start from classes that were not relocated. These are the same three relocations `so.alaz.taffy.paper-plugin` makes.
+`relocate("so.alaz.taffy", "<group>.libs.taffy")` moves Taffy under the plugin's own package, here `com.example.myplugin.libs.taffy`, so two plugins built on different Taffy versions share no Taffy classes on one server. It sits next to the bStats and FastStats lines that [metrics](/docs/modules/metrics#relocation) requires: bStats refuses to start from classes that were not relocated. These are the same three relocations `so.alaz.taffy.paper-plugin` makes. Each `include` keeps a relocation inside its package: without one, Shadow matches the raw path prefix, so `relocate("so.alaz.taffy", ...)` also moves a package named `so.alaz.taffyshop`.
+
+From `0.4.1`, Taffy checks the relocation on the server. A jar without the `so.alaz.taffy` line still builds and passes its tests, and before `0.4.1` it also ran: a class missing from one plugin's older Taffy copy then loaded from another plugin's copy, through Paper's lookup across plugins. Now `new ErrorReports()`, `new Text(...)`, `Messages.load(...)`, `Messages.loadLenient(...)`, `new ConfigLoader(...)` and `new YamlFolder(...)` each call `Relocation.check()` of `taffy-platform`, and every other module takes an `ErrorReports`, so a plugin that creates one of these or uses another module fails with an `IllegalStateException` that names it. A plugin that uses only the other classes of `taffy-platform` and `taffy-config`, such as `DiscordWebhook` or `ItemBuilder`, does not run the check. The message:
+
+```text
+MyPlugin ships Taffy in its original package so.alaz.taffy, so its Taffy classes mix with those of every other plugin that does the same. Its build needs relocate("so.alaz.taffy", "<group>.libs.taffy") in the shadowJar task, or the so.alaz.taffy.paper-plugin Gradle plugin, which relocates Taffy.
+```
+
+The check fails only when both hold: the Taffy classes are in `so.alaz.taffy` or a package inside it, and the class loader that loaded them is a plugin's (it implements Paper's `ConfiguredPluginClassLoader`, as the loaders of `paper-plugin.yml` and `plugin.yml` plugins do). The name comes from the plugin's `paper-plugin.yml` or `plugin.yml`, and a loader that gives none reads `A plugin`. On any other class loader, such as the one of the plugin's unit tests, the check does nothing, so tests run against unrelocated Taffy as before. A relocated copy passes, and after the first pass a call returns at once. A copy relocated to a package inside `so.alaz.taffy`, such as `so.alaz.taffy.shop.libs.taffy`, counts as not relocated, so a plugin whose own package is inside `so.alaz.taffy` cannot relocate Taffy under it.
 
 ### META-INF/faststats.properties
 

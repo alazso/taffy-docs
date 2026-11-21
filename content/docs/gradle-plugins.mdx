@@ -54,11 +54,23 @@ group=com.example.myplugin
 version=1.0.0
 ```
 
-The plugins are Java 25 class files loaded into Gradle's own JVM, so Gradle itself runs on Java 25. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to. Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`; a build that uses a snapshot adds that repository to `pluginManagement.repositories`. [Getting started](/docs/getting-started) covers building against a local publish.
+The plugins are Java 25 class files loaded into Gradle's own JVM, so Gradle itself runs on Java 25. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to.
+
+The plugins need Gradle 9.2.0 or newer. Gradle 9.1.0 is the first release that runs on Java 25, and on 9.1.0 the Shadow plugin that `so.alaz.taffy.paper-plugin` applies fails with a `NoSuchMethodError` for `AdhocComponentWithVariants.addVariantsFromConfiguration`. Taffy's own build and the examples use 9.9.1, and Taffy's tests build a plugin on 9.2.0. From `0.4.1`, `so.alaz.taffy.settings` stops a build on an older Gradle before it applies anything:
+
+```text
+so.alaz.taffy.settings needs Gradle 9.2.0 or newer, and this build runs on Gradle 9.1.0. Set a newer version in distributionUrl in gradle/wrapper/gradle-wrapper.properties.
+```
+
+Before `0.4.1`, a build on Gradle 9.1.0 failed with that `NoSuchMethodError` when it applied `so.alaz.taffy.paper-plugin`, and ran when it applied only the other plugins. The wrapper's own `wrapper` task cannot raise the version here, since it loads the settings plugin first: edit `distributionUrl`, and `distributionSha256Sum` when the file has one.
+
+Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`; a build that uses a snapshot adds that repository to `pluginManagement.repositories`. [Getting started](/docs/getting-started) covers building against a local publish.
 
 ## so.alaz.taffy.settings
 
 Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.4.0` gives catalog `0.4.0`, which in turn pins every Taffy module to `0.4.0`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
+
+From `0.4.1`, it first checks the Gradle version and fails on a Gradle older than 9.2.0 with the message shown under [Applying the plugins](#applying-the-plugins). A release candidate or milestone of 9.2.0 passes.
 
 ## so.alaz.taffy.repositories
 
@@ -82,7 +94,7 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 | `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | `com.github.retrooper` |
 | `jitpack` | `https://jitpack.io` | `com.github.MilkBowl`, `com.github.Arcaniax-Development`, `com.github.decentsoftware-eu`, `com.github.HologramLib`, `com.github.maximjsx.EntityLib` |
 
-Gradle asks a repository only for the groups in its Content column. A row that names subgroups covers every group below the ones it names, and every other group is matched exactly. The groups are the ones the `alaz` catalog's entries and their dependencies come from. The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`.
+Gradle asks a repository only for the groups in its Content column. A row that names subgroups covers every group below the ones it names, and every other group is matched exactly. The groups are the ones the `alaz` catalog's entries and their dependencies come from. The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`. The limit of `MavenRepo` to releases is Gradle's own and holds on Gradle 9.5.1 and newer: on Gradle 9.4.1 and older, Maven Central is also asked for a snapshot version of the groups it serves.
 
 From `0.2.0`, every repository except Maven Central has a content filter and `jitpack` is last. Before `0.2.0`, only `alazso`, `alazsoSnapshots` and the three hologram rows had one, `jitpack` stood between `faststats` and `vaultunlocked`, and the other repositories were asked for any module an earlier repository lacked. A build that took a module of another group from one of these repositories now fails with `Could not find` for that module, and declares the repository itself, as shown below.
 
@@ -142,7 +154,19 @@ Each test task passes every `mockito-core-*.jar` on its own classpath to the tes
 
 Every `Jar` task (the plain jar, the sources and javadoc jars, and the shadow jar) copies the file `LICENSE` from the root project directory into `META-INF`. When the root project has no `LICENSE`, the jars build without one.
 
-In the shadow jar of `so.alaz.taffy.paper-plugin` that copy does not survive when the plugin shades a Taffy module. Shadow copies the plugin's own classes and resources first, then the dependency jars, then files added on the `shadowJar` task itself, and `DuplicatesStrategy.EXCLUDE` keeps the first copy of each path. Every Taffy module carries Taffy's MIT `LICENSE` in `META-INF`, so the shadow jar ships that license and drops the root project's. A plugin ships its own license by copying it into its main resources, which come first:
+From `0.4.1`, the shadow jar of `so.alaz.taffy.paper-plugin` keeps that copy when the plugin shades a Taffy module or any other jar that carries a license. `META-INF/LICENSE` in the plugin jar is the root project's own file, and the jar has no `META-INF/LICENSE` when the root project has none. The license files of each shaded jar, which are the files directly in `META-INF` whose name starts with `LICENSE` in any case, ship under `META-INF/licenses/<jar file name without .jar>/`:
+
+```text
+META-INF/LICENSE
+META-INF/licenses/taffy-platform-0.4.1/LICENSE
+META-INF/licenses/taffy-config-0.4.1/LICENSE
+```
+
+Two shaded jars with one file name, compared without case, get `META-INF/licenses/<name>/` and `META-INF/licenses/<name>-2/`, in runtime classpath order, and a third gets `-3`. A second license file of one jar whose name differs only in case, such as `license` beside `LICENSE`, gets the same suffix. A `META-INF/LICENSE*` file the build adds to `shadowJar` by hand, such as `from("LICENSE.md") { into("META-INF") }`, still ships: only the copies from the shaded jars move.
+
+The task `collectDependencyLicenses` gathers those files into `build/generated/resources/dependencyLicenses`, and `shadowJar` depends on it. A `META-INF/LICENSE` in the plugin's own main resources also ships as the plugin's own file, and comes before the root project's. Only the shadow jar changes: the plain, sources and javadoc jars that `so.alaz.taffy.java` builds are as before.
+
+Before `0.4.1`, the copy did not survive. Shadow copies the plugin's own classes and resources first, then the dependency jars, then files added on the `shadowJar` task itself, and `DuplicatesStrategy.EXCLUDE` keeps the first copy of each path. Every Taffy module carries Taffy's MIT `LICENSE` in `META-INF`, so the shadow jar shipped that license and dropped the root project's, and shipped it even when the root project had no license. A plugin on an older version ships its own license by copying it into its main resources, which come first:
 
 ```kotlin title="build.gradle.kts"
 tasks.processResources {
@@ -152,7 +176,7 @@ tasks.processResources {
 }
 ```
 
-`unzip -p build/libs/myplugin-1.0.0.jar META-INF/LICENSE` prints the license the jar ships. The plain `jar` task, which would hold both copies of the file, is disabled under `so.alaz.taffy.paper-plugin`.
+That block is not needed from `0.4.1` and does no harm there. `unzip -p build/libs/myplugin-1.0.0.jar META-INF/LICENSE` prints the license the jar ships. The plain `jar` task, which would hold both copies of the file, is disabled under `so.alaz.taffy.paper-plugin`.
 
 ## so.alaz.taffy.coverage
 
@@ -198,11 +222,13 @@ Applies `so.alaz.taffy.coverage` and Shadow (`com.gradleup.shadow`), and builds 
 
 | Task | Setting |
 |---|---|
-| `shadowJar` | `archiveClassifier` is empty, `duplicatesStrategy = DuplicatesStrategy.EXCLUDE`, relocations below |
+| `shadowJar` | `archiveClassifier` is empty, `duplicatesStrategy = DuplicatesStrategy.EXCLUDE`, `mergeServiceFiles()`, the license handling under [LICENSE](#license), relocations below |
 | `jar` | disabled |
 | `assemble` | depends on `shadowJar` |
 
 `./gradlew build` therefore leaves one file, `build/libs/<project name>-<version>.jar`, with no classifier. With `DuplicatesStrategy.EXCLUDE`, the first copy of a path wins, which keeps one `META-INF/faststats.properties` when several dependencies carry it.
+
+From `0.4.1`, the files under `META-INF/services` are the exception: the build calls Shadow's `mergeServiceFiles()` and sets `DuplicatesStrategy.INCLUDE` on `META-INF/services/**`, so the jar holds one file per service with the provider lines of the plugin and of every shaded jar, each relocated like its class. A plugin that shades two JDBC drivers keeps both in `META-INF/services/java.sql.Driver`. One file is left out: `META-INF/services/org.codehaus.groovy.runtime.ExtensionModule`, which Shadow's service merge does not take, keeps its first copy like any other path. Before `0.4.1`, the first file of a name won and the providers of the other jars were lost to `ServiceLoader`.
 
 Three packages are relocated under `<group>.libs`, where `<group>` is the project group:
 
@@ -212,7 +238,19 @@ Three packages are relocated under `<group>.libs`, where `<group>` is the projec
 | `dev.faststats` | `<group>.libs.faststats` |
 | `so.alaz.taffy` | `<group>.libs.taffy` |
 
+From `0.4.1`, each relocation carries an include pattern (`org.bstats.**`, `dev.faststats.**`, `so.alaz.taffy.**`), so it covers the package and its subpackages and nothing else. Before `0.4.1`, Shadow matched the raw path prefix: a package such as `so.alaz.taffyshop`, `org.bstatsx` or `dev.faststatsx` was relocated as well, and a plugin whose group was `so.alaz.taffyshop` shipped a main class Paper could not find under the name in `paper-plugin.yml`.
+
+From `0.4.1`, `shadowJar` and `generateRuntimeLibraries` fail when the project group is blank or has an empty segment, such as `com..myplugin`:
+
+```text
+so.alaz.taffy.paper-plugin relocates Taffy under <group>.libs, and the project group "" is blank or has an empty segment. Set group in gradle.properties, for example group=com.example.myplugin.
+```
+
+Before `0.4.1`, a project without a group built a jar whose Taffy classes sat under `/libs/taffy/`, which no server loads. The group is read when one of the two tasks is configured or run, so a `group = "..."` line in `build.gradle.kts` after the `plugins` block counts. A group that is not a Java package name, such as `com.example.my-plugin`, builds as long as the plugin lists no [runtime library](#runtime-libraries).
+
 With `group=com.example.myplugin`, Taffy's `so.alaz.taffy.platform.Scheduler` ships as `com.example.myplugin.libs.taffy.platform.Scheduler`. Each plugin carries its own copy of Taffy, so plugins built on different Taffy versions share no Taffy classes on one server. bStats refuses to start from classes that were not relocated, so a build that shades `taffy-metrics` without this plugin relocates the same three packages itself and keeps `META-INF/faststats.properties` in its shadow jar ([metrics](/docs/modules/metrics) has the details, and [Without the Gradle plugins](/docs/consuming-by-coordinates#the-shadow-jar) the whole shadow jar setup).
+
+From `0.4.1`, Taffy refuses to run unrelocated inside a plugin: a jar built another way that leaves Taffy in `so.alaz.taffy` fails on the server with an `IllegalStateException` that names the plugin and the missing `relocate("so.alaz.taffy", ...)` line. A jar this plugin builds passes the check. [Relocation](/docs/consuming-by-coordinates#relocation) has the message and the rule.
 
 `com.comficonf` is never relocated: the ComfiConf API comes from the installed bridge, and a plugin declares it `compileOnly(alaz.comficonf.api)` ([ComfiConf](/docs/modules/comficonf)). Any other library a plugin adds with `implementation` is shaded unrelocated unless the build adds its own `relocate` call:
 
@@ -232,7 +270,9 @@ version: "${version}"
 main: com.example.myplugin.MyPlugin
 ```
 
-The file goes through Gradle's `expand`, and `version` is the only property defined. Another `${...}` expression in it fails `processResources`.
+The file goes through Gradle's `expand`, and `version` is the only property defined. Another `${...}` expression in it fails `processResources`, and `\$` gives a literal dollar sign.
+
+From `0.4.1`, every backslash in the file stays as it is: `description: "First\nSecond"` and `Reads C:\data\shop` reach the jar unchanged. Before `0.4.1`, `expand` read `\n`, `\t`, `\\` and the other backslash sequences as the characters they name, so the first description came out with a line break in the middle of the YAML string and the second lost its backslashes, while the build passed.
 
 ### Compiler flag
 
@@ -273,7 +313,7 @@ The `paperPlugin` extension (`so.alaz.taffy.gradle.PaperPluginExtension`) lists 
 | Member | Type | Meaning |
 |---|---|---|
 | `runtimeLibraries` | `ListProperty<String>` | Coordinates as `group:name:version` |
-| `runtimeLibrary(library)` | takes `Provider<MinimalExternalModuleDependency>` | Adds a version catalog entry as `group:name:version` |
+| `runtimeLibrary(library)` | takes `Provider<MinimalExternalModuleDependency>` | Adds a version catalog entry as `group:name:version`, with the version the catalog requires |
 
 ```kotlin title="build.gradle.kts"
 dependencies {
@@ -319,6 +359,22 @@ final class RuntimeLibraries {
 
 The class and its field are package-private, so the code that reads them lives in that same package. The project group becomes the `package` declaration as it is, so it must be a valid Java package name. With an empty list, no class is generated. `**/RuntimeLibraries.class` is in `coverage.conventionExclusions`, outside the gate.
 
+From `0.4.1`, `generateRuntimeLibraries` checks what it writes and fails, writing nothing, in two cases. A group that is not a Java package name fails before javac reads the generated file:
+
+```text
+paperPlugin.runtimeLibraries generates RuntimeLibraries in the package named by the project group, and "com.example.my-plugin" is not a Java package name. Set group in gradle.properties to one, for example group=com.example.myplugin.
+```
+
+An entry that is not `group:name:version` fails with the entry named. Each segment holds at least one character and no whitespace, quote or backslash:
+
+```text
+The paperPlugin.runtimeLibraries entry "org.junit.platform:junit-platform-launcher:" is not group:name:version, with an extension or an extension and a classifier allowed before the version, in segments that are not blank and hold no whitespace, quote or backslash. A version catalog entry passed to runtimeLibrary needs a version.
+```
+
+`runtimeLibrary` takes the version a catalog entry requires, so an entry the catalog gives no version, such as `alaz.junit.platform.launcher`, has none to write. Before `0.4.1`, that entry generated a coordinate ending in a colon and the build passed; the loader below then threw `Bad artifact coordinates` at server start.
+
+The Aether forms with an extension or a classifier, `group:name:extension:version` and `group:name:extension:classifier:version`, pass the check and are written as they are.
+
 The build does not register a loader. The plugin writes a Paper `PluginLoader` in the group package that hands the coordinates to Paper's `MavenLibraryResolver`:
 
 ```java title="src/main/java/com/example/myplugin/MyPluginLoader.java"
@@ -349,6 +405,14 @@ public final class MyPluginLoader implements PluginLoader {
 ```yaml title="src/main/resources/paper-plugin.yml"
 loader: com.example.myplugin.MyPluginLoader
 ```
+
+From `0.4.1`, the build fails when a runtime library is listed and that key is missing. The task `verifyPluginLoader`, which `processResources` depends on, reads the `paper-plugin.yml` at the root of each main resources directory, one that a task generates included, and looks for a `loader` key at the first column of a line. A byte order mark before the first line is skipped. A top-level mapping that is indented as a whole, or written in flow style such as `{name: MyPlugin, loader: a.B}`, is not recognised and fails the same way. With the four libraries listed above it fails with:
+
+```text
+paperPlugin.runtimeLibraries lists 4 libraries and src/main/resources/paper-plugin.yml has no top-level loader key, so Paper downloads none and the plugin fails at its first use of one. Add loader: with the name of the PluginLoader class that reads RuntimeLibraries.COORDINATES: https://alaz.so/taffy/docs/gradle-plugins#runtime-libraries
+```
+
+Before `0.4.1`, such a build passed, with tests green on the `testRuntimeOnly` copies of the libraries, and the plugin failed on the server with a `NoClassDefFoundError` such as `com/zaxxer/hikari/HikariConfig`. The check reads only the key: it does not look at the class the key names. It does nothing while the list is empty, and nothing when the main resources hold no `paper-plugin.yml`.
 
 HikariCP and the drivers in the catalog are published on Maven Central, and `MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR` is the Maven Central address Paper's API provides for a loader. The loader class is plugin code under the coverage gate like any other class; the `coverage` example above excludes it. Paper's documentation on [plugin loaders](https://docs.papermc.io/paper/dev/getting-started/paper-plugins/) covers the loader itself.
 

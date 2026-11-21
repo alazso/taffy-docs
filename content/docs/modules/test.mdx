@@ -134,7 +134,7 @@ Static factories for `ItemStack` stand-ins. Each item is a Mockito mock of `Item
 | `type(ItemStack item)` | The type the item was made with, or `null` for an item this class did not make. |
 | `STORAGE_SLOTS` | `36`: the storage slots of a player inventory, the hotbar and the three rows above it. |
 
-The stubbed methods are `getAmount`, `setAmount`, `isEmpty`, `getMaxStackSize`, `isSimilar`, `asQuantity`, `asOne`, `clone` and `toString`. `getType` is stubbed for items made from a `Material`.
+The stubbed methods are `getAmount`, `setAmount`, `add`, `subtract`, `isEmpty`, `getMaxStackSize`, `isSimilar`, `asQuantity`, `asOne`, `clone` and `toString`. `getType` is stubbed for items made from a `Material`. From `0.4.1`, `add()`, `add(int)`, `subtract()` and `subtract(int)` are stubbed too; before, they gave Mockito's default answer, so `subtract(2)` returned `null` and left the amount unchanged.
 
 ```java title="FakeItemsExampleTest.java"
 import org.bukkit.Material;
@@ -198,9 +198,11 @@ Behaviour:
 - Two items are similar when they were made with the same type, whatever their amounts. An item is not similar to `null` or to an `ItemStack` this class did not make. `item(Material.DIAMOND, 1)` is similar to `item("diamond", 1)`.
 - An item is equal only to itself. Two items of the same type and amount are not equal.
 - `asQuantity`, `asOne` and `clone` return a new item of the same type, material and maximum stack size, with its own amount. Changing the copy does not change the original.
-- `isEmpty()` is `true` once the amount is 0 or less.
+- `add(int)` raises the amount by the quantity, to the maximum stack size at most, and `subtract(int)` lowers it, to 0 at least, as Paper's do. `add()` and `subtract()` move it by 1. Each returns the item itself. `add` uses the maximum stack size the item was made with and both use the amount `FakeItems` keeps, so a later `when(item.getMaxStackSize())` or `when(item.getAmount())` stubbing changes neither. None of the four is recorded on the mock as a `getAmount`, `setAmount` or `getMaxStackSize` call, so `verifyNoMoreInteractions(item)` sees only the calls the code under test made.
+- `isEmpty()` is `true` once the amount is 0 or less. From `0.4.1`, it is also `true` at any amount for an item made from `Material.AIR`, `Material.CAVE_AIR` or `Material.VOID_AIR`, as on Paper; before, `item(Material.AIR, 1).isEmpty()` was `false`. An item made from the type name `"air"` has no material and is empty only by its amount.
 - `toString()` is the type, `" x "` and the current amount, such as `gem x 5`.
 - Every other method gives Mockito's default answer: `getItemMeta()` is `null`, `hasItemMeta()` is `false`. The item is an ordinary Mockito mock, so a test with `alaz.mockito.core` on its classpath can stub more on it, such as `when(item.getItemMeta()).thenReturn(meta)`.
+- From `0.4.1`, the stubbings are lenient: a test under Mockito's strict stubs, such as one with `@ExtendWith(MockitoExtension.class)` or a `MockitoSession` with `Strictness.STRICT_STUBS`, passes when it calls only some of the stubbed methods. Before, it failed with `UnnecessaryStubbingException` for the others. A stubbing the test itself adds to the item is lenient as well, so strict stubs do not report it when it goes unused.
 - Code that switches on `getType()` needs the `Material` overloads; an item made from a type name returns `null` there.
 - The type of a `Material` item is lowercased with `Locale.ROOT`, so it is the same under the Turkish test locale.
 
@@ -270,6 +272,7 @@ The folder is a Mockito mock of `Path` on a mocked file system, so nothing is re
 - `resolve(String)` returns the folder itself, so `folder.resolve("lang")` is the same unlistable folder.
 - `Files.newDirectoryStream`, with or without a filter, gives `stream` as it is, and `Files.list` lists its entries. No filter is applied, which is why `notes.txt` is in the second result above.
 - `getFileName`, `toAbsolutePath`, `normalize` and `resolve(Path)` return `null`. Every other method of the path and of its file system gives Mockito's default answer.
+- From `0.4.1`, the stubbings are lenient, so a test under Mockito's strict stubs passes whichever of them it uses. Before, it failed with `UnnecessaryStubbingException` unless it used every one.
 
 ## FaultyDataSource
 
@@ -553,7 +556,7 @@ An anchor whose package is not a subpackage of `so.alaz.taffy`, such as `so.alaz
 |---|---|
 | `classes(Class<?> anchor)` | `List<Class<?>>`: the module's classes, nested and non-public ones included, in the order of their class file paths. Loaded with the anchor's class loader and not initialized. |
 | `signatureViolations(Class<?> anchor)` | `Set<String>`: one line per type from outside the allowed packages that a public or protected signature names. Empty means the rule holds. |
-| `staticHolderViolations(Class<?> anchor)` | `Set<String>`: one line per static field, of any visibility, whose type names a `Plugin`, `Logger`, `Executor` or `Thread`. |
+| `staticHolderViolations(Class<?> anchor)` | `Set<String>`: one line per static field, of any visibility, whose type names a `Plugin`, `Logger`, `Executor` or `Thread`, or names a module class that holds one in an instance field. |
 | `resourceFiles(Class<?> anchor)` | `List<String>`: the files of the output that are neither class files nor `META-INF/MANIFEST.MF` or `META-INF/LICENSE`. |
 
 `classes`, `signatureViolations` and `staticHolderViolations` declare `IOException` and `ClassNotFoundException` (a class of the output that the anchor's class loader does not find); `resourceFiles` declares `IOException`.
@@ -602,8 +605,9 @@ What the checks read:
 
 - The anchor is any class of the module's main source set. The output is found through the anchor's code source: the jar it was loaded from, or its classes directory. Beside a classes directory `classes/java/main`, the directory `resources/main` belongs to the output when it exists. The module's classes are the class files below `so/alaz/taffy`.
 - The allowed packages are `java`, `javax`, `org.bukkit`, `io.papermc`, `com.destroystokyo.paper`, `net.kyori`, `org.jetbrains.annotations` and `so.alaz.taffy`, each with its subpackages. When the anchor and the checked class are both in `so.alaz.taffy.comficonf` itself, `com.comficonf.api` is allowed too.
-- A class is checked when it and its enclosing classes are public or protected, together with the module superclasses it inherits members from. Its signatures are its type parameters, supertypes, record components, public and protected fields, and the type parameters, parameters, exceptions and return types of its public and protected constructors and methods.
+- A class is checked when it and its enclosing classes are public or protected, together with the module superclasses and superinterfaces it inherits members from, whatever their visibility: its superclasses up to the first one outside the module, and every module interface that it or one of those implements or extends, directly or through another module interface. From `0.4.1`, the superinterfaces are checked; before, a public class that implemented a package-private interface with a default method returning a type from outside the allowed packages passed. The static methods of an inherited interface that is not public are not signatures of the class, because a class does not inherit them. Its signatures are its type parameters, supertypes, record components, public and protected fields, and the type parameters, parameters, exceptions and return types of its public and protected constructors and methods.
 - A field names a type when it is that type or a subtype, an array of it, or a generic type with it as a type argument or bound.
+- From `0.4.1`, a static field that names a module class is followed into the instance fields of that class and of its module superclasses, and each instance field that names one of the four gives a line. An instance field that names a module class is followed the same way. A module class named only as a type argument, as in `Class<Keeper>` or `Comparator<Keeper>`, is followed too, whether or not the field holds an instance of it. Such a line reads `so.alaz.taffy.demo.Registry.keeper is static and holds java.util.logging.Logger in so.alaz.taffy.demo.Keeper.logger`. Before, a static field whose module-class type held a `Logger` in an instance field passed.
 - A class whose members cannot be read, because one names a type that is not on the test classpath, gives a line of its own. A module class whose supertype the anchor's loader does not find cannot be loaded, so each check that loads the classes (all but `resourceFiles`) fails with a `NoClassDefFoundError`.
 - An anchor with no code source, which is every JDK class, fails each check with a `NullPointerException`.
 - `ApiRules` names `org.bukkit.plugin.Plugin`, so its caller needs paper-api on the test runtime classpath.

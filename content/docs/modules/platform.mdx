@@ -90,6 +90,11 @@ public final class ShopPlugin extends JavaPlugin {
 
 The disable side of the same class is under [Shutdown](#shutdown).
 
+From `0.4.1`, `new ErrorReports()`, `new Text(Logger)`, `Messages.load` and `Messages.loadLenient` call
+`Relocation.check()`, which throws `IllegalStateException` when the plugin's jar holds Taffy in its original package
+`so.alaz.taffy`. A jar that `so.alaz.taffy.paper-plugin` builds passes, and so does a unit test, where no plugin
+class loader loaded Taffy. [Relocation](/docs/consuming-by-coordinates#relocation) has the message and the rule.
+
 ## Scheduler
 
 `Scheduler` runs tasks on Paper's region-threaded schedulers. It behaves the same on Paper and on Folia and never

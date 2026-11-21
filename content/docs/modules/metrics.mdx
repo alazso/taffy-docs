@@ -51,11 +51,19 @@ A build on another shadow setup relocates the same three packages and keeps that
 
 ```kotlin title="build.gradle.kts"
 tasks.shadowJar {
-    relocate("org.bstats", "com.example.myplugin.libs.bstats")
-    relocate("dev.faststats", "com.example.myplugin.libs.faststats")
-    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy")
+    relocate("org.bstats", "com.example.myplugin.libs.bstats") {
+        include("org.bstats.**")
+    }
+    relocate("dev.faststats", "com.example.myplugin.libs.faststats") {
+        include("dev.faststats.**")
+    }
+    relocate("so.alaz.taffy", "com.example.myplugin.libs.taffy") {
+        include("so.alaz.taffy.**")
+    }
 }
 ```
+
+Each `include` keeps a relocation inside its package: without one, Shadow matches the raw path prefix, so `relocate("so.alaz.taffy", ...)` also moves a package named `so.alaz.taffyshop`. From `0.4.1`, `so.alaz.taffy.paper-plugin` sets the same three includes.
 
 <Callout type="warn" title="Both are required">
 bStats refuses to start from classes that were not relocated. FastStats cannot create its context without `META-INF/faststats.properties`; without the file, `start()` logs one warning and leaves FastStats off before it writes `plugins/faststats/config.properties`.

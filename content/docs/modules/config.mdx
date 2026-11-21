@@ -234,6 +234,8 @@ A list the owner wrote as empty (`aliases: []`) stays empty: only an absent or b
 
 `new ConfigLoader(Path dataFolder, Supplier<@Nullable InputStream> shipped, Logger logger)` loads `config.yml` (`ConfigLoader.FILE_NAME`) from `dataFolder`. `shipped` opens the `config.yml` inside the jar, or gives `null` when the jar has none; it is asked on every load and the loader closes the stream. The data folder is created when the file is first written.
 
+From `0.4.1`, every `ConfigLoader` and `YamlFolder` constructor calls `Relocation.check()` of `taffy-platform` and throws `IllegalStateException` when the plugin's jar holds Taffy in its original package `so.alaz.taffy`, as [Relocation](/docs/consuming-by-coordinates#relocation) describes.
+
 `load()` returns a new `YamlConfiguration` with the file's comments kept, and blocks the calling thread for the file I/O. The shipped file carries its layout version under `config-version` (`ConfigLoader.VERSION_KEY`) as a whole number from 1 to 2147483647, written without quotes. From `0.4.0`, a shipped file without one makes every `load()` throw `ConfigLoadException`, the first start included, and nothing is written. Before `0.4.0` such a file counted as version 0, so no owner's file was ever upgraded and nothing was logged.
 
 In the owner's file the version may also be written as text, and a number is read as an `int`: a decimal number counts as its whole part, and a number above 2147483647 is not supported. An owner's file with no such key, or with a value that is neither a number nor text holding a whole number of at most nine digits, counts as the baseline version, which is 0 unless the plugin [sets another](#a-file-without-a-version).

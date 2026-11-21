@@ -1461,3 +1461,34 @@ Every value of the owner's file is kept, and the way it is written can change: q
 place of an added key and comments inside a list, as
 [What an upgrade rewrites](/docs/modules/config#what-an-upgrade-rewrites) lists. From `0.4.0` a text longer than 80
 columns stays on one line in the saved file, through an upgrade and through a save from the ComfiConf editor.
+
+## 0.4.1
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.1"
+}
+```
+
+Every signature of `0.4.0` is still there, and a plugin built with `so.alaz.taffy.paper-plugin` on Gradle 9.2.0 or
+newer, with a group set, rebuilds with no change. `0.4.1` stops two things that worked on `0.4.0` (a Gradle
+older than 9.2.0 and Taffy left in its original package), moves three failures from the server to the build with a message that names the fix, and corrects
+three answers of `FakeItems`.
+
+| Change | Affects | Action |
+|---|---|---|
+| [Gradle older than 9.2.0 is refused](/docs/gradle-plugins#applying-the-plugins) | a build whose wrapper is older than Gradle 9.2.0: `so.alaz.taffy.settings` fails with `so.alaz.taffy.settings needs Gradle 9.2.0 or newer, and this build runs on Gradle 9.1.0.` where a build without `so.alaz.taffy.paper-plugin` ran on 9.1.0 | set a newer version in `distributionUrl` in `gradle/wrapper/gradle-wrapper.properties`, as [Add the Gradle wrapper](/docs/getting-started#add-the-gradle-wrapper) shows |
+| [Taffy refuses to run unrelocated](/docs/consuming-by-coordinates#relocation) | a plugin with a hand-written `shadowJar` that leaves Taffy in `so.alaz.taffy`: it ran on `0.4.0` and now throws `IllegalStateException` from `new ErrorReports()`, `new Text(Logger)`, `Messages.load`, `Messages.loadLenient`, `new ConfigLoader(...)` or `new YamlFolder(...)` | add `relocate("so.alaz.taffy", "<group>.libs.taffy")` with `include("so.alaz.taffy.**")` to `shadowJar`, or apply `so.alaz.taffy.paper-plugin` |
+| [Runtime libraries need a loader key](/docs/gradle-plugins#runtime-libraries) | a build that lists `paperPlugin.runtimeLibraries` while its `paper-plugin.yml` has no top-level `loader` key: `verifyPluginLoader` fails the build, where the plugin failed on the server with a `NoClassDefFoundError` | add `loader:` with the name of the `PluginLoader` class that reads `RuntimeLibraries.COORDINATES` |
+| [A runtime library is `group:name:version`](/docs/gradle-plugins#runtime-libraries) | a build that passes `runtimeLibrary` a catalog entry without a version: `generateRuntimeLibraries` fails and names the entry, where Paper rejected the coordinate at server start | pass an entry that has a version |
+| [The group is checked](/docs/gradle-plugins#the-shadow-jar) | a build with a blank group or one with an empty segment: `shadowJar` and `generateRuntimeLibraries` fail, where the jar held Taffy under `/libs/taffy/`; a build that lists a runtime library under a group that is not a Java package name: `generateRuntimeLibraries` fails before javac does | set `group` in `gradle.properties`, as [Set the group and version](/docs/getting-started#set-the-group-and-version) shows |
+| [FakeItems answers add, subtract and isEmpty like an ItemStack](/docs/modules/test#fakeitems) | a test that expected `add()`, `add(int)`, `subtract()` or `subtract(int)` of a `FakeItems` item to return `null` and leave the amount, or `item(Material.AIR, 1).isEmpty()` to be `false` | expect the item back with the amount changed, and `true` for an item made from `Material.AIR`, `Material.CAVE_AIR` or `Material.VOID_AIR` |
+
+A plugin built with `so.alaz.taffy.paper-plugin` gets four corrections in its jar with no change in the build: the
+`META-INF/services` files of shaded jars are merged, `META-INF/LICENSE` is the root project's own file with each
+dependency's license under `META-INF/licenses/`, a package such as `so.alaz.taffyshop` is no longer relocated with
+`so.alaz.taffy`, and a backslash in `paper-plugin.yml` stays as written.
+[The shadow jar](/docs/gradle-plugins#the-shadow-jar) and [paper-plugin.yml](/docs/gradle-plugins#paper-pluginyml)
+describe them. A server owner changes nothing for `0.4.1`.

@@ -10,7 +10,12 @@ The layout used throughout:
 ```bash
 myplugin/
   gradle/
+    wrapper/
+      gradle-wrapper.jar
+      gradle-wrapper.properties
     gradle-daemon-jvm.properties
+  gradlew
+  gradlew.bat
   gradle.properties
   settings.gradle.kts
   build.gradle.kts
@@ -21,11 +26,26 @@ myplugin/
   src/test/java/com/example/myplugin/SettingsTest.java
 ```
 
-The examples use the Gradle wrapper at 9.9.1, the version Taffy itself builds with.
+The examples use the Gradle wrapper at 9.9.1, the version Taffy itself builds with. The Taffy Gradle plugins need Gradle 9.2.0 or newer, and [Gradle plugins](/docs/gradle-plugins#applying-the-plugins) says where that minimum comes from.
 
 ## Set up the plugin
 
 <Steps>
+<Step>
+
+### Add the Gradle wrapper
+
+The wrapper is the `gradlew` script, `gradlew.bat` and the `gradle/wrapper` directory, and it downloads the Gradle version the build names. In the empty directory, create an empty `settings.gradle.kts`, then run a Gradle installed on the machine once:
+
+```bash
+gradle wrapper --gradle-version 9.9.1
+```
+
+Gradle 9.9.1 does not run in a directory without a settings file, hence the empty one, which the next step fills. Run the command while the file is still empty: the installed Gradle then loads no Taffy plugin, so it may be older than 9.2.0 and run on a Java older than 25. Every later command on this page goes through `./gradlew`.
+
+Without an installed Gradle, copy `gradlew`, `gradlew.bat` and `gradle/wrapper` from another project, set the version in `distributionUrl` in `gradle/wrapper/gradle-wrapper.properties`, and remove a `distributionSha256Sum` line there, which holds the checksum of the other version.
+
+</Step>
 <Step>
 
 ### Apply the settings plugin
@@ -72,7 +92,7 @@ group=com.example.myplugin
 version=1.0.0
 ```
 
-The group is more than a Maven coordinate here. `so.alaz.taffy.paper-plugin` relocates Taffy and the metrics SDKs under `<group>.libs`, and writes the generated `RuntimeLibraries` class, when `paperPlugin.runtimeLibraries` is not empty, into the package named by the group. Use the plugin's own base package.
+The group is more than a Maven coordinate here. `so.alaz.taffy.paper-plugin` relocates Taffy and the metrics SDKs under `<group>.libs`, and writes the generated `RuntimeLibraries` class, when `paperPlugin.runtimeLibraries` is not empty, into the package named by the group. Use the plugin's own base package. From `0.4.1`, the build fails on a blank group with a message that names `group` in `gradle.properties`.
 
 </Step>
 <Step>
@@ -134,7 +154,7 @@ paperPlugin {
 }
 ```
 
-A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. [Storage](/docs/modules/storage) covers this setup. bStats and FastStats are never runtime libraries: they are shaded and relocated.
+A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. From `0.4.1`, the build fails when a library is listed and `paper-plugin.yml` has no `loader` key. [Storage](/docs/modules/storage) covers this setup. bStats and FastStats are never runtime libraries: they are shaded and relocated.
 
 </Step>
 <Step>
@@ -149,7 +169,7 @@ api-version: "26.2"
 folia-supported: true
 ```
 
-`processResources` expands `paper-plugin.yml` with the project version, so `version: "${version}"` becomes `version: "1.0.0"` in the jar. Only this file is expanded. Gradle reads every `$` in it as the start of a template expression, so write a literal dollar sign as `\$`. `folia-supported: true` lets Folia load the plugin; Taffy's `Scheduler` runs the same on Paper and Folia. From `0.2.0`, `api-version: "26.2"` names the oldest server line Taffy supports: Paper 26.2 build 135 or newer and Folia 26.3 build 8 or newer, as [Servers](/docs/versioning#servers) lists. Paper refuses a plugin whose `api-version` is newer than the server, and checks no build number, so a 26.2 server older than build 135 still loads the plugin.
+`processResources` expands `paper-plugin.yml` with the project version, so `version: "${version}"` becomes `version: "1.0.0"` in the jar. Only this file is expanded. Gradle reads every `$` in it as the start of a template expression, so write a literal dollar sign as `\$`. From `0.4.1`, every other backslash in the file reaches the jar as it is. `folia-supported: true` lets Folia load the plugin; Taffy's `Scheduler` runs the same on Paper and Folia. From `0.2.0`, `api-version: "26.2"` names the oldest server line Taffy supports: Paper 26.2 build 135 or newer and Folia 26.3 build 8 or newer, as [Servers](/docs/versioning#servers) lists. Paper refuses a plugin whose `api-version` is newer than the server, and checks no build number, so a 26.2 server older than build 135 still loads the plugin.
 
 A plugin described by `paper-plugin.yml` sees another plugin's classes only when it lists that plugin under `dependencies.server`. Each integration a plugin uses through [`taffy-hooks`](/docs/modules/hooks) is listed with `load: BEFORE`, so it enables first, and `required: false`, so the plugin still starts without it. The names are `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. A plugin that uses WorldGuard also lists `WorldEdit`, which WorldGuard's regions are read through. The ComfiConf bridge for [`taffy-comficonf`](/docs/modules/comficonf) also needs `join-classpath: true`. The plugin on this page uses neither module and needs no such entry; a plugin that does adds a block like this one:
 
