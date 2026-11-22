@@ -55,7 +55,7 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 
 The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`. The Floodgate and Geyser rows, with their aliases, are available from `0.4.3`. Floodgate and Geyser publish their APIs as snapshots only, so `alaz.floodgate.api` and `alaz.geyser.api` name a `-SNAPSHOT` version.
 
-A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
+A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these and their dependencies resolve from.
 
 ### Declaring the integrations in paper-plugin.yml
 
@@ -644,8 +644,8 @@ boolean inMarket = wg != null
 
 | The server has | The result |
 |---|---|
-| A Floodgate that can be read | A provider on Floodgate, with the status `floodgate <version> on`. Geyser is not looked at. |
-| A Geyser that can be read, and no Floodgate that can be | A provider on Geyser, with the status `Geyser-Spigot <version> on`. |
+| A Floodgate that can be read | A provider on Floodgate, with the status `floodgate on`. Geyser is not looked at. |
+| A Geyser that can be read, and no Floodgate that can be | A provider on Geyser, with the status `Geyser-Spigot on`. |
 | Neither | No provider. The status is Floodgate's, or Geyser's when Floodgate is not installed and Geyser is. With neither installed it reads `floodgate not installed`. |
 | Either, with `switchedOn` `false` | No provider and `floodgate switched off`. Nothing is looked at. |
 

@@ -92,7 +92,7 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 | `oraxen` | `https://repo.oraxen.com/releases` | `io.th0rgal`, `md.thomas.hopper` |
 | `nexo` | `https://repo.nexomc.com/releases` | `com.nexomc`, `com.tcoded`, `me.gabytm.util`, `team.unnamed` |
 | `enginehub` | `https://maven.enginehub.org/repo/` | `com.sk89q`, `org.enginehub` and their subgroups |
-| `opencollab` | `https://repo.opencollab.dev/main/` | `org.geysermc.floodgate`, `org.geysermc.geyser`, `org.geysermc.api` |
+| `opencollab` | `https://repo.opencollab.dev/main/` | `org.geysermc.floodgate`, `org.geysermc.geyser`, `org.geysermc.api`, `org.geysermc.cumulus`, `org.geysermc.event`, `org.cloudburstmc.math` |
 | `fancyinnovations` | `https://maven.fancyspaces.net/fancyinnovations/releases` | `de.oliver` |
 | `thenextlvl` | `https://repo.thenextlvl.net/releases` | `net.thenextlvl` |
 | `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | `com.github.retrooper` |
@@ -418,7 +418,7 @@ public final class MyPluginLoader implements PluginLoader {
 loader: com.example.myplugin.MyPluginLoader
 ```
 
-From `0.4.1`, the build fails when a runtime library is listed and that key is missing. The task `verifyPluginLoader`, which `processResources` depends on, reads the `paper-plugin.yml` at the root of each main resources directory, one that a task generates included, and looks for a `loader` key at the first column of a line. A byte order mark before the first line is skipped. A top-level mapping that is indented as a whole, or written in flow style such as `{name: MyPlugin, loader: a.B}`, is not recognised and fails the same way. From `0.4.3`, a `loader` key with no value fails the same way too: `loader:` followed by nothing, by spaces or by a comment only. A value counts on the same line, or indented on the next line that is neither blank nor a comment. Before `0.4.3`, such a key passed the check, and the plugin failed at its first use of a library. With the four libraries listed above it fails with:
+From `0.4.1`, the build fails when a runtime library is listed and that key is missing. The task `verifyPluginLoader`, which `processResources` depends on, reads the `paper-plugin.yml` at the root of each main resources directory, one that a task generates included, and looks for a `loader` key at the first column of a line. A byte order mark before the first line is skipped. A top-level mapping that is indented as a whole, or written in flow style such as `{name: MyPlugin, loader: a.B}`, is not recognised and fails the same way. From `0.4.3`, a `loader` key with no value fails the same way too: `loader:` followed by nothing, by spaces or by a comment only. A value counts on the same line, or indented on the next line that is neither blank nor a comment. The values `""`, `''`, `~`, `null`, `Null` and `NULL` are no value, and neither is `|` or `>` with no indented line below it. Before `0.4.3`, such a key passed the check, and the plugin failed at its first use of a library. With the four libraries listed above it fails with:
 
 ```text
 paperPlugin.runtimeLibraries lists 4 libraries and src/main/resources/paper-plugin.yml has no top-level loader key, so Paper downloads none and the plugin fails at its first use of one. Add loader: with the name of the PluginLoader class that reads RuntimeLibraries.COORDINATES: https://alaz.so/taffy/docs/gradle-plugins#runtime-libraries

@@ -1538,11 +1538,22 @@ plugins {
 }
 ```
 
-Every signature of `0.4.2` is still there, and a plugin rebuilds with no change.
+Every signature of `0.4.2` is still there. Two things in a plugin's source can need a change to compile:
+
+- A call that passes the literal `null` to `Prompts.ask`, `Prompts.askLater` or as the first argument of
+  `new Prompts(...)` needs a cast, such as `(PromptRequest) null`, since each now has a second overload. Such a
+  call threw `NullPointerException` before and still does.
+- A `switch` expression over `PromptMode` with no `default` branch needs one, or a branch for the new
+  `PromptMode.DIALOG`.
+
+The release adds [`BedrockProvider`](/docs/modules/hooks#bedrock-players) to `taffy-hooks`, and to `taffy-gui`
+[text asked outside a menu](/docs/modules/gui#text-outside-a-menu) with `TextRequest`, prompts built over
+`Menus.Parts`, the public `Prompts.shutdown()` and the experimental
+[`PromptMode.DIALOG`](/docs/modules/gui#dialog-prompts).
 
 One build that passed now fails. With a runtime library listed, a `loader:` key that has no value in
-`paper-plugin.yml` (nothing, spaces or only a comment after the colon) fails `verifyPluginLoader` with the
-message of a missing key. Such a jar held `RuntimeLibraries` and no loader, so the plugin already failed on
+`paper-plugin.yml` (nothing, spaces or only a comment after the colon, or one of `""`, `''`, `~` and `null`)
+fails `verifyPluginLoader` with the message of a missing key. Such a jar held `RuntimeLibraries` and no loader, so the plugin already failed on
 the server at its first use of a library. Give the key the name of the loader class, as
 [Runtime libraries](/docs/gradle-plugins#runtime-libraries) shows.
 
@@ -1558,11 +1569,14 @@ GitHub, Slack or Stripe live token, a JSON Web Token, the credentials after `Aut
 `pass=`, `passphrase:` and `license-key:`, the id and token of a Discord webhook URL on `http://`, and the
 database name in the `Unknown database 'survival_prod'` of MySQL and MariaDB. A Unix path whose last name has no
 file extension takes up to three following words with it when a slash comes after them, so
-`Saved /srv/data and logs/x now` is sent as `Saved [path hidden] now`.
+`Saved /srv/data and logs/x now` is sent as `Saved [path hidden] now`. A count of 1 to 3 digits after a `pass`
+key, as in `pass=3 fail=2`, is sent as written.
 
 One kind of message is no longer cut: a sentence with `the`, `an`, `this`, `that`, `these`, `those`, `your`, `my`,
 `our` or `their` after `select ... from`, `delete from`, `insert into`, `replace into` or `merge into`.
 `Please select a kit from the list` was sent as `Please [sql hidden]` and is now sent whole, so a message of that
-shape leaves out what must not be sent. An SQL statement is hidden as before. Reports whose messages differ only
-in a value these rules hide merge into one kind.
+shape leaves out what must not be sent. A statement whose table is named by one of those ten words is still
+hidden when it holds a clause such as `WHERE`, `VALUES (` or `SET` with a `=`, and is now sent without one, as
+`SELECT name FROM the t` is. Every other SQL statement is hidden as before. Reports whose messages differ only in
+a value these rules hide merge into one kind.
 [Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.3`.

@@ -843,7 +843,9 @@ Paper marks its Dialog API as experimental and may change it, so `PromptMode.DIA
 - The submit button sends the field's text, which is judged as a chat line or an anvil submit is: stripped, cut, checked against the cancel word and given to the answer function on the player's entity thread. `Answer.Accept` opens its route, and an `Answer.Later` is waited for as in the other modes.
 - A refused answer shows the dialog again on the next tick, with the `gui.prompt.refused` text above the field and the refused text in it. Nothing is sent to chat. With another inventory open on that tick the ask ends as `PromptEnd.REPLACED`.
 - The cancel button cancels the ask, and so does closing the dialog with the escape key, which the client sends as that button: the player is told `gui.prompt.cancelled` and the origin opens again.
-- The deadline, a menu that opens, a newer ask and `shutdown()` take the dialog away from the player. A chat line typed while a dialog ask waits is ordinary chat.
+- The deadline, a menu of the menus the prompts are built over that opens, a newer ask and `shutdown()` take the dialog away from the player. A chat line typed while a dialog ask waits is ordinary chat.
+- Paper has no event for a dialog that the client takes away without a button, as when another plugin opens an inventory or the player dies. Such an ask takes no chat line and ends at its deadline as `PromptEnd.TIMED_OUT`.
+- A `RuntimeException` of the server that fails to show the dialog is thrown on. From `ask` no ask is left behind. From the task that shows the dialog again after a refusal, the ask first ends as `PromptEnd.REPLACED`.
 - The two buttons carry the client's own text for `gui.done` and `gui.cancel`, in the player's language, so the mode adds no lang key and `Prompts.KEYS` is unchanged. A dialog reads `gui.prompt.refused` and, when the ask ends, `gui.prompt.cancelled`, `gui.prompt.timed-out` and `gui.error`.
 - Bedrock players answer in chat, as under `ANVIL`.
 - On a server whose Paper has no Dialog API, building the prompts logs one warning and every ask is asked in chat. When the API is there but cannot be linked, as after Paper changed it, the first ask logs one warning, and that ask and every later ask of those prompts are asked in chat.
@@ -897,7 +899,7 @@ Shutdown.closeQuietly("end the prompts", () -> prompts.shutdown(), getLogger(), 
 
 - The prompts read the parts' plugin, text source, `locales`, `server`, `preview` (the key the paper of the prompt anvil carries), `tasks`, `entity`, `logger` and `errors`. The layouts, settings, sounds and home menu are not read.
 - Building them registers the prompt listener as a listener of the plugin, with no `registerEvents` call: it reads the chat answers, guards the prompt anvil and ends the ask of a player who quits as `LEFT`. The server refuses a listener of a plugin that is not enabled with an `IllegalPluginAccessException`.
-- Such prompts ask with a `TextRequest` only. `ask(player, promptRequest)` throws `IllegalStateException`, since they have no menu to open.
+- Such prompts ask with a `TextRequest` only. `ask(player, promptRequest)` and `askLater(player, promptRequest)` throw `IllegalStateException` at the call, since they have no menu to open.
 - They share a player's ask with the other `Prompts` of the plugin, built over menus or not, as the list above states from `0.4.2`. No menu ends their asks.
 - `Prompts.shutdown()` is public from `0.4.3`. The plugin calls it at disable for prompts built this way: it ends every ask as `CANCELLED` for the players the calling thread owns, takes their anvils and dialogs away, and nothing is asked afterwards. `Menus.shutdown()` still calls it for prompts built over menus.
 
