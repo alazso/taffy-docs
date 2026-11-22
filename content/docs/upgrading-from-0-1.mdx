@@ -1527,3 +1527,31 @@ dotted name after a connection word such as `Connection to` or a key such as `ho
 sent outside a URI and those words. Reports whose messages differ only in a value these rules hide merge into one
 kind.
 [Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.2`.
+
+## 0.4.3
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.3"
+}
+```
+
+Every signature of `0.4.2` is still there, and a plugin rebuilds with no change.
+
+The error reports of `taffy-metrics` hide more with no change in the plugin: an email address with a `+` in its
+name, a Unix path with a space in a folder name, a UNC path, a relative Windows path from its `Users` folder on,
+the list items on the lines below a key such as `tokens:`, the words of a password that starts its line, a bare
+GitHub, Slack or Stripe live token, a JSON Web Token, the credentials after `Authorization: Basic`, the values of
+`pass=`, `passphrase:` and `license-key:`, the id and token of a Discord webhook URL on `http://`, and the
+database name in the `Unknown database 'survival_prod'` of MySQL and MariaDB. A Unix path whose last name has no
+file extension takes up to three following words with it when a slash comes after them, so
+`Saved /srv/data and logs/x now` is sent as `Saved [path hidden] now`.
+
+One kind of message is no longer cut: a sentence with `the`, `an`, `this`, `that`, `these`, `those`, `your`, `my`,
+`our` or `their` after `select ... from`, `delete from`, `insert into`, `replace into` or `merge into`.
+`Please select a kit from the list` was sent as `Please [sql hidden]` and is now sent whole, so a message of that
+shape leaves out what must not be sent. An SQL statement is hidden as before. Reports whose messages differ only
+in a value these rules hide merge into one kind.
+[Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.3`.
