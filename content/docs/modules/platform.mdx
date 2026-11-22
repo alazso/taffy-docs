@@ -342,6 +342,10 @@ still tracked in `PendingSettlements`.
 `dispatch` with an entity tag looks the player up on the server from the calling thread. A refusal for an entity
 tag is always an `EntityUnavailableException`, also when the cause is the plugin disabling.
 
+From `0.4.5`, the test fixtures of `taffy-platform` hold [`FakeDispatcher`](/docs/modules/test#fakedispatcher), a
+`Dispatcher` for tests that records each tag and holds, refuses or drops tasks:
+`testImplementation(testFixtures(alaz.taffy.platform))`.
+
 ### Task failures
 
 Paper's region, async and entity schedulers log a task that throws but fire no `ServerExceptionEvent`, so nothing

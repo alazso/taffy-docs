@@ -15,8 +15,9 @@ description: Helpers for testing Paper plugin code without a server, from fake i
 | `RaceRunner` | Release several virtual threads at once against the same code. |
 | `SimulatedClasspath` | Class loaders that add empty classes or hide whole packages. |
 | `ApiRules` | The design-rule checks of Taffy's own modules. |
+| `FakeDispatcher` | From `0.4.5`, a `Dispatcher` that records thread tags and holds, refuses or drops tasks. It is in the test fixtures of `taffy-platform`, not in `taffy-test`. |
 
-Every class is in the package `so.alaz.taffy.test`. The module depends on no other Taffy module.
+Every class of `taffy-test` is in the package `so.alaz.taffy.test`. The module depends on no other Taffy module, which is why [`FakeDispatcher`](#fakedispatcher), an implementation of `taffy-platform`'s `Dispatcher`, is published with `taffy-platform` instead.
 
 ## Setup
 
@@ -59,6 +60,7 @@ What the module brings and what it does not:
 | Mockito (`org.mockito:mockito-core`) | Runtime only | A test calls Mockito itself (`mock`, `mockStatic`, `mockConstruction`): `testImplementation(alaz.mockito.core)`. |
 | paper-api | No | A test uses `FakeItems` or `ApiRules`, which name Paper types: `testImplementation(alaz.paper.api)`. `compileOnly` does not reach the test classpath. |
 | A JDBC driver | No | A test uses `FaultyDataSource`: for SQLite, `testRuntimeOnly(alaz.sqlite.jdbc)`. |
+| `FakeDispatcher` | No | A test fakes a `Dispatcher`: `testImplementation(testFixtures(alaz.taffy.platform))`, from `0.4.5`. |
 | JUnit, AssertJ | No | Always for JUnit. No helper needs a test framework or an assertion library; `alaz.assertj.core` is in the catalog. |
 
 <Callout type="info" title="Mockito agent and test defaults">
@@ -276,13 +278,14 @@ The folder is a Mockito mock of `Path` on a mocked file system, so nothing is re
 
 ## FaultyDataSource
 
-A `DataSource` over connections that `DriverManager` opens, wrapped so that statements, commits and the whole process fail on demand. Use it with any code that takes a `javax.sql.DataSource` and must survive a failed write, a commit whose outcome is unknown, or a crash between two statements.
+A `DataSource` over connections that `DriverManager` opens, or from `0.4.5` over the connections of another `DataSource`, wrapped so that statements, commits and the whole process fail on demand. Use it with any code that takes a `javax.sql.DataSource` and must survive a failed write, a commit whose outcome is unknown, or a crash between two statements.
 
 | Member | What it gives |
 |---|---|
 | `new FaultyDataSource(String url, Properties properties)` | A data source on `url` with no fault armed. The properties, defaults included, are copied. Throws `NullPointerException` for a `null` argument. |
-| `getConnection()` | A new wrapped connection. Throws `SQLException` when the process is dead or the driver cannot connect. `unwrap(Connection.class)` on it returns the real connection. |
-| `getConnection(String user, String password)` | The same as `getConnection()`; the user and password are ignored. |
+| `new FaultyDataSource(DataSource source)` | From `0.4.5`, a data source over the connections of `source` with no fault armed. `source` is never closed and none of its settings is changed. Throws `NullPointerException` for a `null` argument. |
+| `getConnection()` | A new wrapped connection, opened on the URL or taken from the wrapped data source. Throws `SQLException` when the process is dead, the driver cannot connect or the wrapped data source gives no connection. `unwrap(Connection.class)` on it returns the connection it wraps, which over a pool is the pool's own connection object. |
+| `getConnection(String user, String password)` | On a URL, the same as `getConnection()`; the user and password are ignored. Over a `DataSource`, a wrapped connection from that data source's `getConnection(user, password)`, so a pool that takes no user and password throws its own `SQLException`. |
 | `faults()` | The `FaultyDataSource.Faults` of this data source and of every connection it opened. |
 
 `FaultyDataSource.Faults` arms the failures and counts what ran:
@@ -383,6 +386,38 @@ class FaultyDataSourceExampleTest {
 
 The second test reads the table through a new `FaultyDataSource` on the same database: a new data source stands for the next process after a crash.
 
+From `0.4.5`, `new FaultyDataSource(DataSource)` puts the faults on either side of a connection pool. Wrapped around the pool, it is handed to code that takes a `DataSource`, and each wrapped connection returns to the pool when it is closed. Set as the data source a pool is built on, it sits under code that insists on the pool's own type:
+
+```java title="PooledFaults.java"
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import so.alaz.taffy.test.FaultyDataSource;
+
+import javax.sql.DataSource;
+
+final class PooledFaults {
+
+    /** Faults above the pool, for code that takes a DataSource. */
+    static FaultyDataSource over(HikariDataSource pool) {
+        return new FaultyDataSource(pool);
+    }
+
+    /** Faults below a new pool, for code that takes a HikariDataSource. The caller keeps faults to arm them. */
+    static HikariDataSource under(FaultyDataSource faults) {
+        HikariConfig config = new HikariConfig();
+        config.setDataSource(faults);
+        return new HikariDataSource(config);
+    }
+
+    /** The data source a driver built, with faults on its connections. */
+    static FaultyDataSource of(DataSource driverSource) {
+        return new FaultyDataSource(driverSource);
+    }
+}
+```
+
+A pool keeps the wrapped connections it took, so under a pool a fault also hits the statements the pool runs itself, such as a connection test query, and `statements()` counts them.
+
 Behaviour:
 
 - The wrapper checks the faults on `prepareStatement` and `createStatement`, when a statement they return runs through `execute`, `executeUpdate`, `executeQuery`, `executeLargeUpdate`, `executeBatch` or `executeLargeBatch`, and on `commit`. A batch counts as one statement.
@@ -393,7 +428,8 @@ Behaviour:
 - A statement's `getConnection()` returns the wrapper, so a kill still applies to connections reached that way. A wrapper is equal only to itself.
 - The faults are shared by every connection the data source opened, those opened before a fault was armed included.
 - The JDBC driver for the URL must be on the test runtime classpath. `taffy-test` brings none.
-- `getLogWriter()` is `null`, `getLoginTimeout()` is 0 and the setters do nothing. `unwrap` returns the data source itself for a type it implements and throws `SQLException` otherwise.
+- Closing a wrapper closes the connection it wraps. `kill()` closes nothing: a wrapped data source and the connections already taken from it stay open until the test closes them, and after a kill the wrapped data source is asked for no further connection.
+- `getLogWriter()` is `null`, `getLoginTimeout()` is 0 and the setters do nothing, also over a wrapped data source. `unwrap` returns the data source itself for a type it implements and throws `SQLException` otherwise. From `0.4.5`, over a wrapped data source `unwrap` and `isWrapperFor` also answer for that data source, so `unwrap(HikariDataSource.class)` returns a wrapped pool.
 
 ## JvmDefaults
 
@@ -612,6 +648,123 @@ What the checks read:
 - An anchor with no code source, which is every JDK class, fails each check with a `NullPointerException`.
 - `ApiRules` names `org.bukkit.plugin.Plugin`, so its caller needs paper-api on the test runtime classpath.
 - The wording of a violation line is not part of the API; assert that the set is empty.
+
+## FakeDispatcher
+
+From `0.4.5`, a `Dispatcher` that needs no server, for testing code that takes [`Dispatcher` or `EntityThread`](/docs/modules/platform#dispatcher-threadtag-and-entitythread). It records the `ThreadTag` of every dispatch and can hold tasks until the test runs them, refuse them as a disabling plugin's `Scheduler` does, or accept them and never run them.
+
+`FakeDispatcher` is not in `taffy-test`. It is the test fixtures of `taffy-platform`: the class `so.alaz.taffy.platform.FakeDispatcher` in `taffy-platform-<version>-test-fixtures.jar`, which Gradle selects with `testFixtures(...)`. The module's own jar does not contain it, so a shadow jar never carries it.
+
+<Tabs items={['Catalog', 'Coordinates']}>
+<Tab value="Catalog">
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    implementation(alaz.taffy.platform)
+
+    testImplementation(testFixtures(alaz.taffy.platform))
+}
+```
+
+</Tab>
+<Tab value="Coordinates">
+
+```kotlin title="build.gradle.kts"
+dependencies {
+    implementation("so.alaz.taffy:taffy-platform:0.4.5")
+
+    testImplementation(testFixtures("so.alaz.taffy:taffy-platform:0.4.5"))
+}
+```
+
+</Tab>
+</Tabs>
+
+The fixtures are a variant in the Gradle module metadata of `taffy-platform`, so `testFixtures(...)` needs Gradle and a repository that serves the `.module` file, as `repo.alaz.so` does. The Maven POM does not list them.
+
+| Member | What it does |
+|---|---|
+| `new FakeDispatcher()` | A dispatcher that runs each task on the calling thread. |
+| `dispatch(ThreadTag tag, Supplier<T> task)` | Records `tag`, then runs, holds, refuses or drops `task` as the state says. Throws `NullPointerException` for a `null` argument, before the tag is recorded. |
+| `tags()` | The tag of every dispatch so far in call order, those refused, dropped or still held included. A copy that does not change. |
+| `hold()` | Queues every task dispatched from now until `runHeld()`. A held task's future stays incomplete. |
+| `held()` | The number of tasks held now. |
+| `runHeld()` | Runs the held tasks on the calling thread in dispatch order and ends the hold, also for a task a held task dispatches. With nothing held it does nothing, and leaves a dispatcher that refuses or drops as it is. |
+| `refuse()` | Refuses every dispatch from now, and the tasks held now: none runs, and each future completes with `RejectedExecutionException` for `ThreadTag.GLOBAL` and `ThreadTag.ASYNC`, or with an `EntityUnavailableException` carrying the id for an entity tag. |
+| `drop()` | Accepts every dispatch from now without running its task or completing its future, and forgets the tasks held now the same way. |
+
+```java title="FakeDispatcherExampleTest.java"
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.platform.Dispatcher;
+import so.alaz.taffy.platform.FakeDispatcher;
+import so.alaz.taffy.platform.ThreadTag;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+class FakeDispatcherExampleTest {
+
+    /** The code under test: reads on an async thread, then answers on the global thread. */
+    static CompletableFuture<String> greeting(Dispatcher dispatcher) {
+        return dispatcher.dispatch(ThreadTag.ASYNC, () -> "Alex")
+            .thenCompose(name -> dispatcher.dispatch(ThreadTag.GLOBAL, () -> "Hello " + name))
+            .completeOnTimeout("Hello stranger", 200, TimeUnit.MILLISECONDS);
+    }
+
+    private final FakeDispatcher dispatcher = new FakeDispatcher();
+
+    @Test
+    void theReadIsAsyncAndTheAnswerIsGlobal() {
+        assertEquals("Hello Alex", greeting(dispatcher).join());
+        assertEquals(List.of(ThreadTag.ASYNC, ThreadTag.GLOBAL), dispatcher.tags());
+    }
+
+    @Test
+    void nothingIsAnsweredWhileTheReadIsQueued() {
+        dispatcher.hold();
+        CompletableFuture<String> greeting = greeting(dispatcher);
+
+        assertFalse(greeting.isDone());
+        assertEquals(1, dispatcher.held());
+
+        dispatcher.runHeld();
+        assertEquals("Hello Alex", greeting.join());
+    }
+
+    @Test
+    void aDisablingPluginRefusesTheRead() {
+        dispatcher.refuse();
+
+        CompletionException thrown = assertThrows(CompletionException.class, () -> greeting(dispatcher).join());
+        assertInstanceOf(RejectedExecutionException.class, thrown.getCause());
+    }
+
+    @Test
+    void aReadThatNeverRunsEndsAtTheTimeout() {
+        dispatcher.drop();
+
+        assertEquals("Hello stranger", greeting(dispatcher).join());
+    }
+}
+```
+
+Behaviour:
+
+- A new instance runs each task on the calling thread before `dispatch` returns, so the future is already complete. `Scheduler` queues every task instead, also when the caller is on the thread the tag names. Code that only works when the task has run by the time `dispatch` returns passes with a new `FakeDispatcher` and fails on a server: `hold()` gives the queued order.
+- The last of `hold()`, `refuse()` and `drop()` called decides what a dispatch does. Only `runHeld()` returns to running tasks on the calling thread, and only from a hold.
+- A task runs or its future is refused, never both, and a task runs at most once. The future completes with what the task returned or with whatever it threw, an `Error` included, on the thread that ran the task. Nothing is logged.
+- `refuse()` models `Scheduler` once its plugin is disabling and `Scheduler.close()` has run: new dispatches fail, and those not started are refused. `drop()` models the case the `Dispatcher` contract allows for another implementation: a task accepted before the plugin disables whose future stays incomplete for good, which the caller bounds with `CompletableFuture.orTimeout` or tracks in `PendingSettlements`.
+- An entity tag is recorded and treated like any other tag: no player is looked up. `EntityThread.on(fakeDispatcher, server)` looks the player up on `server` when the task runs, so a mocked `Server` decides whether the player is online at `runHeld()`.
+- No thread is started. To run held tasks off the test thread, call `runHeld()` from the thread or executor that should run them.
+- Every method may be called from any thread.
 
 ## Related pages
 
