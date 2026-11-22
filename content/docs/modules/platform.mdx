@@ -178,6 +178,28 @@ void startAutosave(Duration period) {
 `close()`, and each new repeating task drops the cancelled ones from that list, so a plugin that cancels and
 restarts a task on every reload holds no more than its live tasks.
 
+A task is not passed its own handle. A task that stops itself cancels the returned handle, which the plugin keeps
+where the task's thread reads it, in a `volatile` field or an `AtomicReference`:
+
+```java
+private final AtomicReference<ScheduledTask> countdown = new AtomicReference<>();
+
+void startCountdown() {
+    countdown.set(scheduler.repeatingGlobal(this::tick, Duration.ofSeconds(1), Duration.ofSeconds(1)));
+}
+
+private void tick() {
+    ScheduledTask self = countdown.get();
+    if (secondsLeft.decrementAndGet() <= 0 && self != null) {
+        self.cancel();
+    }
+}
+```
+
+When the scheduling call is made on another thread than the one that runs the task, a first run can start before
+the handle is stored, and at once for `repeatingAsyncTask` with a zero initial delay. That run finds no handle
+(`null` above) and a later run cancels.
+
 #### Ticks
 
 Paper's global, entity and region schedulers count in server ticks of 50 ms. A `Duration` given to
@@ -203,8 +225,9 @@ if (opening == null) {
 
 The region is taken from the world and the block coordinates the `Location` has when the call is made, so a later
 change to that `Location` does not move the task. A `null` task and a `Location` with no world throw
-`NullPointerException` before anything is scheduled. There is no `ThreadTag` for a region: `dispatch` takes the
-global, async and entity tags only.
+`NullPointerException` before anything is scheduled, and a `Location` kept after its world was unloaded throws the
+`IllegalArgumentException` of Bukkit's `Location.getWorld()`. There is no `ThreadTag` for a region: `dispatch`
+takes the global, async and entity tags only.
 
 <Callout type="warn" title="The global region thread on Folia">
   On Paper the global region thread is the main thread, which owns every chunk and entity, so a `global` task may
@@ -254,6 +277,9 @@ after an initial delay and then every period, both counted in [ticks](#ticks). E
   on the calling thread.
 - `retired` runs at most once. A task that is cancelled (through its handle, by `close()` for a repeating task, or
   by Paper when the plugin disables) stops without it.
+- A repeating task whose own run removes the entity (it calls `Entity.remove()` or kicks the player, for example)
+  also stops without `retired`: Paper stops the task after that run and runs no callback, so such a task does
+  itself what `retired` would do.
 - `task` and `retired` are checked for `null` before anything is scheduled.
 
 ```java
@@ -857,8 +883,8 @@ absent, and throws as `get` does. `key()` returns the `NamespacedKey`.
 voucher.editMeta(meta -> voucherId.remove(meta));
 ```
 
-Every method takes a `PersistentDataHolder`, such as an `ItemMeta`, an entity or a chunk. An `ItemStack` is not
-one, so read and write an item through its meta.
+`get`, `getOrDefault`, `has`, `set` and `remove` take a `PersistentDataHolder`, such as an `ItemMeta`, an entity
+or a chunk. An `ItemStack` is not one, so read and write an item through its meta.
 
 ### Colors and Sounds
 
@@ -930,8 +956,8 @@ if (cooldowns.isOnCooldown(key)) {
 
 `set` starts or restarts a cooldown, and a length of zero or less clears it. `extend` keeps the later of the current
 expiry and the new one, and a length of zero or less changes nothing. `remaining` is `Duration.ZERO` when the key is not on cooldown. Lengths are read in whole
-milliseconds. Each call is atomic, but a check followed by a `set` is two calls, so two threads can both pass the
-check for one key.
+milliseconds. Each call on a key is atomic, but a check followed by a `set` is two calls, so two threads can both
+pass the check for one key.
 
 From `0.4.4`, `tryStart(key, length)` checks and starts in one atomic step. It starts the cooldown and returns
 `true` only when the key has none running, so of the threads that call it for one free key at once, exactly one
@@ -949,9 +975,10 @@ broadcastListing(player);
 Keep `isOnCooldown` and `set` when the cooldown starts only after the action succeeded, and serialise the two calls
 yourself.
 
-An expired cooldown stays in memory until its key is read or started again. From `0.4.4`, `purgeExpired()` removes
-every expired cooldown and returns how many it removed, for keys that are not read again, such as those of players
-who left. Call it from a repeating task, on any thread.
+An expired cooldown stays in memory until its key is read, started again or extended. From `0.4.4`,
+`purgeExpired()` removes every expired cooldown and returns how many it removed, for keys that are not read again,
+such as those of players who left. It removes them key by key, so a cooldown started while it runs is kept. Call it
+from a repeating task, on any thread.
 
 ## Logging
 
