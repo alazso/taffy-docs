@@ -68,7 +68,7 @@ Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` 
 
 ## so.alaz.taffy.settings
 
-Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.4.2` gives catalog `0.4.2`, which in turn pins every Taffy module to `0.4.1`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
+Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.4.2` gives catalog `0.4.2`, which in turn pins every Taffy module to `0.4.2`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
 
 From `0.4.1`, it first checks the Gradle version and fails on a Gradle older than 9.2.0 with the message shown under [Applying the plugins](#applying-the-plugins). A release candidate or milestone of 9.2.0 passes.
 

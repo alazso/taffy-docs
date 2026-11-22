@@ -19,6 +19,7 @@ myplugin/
   gradle.properties
   settings.gradle.kts
   build.gradle.kts
+  LICENSE
   src/main/java/com/example/myplugin/MyPlugin.java
   src/main/java/com/example/myplugin/Settings.java
   src/main/resources/paper-plugin.yml
@@ -132,10 +133,11 @@ Each Taffy module has a catalog alias named after it: `alaz.taffy.platform`, `al
 | Relocation | `org.bstats`, `dev.faststats` and `so.alaz.taffy` move to `<group>.libs.bstats`, `<group>.libs.faststats` and `<group>.libs.taffy`. |
 | Descriptor | `${version}` in `paper-plugin.yml` is replaced with the project version. |
 | Runtime libraries | `paperPlugin.runtimeLibraries` generates `RuntimeLibraries.COORDINATES`. |
+| License | The root project's `LICENSE` file goes into `META-INF` of the jar, and the license files of each shaded jar under `META-INF/licenses/`. Without a root `LICENSE` the jar has no `META-INF/LICENSE`. [Gradle plugins](/docs/gradle-plugins#license) has the details. |
 | Coverage gate | A JaCoCo report and an instruction coverage gate on `check`. |
 | Test defaults | Tests run under the `tr-TR` locale and the `Pacific/Auckland` time zone, with the Mockito jar passed as a Java agent when it is on the test classpath. |
 
-The `coverage` block configures the gate. `coverage.minimum` defaults to 0.80 and `coverage.classMinimum` to 0 (off). `coverage.exclusions` takes Ant patterns of class files, relative to the classes directory, that the gate leaves out. The generated `RuntimeLibraries` class is always left out. While either minimum is above 0, `check` fails when the module has classes under the gate and no test ran, so a plugin tests what it gates, excludes it, or sets both minimums to 0. Here the main class is excluded, and the settings record is tested in a later step.
+The `coverage` block configures the gate. `coverage.minimum` defaults to 0.80 and `coverage.classMinimum` to 0 (off). `coverage.exclusions` takes Ant patterns of class files, relative to the classes directory, that the gate leaves out. The generated `RuntimeLibraries` class is always left out. While either minimum is above 0, `check` fails when the module has classes under the gate and no test ran, so a plugin tests what it gates, excludes it, or sets both minimums to 0. Here the main class is excluded, and the settings record is tested in a later step. A plugin with more packages can lower the minimums or exclude them, as in this example, which is not part of this page's plugin:
 
 ```kotlin title="build.gradle.kts"
 coverage {
@@ -145,7 +147,7 @@ coverage {
 }
 ```
 
-The `paperPlugin` block lists the libraries Paper downloads before the plugin loads, such as HikariCP and the JDBC drivers `taffy-storage` needs:
+The `paperPlugin` block lists the libraries Paper downloads before the plugin loads, such as HikariCP and the JDBC drivers `taffy-storage` needs. This page's plugin lists none, so this block is an example too:
 
 ```kotlin title="build.gradle.kts"
 paperPlugin {
@@ -154,7 +156,7 @@ paperPlugin {
 }
 ```
 
-A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. From `0.4.1`, the build fails when a library is listed and `paper-plugin.yml` has no `loader` key. [Storage](/docs/modules/storage) covers this setup. bStats and FastStats are never runtime libraries: they are shaded and relocated.
+A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. From `0.4.1`, the build fails when a library is listed and `paper-plugin.yml` has no `loader` key. [Gradle plugins](/docs/gradle-plugins#runtime-libraries) shows the loader class and the `loader` line, and [Storage](/docs/modules/storage) the libraries each database needs. bStats and FastStats are never runtime libraries: they are shaded and relocated.
 
 </Step>
 <Step>
