@@ -756,6 +756,14 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, sche
 | `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat. |
 | `timer` | Runs a task on any thread after a delay: `scheduler::delayedAsync`. |
 
+From `0.4.3`, `BedrockProvider.detect` of [taffy-hooks](/docs/modules/hooks#bedrock-players) finds Floodgate or Geyser. `taffy-hooks` does not depend on `taffy-gui`, so the plugin passes the provider's `bedrock` method as the `BedrockPlayers`:
+
+```java
+BedrockProvider provider = BedrockProvider.detect(this, errors, true).provider();
+BedrockPlayers bedrock = provider == null ? BedrockPlayers.NONE : provider::bedrock;
+Prompts prompts = new Prompts(menus, PromptMode.ANVIL, bedrock, scheduler::delayedAsync);
+```
+
 Building the prompts links them to the menus. A second `Prompts` over the same menus, or prompts over menus that were shut down, throws `IllegalStateException`. From `0.3.0`, building the prompts also registers their listener as a listener of the menus' plugin, before the prompts link to the menus; prompts that are refused register nothing.
 
 A `PromptRequest(question, initial, origin, answer)` is one question: the `Component` shown, the text an anvil's name field starts with, the `Route` a cancel or timeout opens again, and a `Function<String, Answer>` that judges the typed text on the player's entity thread. The function returns `new Answer.Accept(route)` to take the answer and open `route`, or `new Answer.Retry(reason)` to tell the player `reason` and keep waiting.

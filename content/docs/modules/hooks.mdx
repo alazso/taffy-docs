@@ -1,6 +1,6 @@
 ---
 title: taffy-hooks
-description: Custom items, a Vault economy, LuckPerms, WorldGuard, placeholders and holograms behind Taffy interfaces, detected safely at enable.
+description: Custom items, a Vault economy, LuckPerms, WorldGuard, Bedrock players, placeholders and holograms behind Taffy interfaces, detected safely at enable.
 ---
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
@@ -9,6 +9,7 @@ description: Custom items, a Vault economy, LuckPerms, WorldGuard, placeholders 
 - `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
 - `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
+- `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
 - `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
@@ -43,6 +44,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
 | WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
+| Floodgate | `org.geysermc.floodgate:api` | `alaz.floodgate.api` |
+| Geyser | `org.geysermc.geyser:api`, `org.geysermc.api:base-api` | `alaz.geyser.api`, `alaz.geyser.base.api` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
 | MiniPlaceholders | `io.github.miniplaceholders:miniplaceholders-api` | `alaz.miniplaceholders.api` |
 | DecentHolograms | `com.github.decentsoftware-eu:decentholograms` | `alaz.decentholograms` |
@@ -50,7 +53,7 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
 | HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 
-The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
+The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`. The Floodgate and Geyser rows, with their aliases, are available from `0.4.3`. Floodgate and Geyser publish their APIs as snapshots only, so `alaz.floodgate.api` and `alaz.geyser.api` name a `-SNAPSHOT` version.
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -85,6 +88,12 @@ dependencies:
     WorldEdit:
       load: BEFORE
       required: false
+    floodgate:
+      load: BEFORE
+      required: false
+    Geyser-Spigot:
+      load: BEFORE
+      required: false
     PlaceholderAPI:
       load: BEFORE
       required: false
@@ -105,7 +114,7 @@ dependencies:
       required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
 
 A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
@@ -625,6 +634,38 @@ boolean inMarket = wg != null
     && wg.regionsAt(player.getLocation()).stream().anyMatch(id -> id.equalsIgnoreCase("market"));
 ```
 
+## Bedrock players
+
+<Callout type="info" title="From 0.4.3">
+`BedrockProvider` and the Floodgate and Geyser catalog aliases are available from Taffy `0.4.3`. Earlier versions have no Bedrock hook.
+</Callout>
+
+`BedrockProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn)` detects Floodgate, then Geyser, and gives a provider that tells which players joined from Minecraft Bedrock Edition. The plugin lists `floodgate` and `Geyser-Spigot` under `dependencies.server`. Each of the two is read only when it is installed, enabled and its API classes are visible, and is `FAILED` when a method the provider calls is missing. One that is not visible or lacks the API is warned about, and one that could not be hooked is warned about and reported under `hook.floodgate` or `hook.geyser-spigot`.
+
+| The server has | The result |
+|---|---|
+| A Floodgate that can be read | A provider on Floodgate, with the status `floodgate <version> on`. Geyser is not looked at. |
+| A Geyser that can be read, and no Floodgate that can be | A provider on Geyser, with the status `Geyser-Spigot <version> on`. |
+| Neither | No provider. The status is Floodgate's, or Geyser's when Floodgate is not installed and Geyser is. With neither installed it reads `floodgate not installed`. |
+| Either, with `switchedOn` `false` | No provider and `floodgate switched off`. Nothing is looked at. |
+
+The provider reads the Floodgate or Geyser that runs on the same server as the plugin, and stays bound to the one detection chose until the plugin detects again.
+
+| Method | Behaviour |
+|---|---|
+| `boolean bedrock(UUID player)` | `true` for a player who joined from Bedrock Edition. |
+
+`bedrock` returns `false` for any other player, for a player who is not online, while the Bedrock plugin is disabled, and when the check fails. Only a failed check is logged (at most once a minute, with its stack the first time) and reported under `hook.floodgate` or `hook.geyser-spigot`. The provider asks the Bedrock plugin on the calling thread and keeps nothing about a player.
+
+`taffy-hooks` does not depend on [taffy-gui](/docs/modules/gui), so a `BedrockProvider` is not a `BedrockPlayers`. A plugin that uses both passes `provider::bedrock` to `Prompts`, whose Bedrock players then always answer in chat:
+
+```java
+Detected<BedrockProvider> detected = BedrockProvider.detect(this, errors, true);
+BedrockProvider provider = detected.provider();
+BedrockPlayers bedrock = provider == null ? BedrockPlayers.NONE : provider::bedrock;
+Prompts prompts = new Prompts(menus, PromptMode.ANVIL, bedrock, scheduler::delayedAsync);
+```
+
 ## Holograms
 
 <Callout type="info" title="From 0.1.2">
@@ -780,6 +821,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.vault` | A lookup that failed, once per lookup. |
 | `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
 | `hook.worldguard` | A failed detection, and every failed lookup. |
+| `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
@@ -790,6 +832,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | Type | Thread |
 |---|---|
 | `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
+| `BedrockProvider.detect` | The server thread, in `onEnable`. |
 | `HologramProvider.detect` | The server thread while the plugin is enabled, normally in `onEnable`, and again after the held provider is closed. |
 | `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
@@ -798,6 +841,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
+| `BedrockProvider.bedrock` | The thread that asks. `Prompts` asks on the player's entity thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. Before detecting again, the server's global thread. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |

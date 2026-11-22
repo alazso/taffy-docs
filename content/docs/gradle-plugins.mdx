@@ -89,12 +89,13 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 | `oraxen` | `https://repo.oraxen.com/releases` | `io.th0rgal`, `md.thomas.hopper` |
 | `nexo` | `https://repo.nexomc.com/releases` | `com.nexomc`, `com.tcoded`, `me.gabytm.util`, `team.unnamed` |
 | `enginehub` | `https://maven.enginehub.org/repo/` | `com.sk89q`, `org.enginehub` and their subgroups |
+| `opencollab` | `https://repo.opencollab.dev/main/` | `org.geysermc.floodgate`, `org.geysermc.geyser`, `org.geysermc.api` |
 | `fancyinnovations` | `https://maven.fancyspaces.net/fancyinnovations/releases` | `de.oliver` |
 | `thenextlvl` | `https://repo.thenextlvl.net/releases` | `net.thenextlvl` |
 | `packetevents` | `https://repo.codemc.io/repository/maven-releases/` | `com.github.retrooper` |
 | `jitpack` | `https://jitpack.io` | `com.github.MilkBowl`, `com.github.Arcaniax-Development`, `com.github.decentsoftware-eu`, `com.github.HologramLib`, `com.github.maximjsx.EntityLib` |
 
-Gradle asks a repository only for the groups in its Content column. A row that names subgroups covers every group below the ones it names, and every other group is matched exactly. The groups are the ones the `alaz` catalog's entries and their dependencies come from. The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`. The limit of `MavenRepo` to releases is Gradle's own and holds on Gradle 9.5.1 and newer: on Gradle 9.4.1 and older, Maven Central is also asked for a snapshot version of the groups it serves.
+Gradle asks a repository only for the groups in its Content column. A row that names subgroups covers every group below the ones it names, and every other group is matched exactly. The groups are the ones the `alaz` catalog's entries and their dependencies come from. The hologram rows, `fancyinnovations`, `thenextlvl` and `packetevents`, are available from `0.1.2`, and the `opencollab` row from `0.4.3`. The limit of `MavenRepo` to releases is Gradle's own and holds on Gradle 9.5.1 and newer: on Gradle 9.4.1 and older, Maven Central is also asked for a snapshot version of the groups it serves.
 
 From `0.2.0`, every repository except Maven Central has a content filter and `jitpack` is last. Before `0.2.0`, only `alazso`, `alazsoSnapshots` and the three hologram rows had one, `jitpack` stood between `faststats` and `vaultunlocked`, and the other repositories were asked for any module an earlier repository lacked. A build that took a module of another group from one of these repositories now fails with `Could not find` for that module, and declares the repository itself, as shown below.
 
@@ -513,7 +514,7 @@ Each module has an entry at the catalog's own version, the version key `taffy`.
 
 ### Integration APIs
 
-No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, Vault, LuckPerms, `worldguard-core`, `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI, MiniPlaceholders, DecentHolograms, FancyHolograms, Holograms and HologramLib, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. `taffy-hooks` uses `alaz.packetevents.api` in its tests only, because HologramLib's classes link only with PacketEvents present. `alaz.vaultunlocked.api`, `alaz.playerpoints` and `alaz.worldguard.bukkit` are in the catalog for a plugin's own code. A plugin declares one `compileOnly` only when its own code calls that API directly.
+No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, Vault, LuckPerms, `worldguard-core`, `worldedit-core`, `worldedit-bukkit`, Floodgate, Geyser (its `api` and `base-api`), PlaceholderAPI, MiniPlaceholders, DecentHolograms, FancyHolograms, Holograms and HologramLib, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. `taffy-hooks` uses `alaz.packetevents.api` in its tests only, because HologramLib's classes link only with PacketEvents present. `alaz.vaultunlocked.api`, `alaz.playerpoints` and `alaz.worldguard.bukkit` are in the catalog for a plugin's own code. A plugin declares one `compileOnly` only when its own code calls that API directly.
 
 | Accessor | Coordinates | Version key |
 |---|---|---|
@@ -531,13 +532,16 @@ No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, N
 | `alaz.worldguard.core` | `com.sk89q.worldguard:worldguard-core` | `worldguard` |
 | `alaz.worldedit.bukkit` | `com.sk89q.worldedit:worldedit-bukkit` | `worldedit` |
 | `alaz.worldedit.core` | `com.sk89q.worldedit:worldedit-core` | `worldedit` |
+| `alaz.floodgate.api` | `org.geysermc.floodgate:api` | `floodgate` |
+| `alaz.geyser.api` | `org.geysermc.geyser:api` | `geyser` |
+| `alaz.geyser.base.api` | `org.geysermc.api:base-api` | `geyserbase` |
 | `alaz.decentholograms` | `com.github.decentsoftware-eu:decentholograms` | `decentholograms` |
 | `alaz.fancyholograms` | `de.oliver:FancyHolograms` | `fancyholograms` |
 | `alaz.holograms` | `net.thenextlvl:holograms` | `holograms` |
 | `alaz.hologramlib` | `com.github.HologramLib:HologramLib` | `hologramlib` |
 | `alaz.packetevents.api` | `com.github.retrooper:packetevents-api` | `packetevents` |
 
-The hologram rows, `alaz.decentholograms`, `alaz.fancyholograms`, `alaz.holograms`, `alaz.hologramlib` and `alaz.packetevents.api`, are available from `0.1.2`.
+The hologram rows, `alaz.decentholograms`, `alaz.fancyholograms`, `alaz.holograms`, `alaz.hologramlib` and `alaz.packetevents.api`, are available from `0.1.2`. The Bedrock rows, `alaz.floodgate.api`, `alaz.geyser.api` and `alaz.geyser.base.api`, are available from `0.4.3`. Floodgate and Geyser publish their APIs as snapshots only, so the `floodgate` and `geyser` versions end in `-SNAPSHOT`. `GeyserApi` inherits `isBedrockPlayer` from `base-api`, so code that calls it compiles against both Geyser aliases.
 
 `taffy-hooks` and `taffy-platform` declare each API they compile against with `{ isTransitive = false }`, which keeps that API's own dependencies off the compile classpath. A plugin can do the same:
 
