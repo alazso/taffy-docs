@@ -13,6 +13,7 @@ Every type is in `so.alaz.taffy.gui`.
 | Drawing | `Icon` (`Icon.Button`, `Icon.Filler`, `Icon.Real`, `Icon.Saved`), `MenuText`, `TextSource`, `Frame` (`Frame.Spec`, `Frame.Entry`), `Pager` (`Pager.Page`) |
 | Runtime | `Menus` (`Menus.Parts`), `Menu`, `MenuSession`, `MenuSettings`, `Route`, `Click`, `ClickHandler`, `ClickGuard`, `Cue`, `ViewMemory` |
 | Text prompts | `Prompts`, `PromptRequest`, `TextRequest`, `Answer` (`Answer.Accept`, `Answer.Retry`, `Answer.Later`), `PromptEnd`, `PromptMode`, `BedrockPlayers` |
+| Tests | `MenuTesting`, from `0.4.5` |
 
 ## Setup
 
@@ -971,3 +972,153 @@ Every handled failure is logged with its stack through the plugin's logger and r
 | `gui.prompt` | A prompt's answer function threw or returned `null`, the future of an `Answer.Later` failed or completed with `null`, or prompt work on the player's entity thread failed. From `0.4.3`, also a refusal check of a `TextRequest` that threw or whose future failed, and an `accepted` or `ended` step that threw. |
 
 A menu that throws from `render` or `initial` during a direct `open` or `rerender` passes the exception to the caller.
+
+## Testing menus
+
+From `0.4.5`, `MenuTesting` builds the menus for a plugin's own tests, which run with no server. `new MenuTesting(parts).menus()` gives a `Menus` over the same `Menus.Parts` the plugin builds in `onEnable`, with four differences from `new Menus(parts)`:
+
+- Its menu inventories are fakes that record the `Icon` each slot shows. `icon(inventory, slot)` gives it, `title(inventory)` the title, and `inventories()` every inventory created so far.
+- Its time source stands still until `advance(Duration)` moves it, so a test steps over the click debounce window instead of sleeping.
+- The calling thread owns every player until `owned(Predicate<Player>)` says otherwise, which is how a test reaches the `IllegalStateException` of `open` on a thread that does not own the viewer.
+- Its listener is registered with no plugin manager. `deliver(event)` passes an `InventoryClickEvent`, an `InventoryDragEvent`, an `InventoryCloseEvent` or a `PlayerQuitEvent` to the listeners by priority, as a server does.
+
+`MenuTesting` is in `taffy-gui` itself and uses no Mockito, so it needs no extra dependency. The test supplies the plugin, the players and their views, here as Mockito mocks, and the `tasks` and `entity` of the parts as it would for any other test:
+
+```java title="ShopMenuTest.java"
+import net.kyori.adventure.text.Component;
+import org.bukkit.Material;
+import org.bukkit.Server;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.InventoryView;
+import org.bukkit.plugin.Plugin;
+import org.junit.jupiter.api.Test;
+import so.alaz.taffy.gui.Icon;
+import so.alaz.taffy.gui.MenuSettings;
+import so.alaz.taffy.gui.MenuTesting;
+import so.alaz.taffy.gui.Menus;
+import so.alaz.taffy.gui.TextSource;
+import so.alaz.taffy.platform.EntityThread;
+import so.alaz.taffy.platform.ErrorReports;
+
+import java.util.ArrayDeque;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Queue;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.logging.Logger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+class ShopMenuTest {
+
+    private final Queue<Runnable> ticks = new ArrayDeque<>();
+    private final Player player = mock(Player.class);
+    private final UUID id = UUID.randomUUID();
+    private final MenuTesting testing;
+    private final Menus menus;
+    private InventoryView view;
+
+    ShopMenuTest() {
+        Plugin plugin = mock(Plugin.class);
+        when(plugin.getName()).thenReturn("Shop");
+        when(plugin.namespace()).thenReturn("shop");
+        when(plugin.getServer()).thenReturn(mock(Server.class));
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("test"));
+        TextSource text = (locale, key, placeholders) -> Component.text(key);
+        EntityThread entity = new EntityThread() {
+            @Override
+            public <T> CompletableFuture<T> call(UUID player, Function<Player, T> task) {
+                return CompletableFuture.completedFuture(task.apply(ShopMenuTest.this.player));
+            }
+        };
+        testing = new MenuTesting(Menus.Parts.of(plugin, text, (viewer, task) -> ticks.add(task), entity,
+            new ErrorReports()).layouts(Map.of(ShopMenu.KIND.id(), ShopMenu.LAYOUT)));
+        menus = testing.menus();
+        menus.register(new ShopMenu(menus));
+
+        when(player.getUniqueId()).thenReturn(id);
+        when(player.getName()).thenReturn("Alex");
+        when(player.locale()).thenReturn(Locale.ENGLISH);
+        when(player.isOnline()).thenReturn(true);
+        when(player.getOpenInventory()).thenAnswer(call -> view);
+        when(player.openInventory(any(Inventory.class))).thenAnswer(call -> {
+            close(InventoryCloseEvent.Reason.OPEN_NEW);
+            InventoryView opened = mock(InventoryView.class);
+            when(opened.getTopInventory()).thenReturn(call.getArgument(0));
+            when(opened.getPlayer()).thenReturn(player);
+            view = opened;
+            return opened;
+        });
+        doAnswer(call -> {
+            close(call.getArgument(0));
+            return null;
+        }).when(player).closeInventory(any(InventoryCloseEvent.Reason.class));
+    }
+
+    // A server posts the close event itself, also for the view an open replaces.
+    private void close(InventoryCloseEvent.Reason reason) {
+        InventoryView closing = view;
+        if (closing != null) {
+            view = null;
+            testing.deliver(new InventoryCloseEvent(closing, reason));
+        }
+    }
+
+    @Test
+    void buyingAddsOneToTheStack() {
+        menus.open(player, ShopMenu.KIND.id(), null);
+        Inventory top = view.getTopInventory();
+        assertEquals(Material.DIAMOND, ((Icon.Button) testing.icon(top, 13)).material());
+
+        testing.advance(MenuSettings.DEFAULTS.clickDebounce().plusMillis(1));
+        InventoryClickEvent click = new InventoryClickEvent(view, InventoryType.SlotType.CONTAINER, 13,
+            ClickType.LEFT, InventoryAction.PICKUP_ALL);
+        testing.deliver(click);
+        while (!ticks.isEmpty()) {
+            ticks.poll().run();
+        }
+
+        assertTrue(click.isCancelled());
+        assertEquals(2, ((Icon.Button) testing.icon(top, 13)).amount());
+    }
+}
+```
+
+`ShopMenu` is the plugin's own menu: here its `buy` action sits in slot 13 and shows the state as the stack amount, and a click adds one and calls `menus.rerenderLater`.
+
+`prompts(timer)` builds chat `Prompts` over the menus on the same time source, and `chat(player, line)` passes a chat line to them and returns whether a prompt took it as its answer:
+
+```java
+List<Runnable> timers = new ArrayList<>();
+Prompts prompts = testing.prompts((task, delay) -> timers.add(task));
+
+prompts.ask(player, new PromptRequest(Component.text("How many?"), "", origin,
+    line -> new Answer.Accept(new Route(ShopMenu.KIND.id(), Integer.parseInt(line), null))));
+
+assertTrue(testing.chat(player, "7"));
+```
+
+To let an ask time out, call `testing.advance(Prompts.TIMEOUT)` and run the tasks the timer was given.
+
+- A fake menu inventory answers `getHolder()`, `getHolder(boolean)`, `getSize()` and `clear()`, which empties its slots, and equals only itself. Every other method throws `UnsupportedOperationException`. `icon` returns `null` for a slot nothing was drawn into since the inventory was created or cleared.
+- A menu counts as shown only when the view `player.openInventory(inventory)` returns has that inventory as its `getTopInventory()`.
+- Every material but `AIR`, `CAVE_AIR` and `VOID_AIR` passes `Menus.register` as an item, also a block that has no item form, because `Material.isItem()` needs a running server.
+- `deliver` calls the handlers by priority and, at one priority, in the order the listeners were registered: the menus' listener first, then the prompts'. What a handler throws is thrown on to the test, and the later handlers do not run.
+- `chat` passes the line as an `AsyncPlayerChatEvent`, the event a server posts first, on the calling thread.
+- The prompts are always chat prompts with no Bedrock players: the anvil and the dialog need a running server. Their cancel link runs nothing, so a test cancels by typing the cancel word.
+- After an answer, a menu opens only when the player is on their own screen: `player.getOpenInventory()` returns `null`, or a view whose top inventory has the player as its `getHolder(false)`.
+- `Menus.Parts.server()` is not used, so a mocked `Server` with no stubbing is enough.
+- Each `MenuTesting` holds one `Menus` and delivers to its listeners only.

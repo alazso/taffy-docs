@@ -17,6 +17,8 @@ description: Helpers for testing Paper plugin code without a server, from fake i
 | `ApiRules` | The design-rule checks of Taffy's own modules. |
 | `FakeDispatcher` | From `0.4.5`, a `Dispatcher` that records thread tags and holds, refuses or drops tasks. It is in the test fixtures of `taffy-platform`, not in `taffy-test`. |
 
+From `0.4.5`, a plugin tests its `taffy-gui` menus with [`MenuTesting`](/docs/modules/gui#testing-menus), which is a class of `taffy-gui` and not of `taffy-test`: it gives fake menu inventories, a time source the test moves and delivery of click, drag, close, quit and chat events.
+
 Every class of `taffy-test` is in the package `so.alaz.taffy.test`. The module depends on no other Taffy module, which is why [`FakeDispatcher`](#fakedispatcher), an implementation of `taffy-platform`'s `Dispatcher`, is published with `taffy-platform` instead.
 
 ## Setup
@@ -773,4 +775,5 @@ Behaviour:
   <Card title="Gradle plugins" href="/docs/gradle-plugins" />
   <Card title="taffy-storage" href="/docs/modules/storage" />
   <Card title="taffy-platform" href="/docs/modules/platform" />
+  <Card title="taffy-gui" href="/docs/modules/gui" />
 </Cards>
