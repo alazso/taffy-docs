@@ -1,9 +1,9 @@
 ---
 title: taffy-gui
-description: Chest menus with layouts from code or the plugin's own files, pagination, a footer, click safety and text prompts in chat or an anvil.
+description: Chest menus with layouts from code or the plugin's own files, pagination, a footer, click safety and text prompts in chat, an anvil or a Paper dialog.
 ---
 
-`taffy-gui` gives a plugin chest menus. A menu's look (its rows, filler, list slots and items) is a layout the plugin builds in code or reads from its own files, and the menu's code only says what each action does and what the list holds. The module opens every menu on the viewer's entity thread, pages lists, draws a footer with back, page arrows, refresh and close, loads slow data in the background, and keeps the items a menu shows from leaving it. `Prompts` asks a player for one line of text in chat or in an anvil and returns to the menu with the answer. Names and lore come from the plugin's lang files through `Messages` from [taffy-platform](/docs/modules/platform), where a YAML list is one lore line per entry. From `0.3.0`, a plugin that keeps its text elsewhere passes its own [`TextSource`](#text-source) in their place.
+`taffy-gui` gives a plugin chest menus. A menu's look (its rows, filler, list slots and items) is a layout the plugin builds in code or reads from its own files, and the menu's code only says what each action does and what the list holds. The module opens every menu on the viewer's entity thread, pages lists, draws a footer with back, page arrows, refresh and close, loads slow data in the background, and keeps the items a menu shows from leaving it. `Prompts` asks a player for one line of text in chat or in an anvil and returns to the menu with the answer. From `0.4.3` it also asks in a Paper dialog (experimental) and, with a `TextRequest`, from a command or a plugin's own screen with no menu to return to. Names and lore come from the plugin's lang files through `Messages` from [taffy-platform](/docs/modules/platform), where a YAML list is one lore line per entry. From `0.3.0`, a plugin that keeps its text elsewhere passes its own [`TextSource`](#text-source) in their place.
 
 Every type is in `so.alaz.taffy.gui`.
 
@@ -12,7 +12,7 @@ Every type is in `so.alaz.taffy.gui`.
 | Layouts | `MenuLayout`, `ItemLayout`, `PagerLayout`, `MenuKind` |
 | Drawing | `Icon` (`Icon.Button`, `Icon.Filler`, `Icon.Real`, `Icon.Saved`), `MenuText`, `TextSource`, `Frame` (`Frame.Spec`, `Frame.Entry`), `Pager` (`Pager.Page`) |
 | Runtime | `Menus` (`Menus.Parts`), `Menu`, `MenuSession`, `MenuSettings`, `Route`, `Click`, `ClickHandler`, `ClickGuard`, `Cue`, `ViewMemory` |
-| Text prompts | `Prompts`, `PromptRequest`, `Answer` (`Answer.Accept`, `Answer.Retry`, `Answer.Later`), `PromptEnd`, `PromptMode`, `BedrockPlayers` |
+| Text prompts | `Prompts`, `PromptRequest`, `TextRequest`, `Answer` (`Answer.Accept`, `Answer.Retry`, `Answer.Later`), `PromptEnd`, `PromptMode`, `BedrockPlayers` |
 
 ## Setup
 
@@ -752,8 +752,8 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, BedrockPlayers.NONE, sche
 | Constructor argument | Meaning |
 |---|---|
 | `menus` | The plugin's menus. The prompts read their text source, locale function, entity-thread seams, logger and error reports. |
-| `mode` | `PromptMode.CHAT` (the next chat line) or `PromptMode.ANVIL` (the name field of an anvil the prompts build). It holds for the life of the prompts. A later release may add a mode, so a plugin's own `switch` over `PromptMode` keeps a `default` branch. |
-| `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat. |
+| `mode` | `PromptMode.CHAT` (the next chat line), `PromptMode.ANVIL` (the name field of an anvil the prompts build) or, from `0.4.3`, the experimental `PromptMode.DIALOG` (the text field of a Paper dialog, see [Dialog prompts](#dialog-prompts)). It holds for the life of the prompts. A later release may add a mode, as `0.4.3` did, so a plugin's own `switch` over `PromptMode` keeps a `default` branch. |
+| `bedrock` | A `BedrockPlayers` that tells which players joined from Bedrock Edition, or `BedrockPlayers.NONE`. Bedrock players always answer in chat, under `ANVIL` and under `DIALOG` alike, and get no cancel link. |
 | `timer` | Runs a task on any thread after a delay: `scheduler::delayedAsync`. |
 
 From `0.4.3`, `BedrockProvider.detect` of [taffy-hooks](/docs/modules/hooks#bedrock-players) finds Floodgate or Geyser. `taffy-hooks` does not depend on `taffy-gui`, so the plugin passes the provider's `bedrock` method as the `BedrockPlayers`:
@@ -780,16 +780,16 @@ new PromptRequest(question, "100", session.route(), text -> {
 });
 ```
 
-- While the future runs the ask takes no chat line and no anvil submit, and an anvil stays open. A chat line typed then is ordinary chat.
+- While the future runs the ask takes no chat line and no anvil submit, and an anvil stays open. A chat line typed then is ordinary chat. Under `PromptMode.DIALOG` no dialog shows while the future runs.
 - The ask's first deadline, the cancel link, a closed anvil, another menu, a newer ask, a quit and `Menus.shutdown()` still end the ask. The result of a future that completes after that is dropped, and nothing runs for a player who left the server, so the future itself must not take money or items.
 - A future that fails or completes with `null` is handled as an answer function that throws. A cancelled future opens `origin` again with no message, and nothing is logged or reported.
 - `Answer` is sealed and a later release may add a result, so a plugin's own `switch` over it keeps a `default` branch.
 
-`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message (from `0.4.2`, also an ask of another `Prompts` of the same plugin), and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls. Both throw `NullPointerException` for a `null` request; from `0.3.0`, `ask` does so before it closes the menu or replaces a pending ask. From `0.3.0`, `ask` also throws `IllegalStateException` on a thread that does not own the player, before it closes or replaces anything, with the message "Prompts.ask must run on the player's entity thread; use Prompts.askLater"; `askLater` is called from any thread.
+`ask(player, request)` asks now, on the player's entity thread outside an inventory event. It replaces any ask still pending for the player without a message (from `0.4.2`, also an ask of another `Prompts` of the same plugin), and does nothing once `Menus.shutdown()` ran or when the server refused to open the anvil. `askLater(player, request)` asks on the next tick and is what a click handler calls. Both throw `NullPointerException` for a `null` request; from `0.3.0`, `ask` does so before it closes the menu or replaces a pending ask. From `0.4.3` both also take a [`TextRequest`](#text-outside-a-menu), so a call that passes the literal `null` needs a cast to compile. From `0.3.0`, `ask` also throws `IllegalStateException` on a thread that does not own the player, before it closes or replaces anything, with the message "Prompts.ask must run on the player's entity thread; use Prompts.askLater"; `askLater` is called from any thread.
 
 Behaviour of an ask:
 
-- A chat ask closes the menu and sends `gui.prompt.question` and `gui.prompt.hint` in chat. An anvil ask shows the question as the anvil's title and sends no chat message.
+- A chat ask closes the menu and sends `gui.prompt.question` and `gui.prompt.hint` in chat. An anvil ask shows the question as the anvil's title and sends no chat message. From `0.4.3`, a dialog ask closes the menu, shows the question as the dialog's title and sends no chat message.
 - An ask waits `Prompts.TIMEOUT` (30 seconds) from when it was asked. A refused answer keeps the first deadline.
 - An answer is stripped of surrounding whitespace and cut to `Prompts.MAX_LENGTH` (256) characters.
 - The cancel word from `gui.prompt.cancel-word` cancels, and so does `Prompts.DEFAULT_CANCEL_WORD` (`cancel`) in every locale. A chat ask also shows a clickable `gui.prompt.cancel-button` link after the hint (not for Bedrock players), which works for one click while the ask waits.
@@ -809,7 +809,7 @@ From `0.3.0`, `PromptRequest.abandoned(Consumer<PromptEnd>)` gives a question a 
 | `PromptEnd` | The ask ended because |
 |---|---|
 | `TIMED_OUT` | it reached its deadline and the origin did not open: the player is dead or has another plugin's inventory open, the server refused the origin's inventory (another plugin cancelled the open), or opening the origin failed. |
-| `CANCELLED` | the player cancelled it (the cancel word, the cancel link or a closed anvil) and the origin did not open, for one of the reasons `TIMED_OUT` lists, or `Menus.shutdown()` ended it. |
+| `CANCELLED` | the player cancelled it (the cancel word, the cancel link, a closed anvil or, from `0.4.3`, the cancel button or escape key of a dialog) and the origin did not open, for one of the reasons `TIMED_OUT` lists, or `Menus.shutdown()` ended it. |
 | `LEFT` | the player quit while it waited, was gone when it was to end, or was dead or offline when an accepted or failed answer was to open its menu. |
 | `REPLACED` | something took its place: a menu of these menus opened, a newer ask started, another inventory opened over the prompt's anvil, the player had another inventory open when an accepted, refused or failed answer was to show its menu or its anvil, or the server refused to show the anvil of a refused answer again. It is also how an ask ends when the menu an accepted or failed answer was to open did not open: the server refused its inventory, its route names no registered menu or a state of another type, or the menu failed to draw. |
 
@@ -826,6 +826,80 @@ prompts.askLater(click.player(), new PromptRequest(question, "100", session.rout
 - A step that throws a `RuntimeException` is logged and reported under `gui.prompt`.
 - `PromptRequest` has `abandoned` as a fifth record component. `new PromptRequest(question, initial, origin, answer)` still compiles and gives a request whose step does nothing.
 - A later release may add a `PromptEnd`, so a `switch` over it keeps a `default` branch.
+
+### Dialog prompts
+
+From `0.4.3`, `PromptMode.DIALOG` asks in a Paper dialog: a title, one text field, a submit button and a cancel button.
+
+```java
+Prompts prompts = new Prompts(menus, PromptMode.DIALOG, bedrock, scheduler::delayedAsync);
+```
+
+<Callout type="warn" title="Experimental">
+Paper marks its Dialog API as experimental and may change it, so `PromptMode.DIALOG` carries `@ApiStatus.Experimental` too. It is the only experimental part of the prompts: `TextRequest`, the constructor over `Menus.Parts` and `Prompts.shutdown()` are not. Taffy's tests run the mode against a stand-in for the dialog, so check it on your own server version before you ship it.
+</Callout>
+
+- The dialog's title is the request's question, and the field starts with its `initial` text, cut to `Prompts.MAX_LENGTH` (256) characters, which is also the most the field takes.
+- The submit button sends the field's text, which is judged as a chat line or an anvil submit is: stripped, cut, checked against the cancel word and given to the answer function on the player's entity thread. `Answer.Accept` opens its route, and an `Answer.Later` is waited for as in the other modes.
+- A refused answer shows the dialog again on the next tick, with the `gui.prompt.refused` text above the field and the refused text in it. Nothing is sent to chat. With another inventory open on that tick the ask ends as `PromptEnd.REPLACED`.
+- The cancel button cancels the ask, and so does closing the dialog with the escape key, which the client sends as that button: the player is told `gui.prompt.cancelled` and the origin opens again.
+- The deadline, a menu that opens, a newer ask and `shutdown()` take the dialog away from the player. A chat line typed while a dialog ask waits is ordinary chat.
+- The two buttons carry the client's own text for `gui.done` and `gui.cancel`, in the player's language, so the mode adds no lang key and `Prompts.KEYS` is unchanged. A dialog reads `gui.prompt.refused` and, when the ask ends, `gui.prompt.cancelled`, `gui.prompt.timed-out` and `gui.error`.
+- Bedrock players answer in chat, as under `ANVIL`.
+- On a server whose Paper has no Dialog API, building the prompts logs one warning and every ask is asked in chat. When the API is there but cannot be linked, as after Paper changed it, the first ask logs one warning, and that ask and every later ask of those prompts are asked in chat.
+- No `io.papermc.paper.dialog` type is part of a Taffy signature. Forms with more than one field and confirmations are not part of this mode.
+
+### Text outside a menu
+
+From `0.4.3`, a `TextRequest` asks for text that opens no menu, for a command or a plugin's own screen. `ask(player, request)` and `askLater(player, request)` take it as they take a `PromptRequest`, and the ask uses the same chat, anvil or dialog, cancel word, cancel link, deadline and Bedrock rule.
+
+```java
+prompts.ask(player, new TextRequest(
+    Component.text("Name of the crate?"), "",
+    text -> text.length() < 3 ? Component.text("At least 3 characters.") : null,
+    name -> crates.create(player, name),
+    end -> { }));
+```
+
+| Part of `TextRequest` | Type | Meaning |
+|---|---|---|
+| `question` | `Component` | The text shown. |
+| `initial` | `String` | The text an anvil's name field or a dialog's text field starts with. |
+| `refusal` | `Function<String, @Nullable Component>` | Judges the typed text on the player's entity thread: `null` takes the answer, and a text refuses it and is shown to the player as the reason, as an `Answer.Retry` is. |
+| `accepted` | `Consumer<String>` | Gets the answer that was taken, once. |
+| `ended` | `Consumer<PromptEnd>` | Gets how the ask ended when no answer was taken, once. |
+
+The prompts open nothing after either step. `ended` gets:
+
+| `PromptEnd` | The ask ended because |
+|---|---|
+| `CANCELLED` | the player cancelled it (the cancel word, the cancel link, a closed anvil, the cancel button or escape key of a dialog), the refusal check failed, its future was cancelled, or `shutdown()` ended it. |
+| `TIMED_OUT` | it reached its deadline. |
+| `LEFT` | the player quit while it waited or was gone when it was to end. |
+| `REPLACED` | a newer ask started, a menu of the menus the prompts are built over opened, another inventory opened over the prompt's anvil, or the anvil or dialog of a refused answer could not be shown again. |
+
+- A check that decides off the player's entity thread uses `TextRequest.later(question, initial, refusal, accepted, ended)`, whose `refusal` is a `Function<String, CompletableFuture<@Nullable Component>>`. The function runs on the player's entity thread, its future completes on any thread with `null` or the reason, and the result is applied on the player's entity thread. While it runs the ask takes no answer, as with an `Answer.Later`, and what ends the ask meanwhile drops the result, so the future itself must not take money or items.
+- A check that throws a `RuntimeException`, returns no future, or whose future fails is logged and reported under `gui.prompt`, the player is told `gui.error`, and the ask ends as `CANCELLED`. A cancelled future ends it as `CANCELLED` with no message.
+- `accepted` and `ended` run on the player's entity thread, except `LEFT` for a player who is gone, which runs on the thread that found the player gone, and `CANCELLED` at `shutdown()`, which runs on the disabling thread for a player that thread owns. One that throws a `RuntimeException` is logged and reported under `gui.prompt`.
+- Neither step runs for an ask that never started: one after `shutdown()`, or one whose anvil the server refused to open.
+- The ask closes the inventory the player has open. On prompts built over menus, a Taffy menu closes with `left = true`, since no menu opens again, and a menu of those menus that opens ends the ask as `REPLACED`.
+
+A plugin with no `Menus` builds its prompts over a `Menus.Parts`:
+
+```java
+Prompts prompts = new Prompts(
+    Menus.Parts.of(this, messages, scheduler::entity, EntityThread.on(scheduler, getServer()), errors),
+    PromptMode.CHAT, BedrockPlayers.NONE, scheduler::delayedAsync);
+
+// onDisable, before scheduler.close()
+Shutdown.closeQuietly("end the prompts", () -> prompts.shutdown(), getLogger(), errors);
+```
+
+- The prompts read the parts' plugin, text source, `locales`, `server`, `preview` (the key the paper of the prompt anvil carries), `tasks`, `entity`, `logger` and `errors`. The layouts, settings, sounds and home menu are not read.
+- Building them registers the prompt listener as a listener of the plugin, with no `registerEvents` call: it reads the chat answers, guards the prompt anvil and ends the ask of a player who quits as `LEFT`. The server refuses a listener of a plugin that is not enabled with an `IllegalPluginAccessException`.
+- Such prompts ask with a `TextRequest` only. `ask(player, promptRequest)` throws `IllegalStateException`, since they have no menu to open.
+- They share a player's ask with the other `Prompts` of the plugin, built over menus or not, as the list above states from `0.4.2`. No menu ends their asks.
+- `Prompts.shutdown()` is public from `0.4.3`. The plugin calls it at disable for prompts built this way: it ends every ask as `CANCELLED` for the players the calling thread owns, takes their anvils and dialogs away, and nothing is asked afterwards. `Menus.shutdown()` still calls it for prompts built over menus.
 
 ### Prompt lang keys
 
@@ -876,7 +950,7 @@ try {
 
 ## Shutdown
 
-`menus.shutdown()` ends every prompt first, then closes the open menus and anvils of the viewers the calling thread owns and runs each menu's `closed` with `left = false` itself, since no close event arrives while the plugin disables. From `0.3.0` it also sends each viewer whose menu it closed their inventory again, through `Player.updateInventory()`. Nothing opens and nothing is asked afterwards, and a second call does nothing.
+`menus.shutdown()` ends every prompt of the `Prompts` built over the menus first, then closes the open menus and anvils of the viewers the calling thread owns and runs each menu's `closed` with `left = false` itself, since no close event arrives while the plugin disables. From `0.3.0` it also sends each viewer whose menu it closed their inventory again, through `Player.updateInventory()`. Nothing opens and nothing is asked afterwards, and a second call does nothing. From `0.4.3`, prompts built over a `Menus.Parts` with no menus are ended by their own `prompts.shutdown()`, see [Text outside a menu](#text-outside-a-menu).
 
 <Callout type="warn" title="Folia">
 On Folia the disabling thread does not own every player. The menus and anvils of viewers it does not own are forgotten and stay open with no listener guarding them. From `0.3.0`, `shutdown()` empties the inventory of each such menu and anvil, so its viewer is left with an empty menu and has no copy to take. From `0.3.0`, while the plugin stays enabled after `shutdown()`, as in a reload command, the listener still cancels the clicks in such a menu and runs no handler; before `0.3.0` such a click ran the handler of the button its slot had held. Before `0.3.0` such a menu stayed stocked, and a copy taken from it was deleted only when a click met it outside a menu after a later enable. On Paper the disabling thread owns every player, so this does not happen.
@@ -892,6 +966,6 @@ Every handled failure is logged with its stack through the plugin's logger and r
 | `gui.load` | A load's `source` or `apply` failed. |
 | `gui.render` | A menu failed to draw in a task `openLater` or `rerenderLater` scheduled. |
 | `gui.close` | A menu's `closed` threw. |
-| `gui.prompt` | A prompt's answer function threw or returned `null`, the future of an `Answer.Later` failed or completed with `null`, or prompt work on the player's entity thread failed. |
+| `gui.prompt` | A prompt's answer function threw or returned `null`, the future of an `Answer.Later` failed or completed with `null`, or prompt work on the player's entity thread failed. From `0.4.3`, also a refusal check of a `TextRequest` that threw or whose future failed, and an `accepted` or `ended` step that threw. |
 
 A menu that throws from `render` or `initial` during a direct `open` or `rerender` passes the exception to the caller.
