@@ -1584,3 +1584,21 @@ hidden when it holds a clause such as `WHERE`, `VALUES (` or `SET` with a `=`, a
 `SELECT name FROM the t` is. Every other SQL statement is hidden as before. Reports whose messages differ only in
 a value these rules hide merge into one kind.
 [Anonymizing](/docs/modules/metrics#anonymizing) lists the rules. A server owner changes nothing for `0.4.3`.
+
+## 0.4.4
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.4"
+}
+```
+
+Every signature of `0.4.3` is still there, and a plugin rebuilds with no change. `0.4.4` only adds: the
+[`Scheduler`](/docs/modules/platform) tasks that return Paper's `ScheduledTask`, on the global, entity and region
+threads, `CooldownManager.tryStart` and `purgeExpired`, and `PdcKey.remove`, `getOrDefault` and `key`.
+
+`Scheduler.global`, `async`, `delayedAsync` and `repeatingAsync` now carry `@CheckReturnValue`, so IntelliJ IDEA
+can flag a call that drops their `boolean`. Nothing fails to compile, and the result says whether the task was
+accepted. A server owner changes nothing for `0.4.4`.
