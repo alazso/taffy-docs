@@ -16,6 +16,7 @@ All classes live in one package, `so.alaz.taffy.platform`.
 | Text | `Text`, `Messages`, `LegacyText` |
 | Items | `ItemBuilder`, `SkullBuilder`, `Items`, `InventoryFit`, `PdcKey`, `Colors`, `Sounds` |
 | Time | `Durations`, `Expiry`, `CooldownManager` |
+| Players | `PlayerCache`, from `0.4.5` |
 | Logging | `ThrowLog`, `Classes` |
 | Discord | `DiscordWebhook`, `WebhookPayload` |
 
@@ -984,6 +985,110 @@ An expired cooldown stays in memory until its key is read, started again or exte
 such as those of players who left. It removes them key by key, so a cooldown started while it runs is kept. Call it
 from a repeating task, on any thread.
 
+## PlayerCache
+
+From `0.4.5`, `PlayerCache<T>` keeps one value per online player, such as the rows a plugin stores for them. It
+loads the value when the player joins and forgets it when the player quits, so a read never waits for the
+database.
+
+```java title="ShopPlugin.java"
+private PlayerCache<Balance> balances;
+
+@Override
+public void onEnable() {
+    // errors, scheduler and storage are built first
+    balances = new PlayerCache<>(this, errors, scheduler, scheduler::delayedAsync,
+        player -> storage.read(tx -> Balances.of(tx, player)));
+}
+
+@Override
+public void onDisable() {
+    Shutdown.closeQuietly("close the balance cache", () -> balances.close(), getLogger(), errors);
+    // the rest of the disable order
+}
+```
+
+| Argument | What it is |
+|---|---|
+| `Plugin owner` | The plugin the listener belongs to. Its logger takes the warning of a failed load. |
+| `ErrorReports errors` | Where a failed load is reported, as `PlayerCache.SOURCE` (`player-cache.load`). |
+| `Dispatcher dispatcher` | Runs each call of the loader with `ThreadTag.ASYNC`. A `Scheduler` is one. |
+| `BiConsumer<Runnable, Duration> timer` | Runs a retry after a delay, such as `scheduler::delayedAsync`. |
+| `Function<UUID, CompletableFuture<T>> loader` | Gives the value of a player, such as a `Storage.read`. |
+
+The constructor registers the cache's own join and quit listener on the owner, so there is no `registerEvents`
+call to write and no `listener()` method. It also starts a load for every player already online, through the same
+path as a join, so a plugin enabled while players are online has their values too. Build it while the plugin is
+enabled, such as in `onEnable`, on the thread that enables the plugin.
+
+| Method | What it does |
+|---|---|
+| `get(UUID player)` | An `Optional` of the value of the player's last load that succeeded since they joined. |
+| `ready(UUID player)` | Whether `get` holds a value for the player. |
+| `refresh(UUID player)` | Loads an online player's value again. |
+| `close()` | Unregisters the listener and forgets every player. |
+
+### While the value is not loaded
+
+`get` is empty and `ready` is `false` before the first load ends, while it keeps failing, for a player who is not
+online and after `close()`. The cache never hands out a value from a failed load and never denies a login, so the
+plugin decides what a player without a value may do:
+
+```java
+Optional<Balance> balance = balances.get(player.getUniqueId());
+if (balance.isEmpty()) {
+    player.sendMessage(text.render("<red>Your balance is still loading."));
+    return;
+}
+```
+
+The join starts the load at `EventPriority.LOWEST` and the loader runs on an async thread, so the value is not
+there yet in the plugin's own `PlayerJoinEvent` handler. The quit forgets the player at `EventPriority.MONITOR`,
+after the plugin's own quit handlers have read the value.
+
+The values are read from any thread while a load may replace them, so `T` is immutable or thread-safe: a record
+of immutable fields, or a `Map.copyOf`.
+
+### A failed load
+
+A load fails when the loader throws, returns `null`, or its future completes with `null` or with an exception.
+The cache then:
+
+- reports the error to the `ErrorReports` as `PlayerCache.SOURCE`;
+- logs a warning through a [`ThrowLog`](#logging) of the owner's logger, so a database that stays down does not
+  fill the console;
+- runs the load again through the timer after `PlayerCache.FIRST_RETRY_DELAY` (2 seconds), then after twice the
+  delay before it each time (4, 8, 16 seconds and so on), up to `PlayerCache.LONGEST_RETRY_DELAY` (5 minutes).
+
+It retries for as long as the player stays online. `ready` stays `false` until a retry succeeds.
+
+### Loads that are dropped
+
+Each player has one current load: the latest one started by a join or by `refresh`. The result, the failure and
+the retries of any other load are dropped:
+
+| What happened | What the cache does |
+|---|---|
+| The player quit before the load ended | The result is dropped, and a failure is neither reported nor retried. |
+| The player quit and joined again during a retry | The join starts a new load. The old retry does nothing. |
+| `refresh` ran while a load was running | The new load replaces it. |
+| The dispatcher refused the load, as a `Scheduler` does once the plugin is disabling | The load ends with no report and no retry. |
+| The timer never ran the retry, as `delayedAsync` does once the plugin is disabling | The load ends. A later `refresh` starts a new one. |
+
+`refresh(UUID player)` keeps the value held now readable until the new load succeeds, also while that load fails
+and is retried. It does nothing for a player who is not online.
+
+### What it does not do
+
+The cache does not load at `AsyncPlayerPreLoginEvent`, does not save a value at a quit and does not flush at
+`close()`. A plugin that writes a player's value keeps writing it to its storage itself, then calls `refresh` or
+lets the next join read it. `close()` may run at any point of the [disable order](#disable-order): it waits for
+nothing.
+
+In a plugin test, pass a [`FakeDispatcher`](/docs/modules/test#fakedispatcher) and a timer that collects its
+tasks, so the test decides when a load and a retry run. The constructor still needs a `Plugin` whose server has
+a plugin manager, which the test mocks.
+
 ## Logging
 
 `ThrowLog` rate-limits warnings about a third party that keeps failing, keyed by source. The first failure of a
@@ -1133,6 +1238,7 @@ webhook.postBody(url, body, reason -> getLogger().warning("Discord webhook faile
 | Class | Thread rule |
 |---|---|
 | `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog` | any thread |
+| `PlayerCache` | any thread for `get`, `ready`, `refresh` and `close`; the loader runs on an async thread |
 | `Text`, `Messages` | any thread without a viewer; the player's thread with one |
 | `Items.giveOrDrop`, `Sounds.play` | the thread that owns the player |
 | `InventoryFit.fits` | the thread that owns the inventory, for live slots |
