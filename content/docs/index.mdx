@@ -87,7 +87,10 @@ A minimal plugin build applies `so.alaz.taffy.settings` in `settings.gradle.kts`
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }

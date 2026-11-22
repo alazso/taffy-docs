@@ -37,7 +37,10 @@ const modules: { name: string; body: string; href: string }[] = [
 
 const snippet = `pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }

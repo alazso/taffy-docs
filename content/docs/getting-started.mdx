@@ -51,12 +51,15 @@ Without an installed Gradle, copy `gradlew`, `gradlew.bat` and `gradle/wrapper` 
 
 ### Apply the settings plugin
 
-`so.alaz.taffy.settings` applies `so.alaz.taffy.repositories` and adds the `alaz` version catalog, pinned to the same version as the plugin. The Taffy Gradle plugins resolve from `https://repo.alaz.so/releases`, and their own dependencies (the Shadow plugin and the foojay toolchain resolver) from the Gradle Plugin Portal.
+`so.alaz.taffy.settings` applies `so.alaz.taffy.repositories` and adds the `alaz` version catalog, pinned to the same version as the plugin. The Taffy Gradle plugins resolve from `https://repo.alaz.so/releases`, and their own dependencies (the Shadow plugin and the foojay toolchain resolver) from the Gradle Plugin Portal. `exclusiveContent` makes Gradle ask `repo.alaz.so` for the `so.alaz.taffy` group and its subgroups only, which hold the Taffy plugins, and ask the Gradle Plugin Portal for every group but those.
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }
@@ -456,13 +459,15 @@ In a checkout of Taffy, publish the Gradle plugins, the catalog and every module
 ./gradlew publishToMavenLocal
 ```
 
-They are published at the version in Taffy's `gradle.properties`, the next release with `-SNAPSHOT` appended, written `<next>-SNAPSHOT` below. In the plugin, add `mavenLocal()` to `pluginManagement.repositories`, for the Gradle plugins, set the URL of the `alazsoSnapshots` repository to the local Maven repository, for the catalog and the modules, and apply the settings plugin at that version:
+They are published at the version in Taffy's `gradle.properties`, the next release with `-SNAPSHOT` appended, written `<next>-SNAPSHOT` below. In the plugin, add `mavenLocal()` to `forRepositories(...)` in `pluginManagement.repositories`, for the Gradle plugins, set the URL of the `alazsoSnapshots` repository to the local Maven repository, for the catalog and the modules, and apply the settings plugin at that version:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        mavenLocal()
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(mavenLocal(), maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }
@@ -485,13 +490,18 @@ The catalog follows the settings plugin's version, so every `alaz.taffy.*` alias
 </Tab>
 <Tab value="Snapshot">
 
-Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`. That version is the one in Taffy's `gradle.properties` on `main`, written `<next>-SNAPSHOT` below. Add that repository to `pluginManagement` and apply the settings plugin at the snapshot version:
+Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`. That version is the one in Taffy's `gradle.properties` on `main`, written `<next>-SNAPSHOT` below. Add that repository to `forRepositories(...)` in `pluginManagement` and apply the settings plugin at the snapshot version:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
-        maven("https://repo.alaz.so/snapshots")
+        exclusiveContent {
+            forRepositories(
+                maven("https://repo.alaz.so/releases"),
+                maven("https://repo.alaz.so/snapshots"),
+            )
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }

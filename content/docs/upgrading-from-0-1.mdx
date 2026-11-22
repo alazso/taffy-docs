@@ -1540,6 +1540,17 @@ plugins {
 
 Every signature of `0.4.2` is still there, and a plugin rebuilds with no change.
 
+One build that passed now fails. With a runtime library listed, a `loader:` key that has no value in
+`paper-plugin.yml` (nothing, spaces or only a comment after the colon) fails `verifyPluginLoader` with the
+message of a missing key. Such a jar held `RuntimeLibraries` and no loader, so the plugin already failed on
+the server at its first use of a library. Give the key the name of the loader class, as
+[Runtime libraries](/docs/gradle-plugins#runtime-libraries) shows.
+
+The `pluginManagement` block in these docs now wraps `repo.alaz.so` in `exclusiveContent` for the
+`so.alaz.taffy` group and its subgroups, so Gradle asks the Gradle Plugin Portal for no Taffy plugin and
+`repo.alaz.so` for nothing else. A build that keeps the block without it resolves as before; copy the block
+from [Applying the plugins](/docs/gradle-plugins#applying-the-plugins) to take the filter.
+
 The error reports of `taffy-metrics` hide more with no change in the plugin: an email address with a `+` in its
 name, a Unix path with a space in a folder name, a UNC path, a relative Windows path from its `Users` folder on,
 the list items on the lines below a key such as `tokens:`, the words of a password that starts its line, a bare

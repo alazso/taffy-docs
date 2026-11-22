@@ -12,7 +12,10 @@ The version on `so.alaz.taffy.settings` decides the rest:
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }
@@ -117,13 +120,18 @@ Lists it under `### Deprecated` in the changelog.
 
 ### Building against a snapshot
 
-`so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for dependencies, limited to snapshot versions in the `so.alaz` group and its subgroups, so the `alaz` catalog and the modules resolve at a snapshot version. The settings plugin itself resolves through `pluginManagement`, so add the snapshots repository there, and replace `<next>-SNAPSHOT` with the version in Taffy's `gradle.properties` on `main`:
+`so.alaz.taffy.repositories` already declares `https://repo.alaz.so/snapshots` for dependencies, limited to snapshot versions in the `so.alaz` group and its subgroups, so the `alaz` catalog and the modules resolve at a snapshot version. The settings plugin itself resolves through `pluginManagement`, so add the snapshots repository to `forRepositories(...)` there, and replace `<next>-SNAPSHOT` with the version in Taffy's `gradle.properties` on `main`:
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
-        maven("https://repo.alaz.so/snapshots")
+        exclusiveContent {
+            forRepositories(
+                maven("https://repo.alaz.so/releases"),
+                maven("https://repo.alaz.so/snapshots"),
+            )
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }

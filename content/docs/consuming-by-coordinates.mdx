@@ -253,7 +253,10 @@ A build can take the modules by coordinates and still apply a Taffy convention p
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }

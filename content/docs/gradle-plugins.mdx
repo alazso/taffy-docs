@@ -19,12 +19,15 @@ A Paper plugin usually needs only two of them: `so.alaz.taffy.settings` in `sett
 
 ## Applying the plugins
 
-The settings plugin is the one applied with a version. It puts every Taffy plugin on the build's classpath, so project build scripts apply the others by id alone.
+The settings plugin is the one applied with a version. It puts every Taffy plugin on the build's classpath, so project build scripts apply the others by id alone. `exclusiveContent` makes Gradle ask `repo.alaz.so` for the `so.alaz.taffy` group and its subgroups only, which hold the Taffy plugins, and ask the Gradle Plugin Portal for every group but those.
 
 ```kotlin title="settings.gradle.kts"
 pluginManagement {
     repositories {
-        maven("https://repo.alaz.so/releases")
+        exclusiveContent {
+            forRepositories(maven("https://repo.alaz.so/releases"))
+            filter { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         gradlePluginPortal()
     }
 }
@@ -64,7 +67,7 @@ so.alaz.taffy.settings needs Gradle 9.2.0 or newer, and this build runs on Gradl
 
 Before `0.4.1`, a build on Gradle 9.1.0 failed with that `NoSuchMethodError` when it applied `so.alaz.taffy.paper-plugin`, and ran when it applied only the other plugins. The wrapper's own `wrapper` task cannot raise the version here, since it loads the settings plugin first: edit `distributionUrl`, and `distributionSha256Sum` when the file has one.
 
-Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`; a build that uses a snapshot adds that repository to `pluginManagement.repositories`. [Getting started](/docs/getting-started) covers building against a local publish.
+Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` to `https://repo.alaz.so/snapshots`; a build that uses a snapshot adds `maven("https://repo.alaz.so/snapshots")` to `forRepositories(...)` in `pluginManagement.repositories`, as [Building against a snapshot](/docs/versioning#building-against-a-snapshot) shows. [Getting started](/docs/getting-started) covers building against a local publish.
 
 ## so.alaz.taffy.settings
 
@@ -415,7 +418,7 @@ public final class MyPluginLoader implements PluginLoader {
 loader: com.example.myplugin.MyPluginLoader
 ```
 
-From `0.4.1`, the build fails when a runtime library is listed and that key is missing. The task `verifyPluginLoader`, which `processResources` depends on, reads the `paper-plugin.yml` at the root of each main resources directory, one that a task generates included, and looks for a `loader` key at the first column of a line. A byte order mark before the first line is skipped. A top-level mapping that is indented as a whole, or written in flow style such as `{name: MyPlugin, loader: a.B}`, is not recognised and fails the same way. With the four libraries listed above it fails with:
+From `0.4.1`, the build fails when a runtime library is listed and that key is missing. The task `verifyPluginLoader`, which `processResources` depends on, reads the `paper-plugin.yml` at the root of each main resources directory, one that a task generates included, and looks for a `loader` key at the first column of a line. A byte order mark before the first line is skipped. A top-level mapping that is indented as a whole, or written in flow style such as `{name: MyPlugin, loader: a.B}`, is not recognised and fails the same way. From `0.4.3`, a `loader` key with no value fails the same way too: `loader:` followed by nothing, by spaces or by a comment only. A value counts on the same line, or indented on the next line that is neither blank nor a comment. Before `0.4.3`, such a key passed the check, and the plugin failed at its first use of a library. With the four libraries listed above it fails with:
 
 ```text
 paperPlugin.runtimeLibraries lists 4 libraries and src/main/resources/paper-plugin.yml has no top-level loader key, so Paper downloads none and the plugin fails at its first use of one. Add loader: with the name of the PluginLoader class that reads RuntimeLibraries.COORDINATES: https://alaz.so/taffy/docs/gradle-plugins#runtime-libraries
