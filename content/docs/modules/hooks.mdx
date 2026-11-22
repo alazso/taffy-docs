@@ -174,7 +174,9 @@ public final class ShopPlugin extends JavaPlugin {
         economy = lookUpEconomy();
         getServer().getPluginManager().registerEvents(
             new EconomyWatcher(() -> economy = lookUpEconomy(), getServer()::isStopping), this);
-        scheduler.global(() -> economy = lookUpEconomy());
+        if (!scheduler.global(() -> economy = lookUpEconomy())) {
+            getLogger().warning("The economy is not looked up again on the first tick");
+        }
 
         placeholders = new PlaceholderExpansionBuilder()
             .identifier("shop")
@@ -593,7 +595,9 @@ Reads come from LuckPerms' cache, so a player whose data is not loaded (usually 
 PermissionProvider perms = permissions.provider();
 UUID buyer = player.getUniqueId();
 if (perms != null) {
-    scheduler.async(() -> perms.addTempGroup(buyer, "vip", Duration.ofDays(30)));
+    if (!scheduler.async(() -> perms.addTempGroup(buyer, "vip", Duration.ofDays(30)))) {
+        getLogger().warning("The vip group was not added: the plugin is disabling");
+    }
 }
 ```
 

@@ -288,8 +288,10 @@ public final class MyPlugin extends JavaPlugin implements Listener {
 
         getServer().getPluginManager().registerEvents(this, this);
         Duration interval = settings.get().reportInterval();
-        scheduler.repeatingAsync(
-            () -> getLogger().info(joins.sum() + " joins since the server started"), interval, interval);
+        if (!scheduler.repeatingAsync(
+            () -> getLogger().info(joins.sum() + " joins since the server started"), interval, interval)) {
+            getLogger().warning("The join report was not started");
+        }
 
         metrics = new MetricsBuilder(this, errors, settings.get().metrics())
             .bStats(BSTATS_SERVICE_ID)
@@ -329,7 +331,7 @@ public final class MyPlugin extends JavaPlugin implements Listener {
 What each part does:
 
 - **`ErrorReports`** is the plugin's one error sink, created once and passed to every Taffy class that reports handled failures. Reports made before its first install or clear are held, the first of each source and at most 16. `MetricsBuilder.start()` installs the FastStats error route, which receives the held reports, or clears the sink when FastStats error tracking is not running. A plugin that uses `taffy-metrics` installs no target of its own before `start()`.
-- **`Scheduler`** runs tasks on Paper's region-threaded schedulers, the same on Paper and Folia, and never calls `Bukkit.getScheduler()`. `repeatingAsync` takes a `Duration` for the first delay and the period and returns `false` once the plugin is disabling. A task Paper runs for it that throws is reported to `ErrorReports` under `scheduler.async` (or `scheduler.global`, `scheduler.entity`), from `0.2.1` as an unhandled report, and rethrown. `close()` cancels every task `repeatingAsync` started through the instance and runs before `Metrics.shutdown()` in `onDisable`.
+- **`Scheduler`** runs tasks on Paper's region-threaded schedulers, the same on Paper and Folia, and never calls `Bukkit.getScheduler()`. `repeatingAsync` takes a `Duration` for the first delay and the period and returns `false` once the plugin is disabling, which the plugin checks: from `0.4.4` IntelliJ IDEA flags a call that drops the result. A task Paper runs for it that throws is reported to `ErrorReports` under `scheduler.async` (or `scheduler.global`, `scheduler.entity`), from `0.2.1` as an unhandled report, and rethrown. `close()` cancels every task `repeatingAsync` started through the instance and runs before `Metrics.shutdown()` in `onDisable`.
 - **`ConfigLoader`** takes the data folder, a supplier of the shipped file and a logger. `load()` blocks the calling thread while it reads and writes files, and throws `ConfigLoadException`, whose message is a clause for the server owner that reads after a lead-in.
 - **`ConfigHolder`** keeps the settings in effect. `settings.reload()` runs the same loader again and returns `true` when the new settings are in effect; a reload that fails keeps the old ones and passes one line to the failure consumer, here `getLogger()::warning`. Settings that only apply after a restart are read from `settings.startup()`. See [Config](/docs/modules/config).
 - **`MetricsBuilder`** takes the plugin, its `ErrorReports` and the owner's metrics switch. With the switch off, `start()` touches no metrics SDK and returns an inert `Metrics`. `start()` is the last step of enable, once the state the charts read exists. An enable that gives up after the switch is read, such as when storage fails to start, still calls `start()` before it returns, without the charts whose state never came up, so the reports raised during enable go out in the final send. A builder starts once; any call on it after `start()` throws `IllegalStateException`. A chart supplier reads in-memory state only, such as `LongAdder::sum`. See [Metrics](/docs/modules/metrics).

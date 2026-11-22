@@ -228,7 +228,9 @@ public final class MyPlugin extends JavaPlugin {
             } else {
                 getLogger().log(Level.SEVERE, "Cannot start the database", failure);
             }
-            scheduler.global(() -> getServer().getPluginManager().disablePlugin(this));
+            if (!scheduler.global(() -> getServer().getPluginManager().disablePlugin(this))) {
+                getLogger().info("The plugin is already disabling");
+            }
         });
     }
 }

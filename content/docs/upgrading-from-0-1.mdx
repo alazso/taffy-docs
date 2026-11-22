@@ -817,10 +817,13 @@ boolean added = permissions.addGroup(player.getUniqueId(), "vip");
 
 ```java title="0.3.2"
 UUID id = player.getUniqueId();
-scheduler.async(() -> {
+boolean accepted = scheduler.async(() -> {
     boolean added = permissions.addGroup(id, "vip");
     scheduler.entity(player, () -> confirm(player, added));
 });
+if (!accepted) {
+    getLogger().warning("The vip group was not added: the plugin is disabling");
+}
 ```
 
 ### What a plugin can now do

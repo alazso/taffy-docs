@@ -35,7 +35,7 @@ The conventions write no `api-version` or other descriptor key: the plugin's own
 
 ### Folia
 
-`Scheduler` in `taffy-platform` schedules through Paper's global region, async and entity schedulers and behaves the same on Paper and Folia. It never calls `Bukkit.getScheduler()`, which Folia does not support. `Scheduler.mode()` returns `Scheduler.Mode.FOLIA` when Folia's server class was loadable when the scheduler was built, and `Scheduler.Mode.PAPER` otherwise. Folia loads only plugins whose `paper-plugin.yml` sets `folia-supported: true`, which the plugin declares itself.
+`Scheduler` in `taffy-platform` schedules through Paper's global region, async and entity schedulers, and from `0.4.4` its region scheduler, and behaves the same on Paper and Folia. It never calls `Bukkit.getScheduler()`, which Folia does not support. `Scheduler.mode()` returns `Scheduler.Mode.FOLIA` when Folia's server class was loadable when the scheduler was built, and `Scheduler.Mode.PAPER` otherwise. Folia loads only plugins whose `paper-plugin.yml` sets `folia-supported: true`, which the plugin declares itself.
 
 ## Modules
 
