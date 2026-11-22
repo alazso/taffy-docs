@@ -37,11 +37,17 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
         maven("https://repo.papermc.io/repository/maven-public/")
-        maven("https://repo.alaz.so/releases")
+        maven("https://repo.alaz.so/releases") {
+            name = "alazso"
+            mavenContent { releasesOnly() }
+            content { includeGroupAndSubgroups("so.alaz.taffy") }
+        }
         maven("https://repo.faststats.dev/releases")
     }
 }
 ```
+
+The filter makes Gradle ask `repo.alaz.so` for releases of the `so.alaz.taffy` group and its subgroups only, as [Consuming by coordinates](/docs/consuming-by-coordinates) describes.
 
 ### Relocation
 

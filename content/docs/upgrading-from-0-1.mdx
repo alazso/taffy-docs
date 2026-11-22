@@ -1546,7 +1546,8 @@ Every signature of `0.4.2` is still there. Two things in a plugin's source can n
 - A `switch` expression over `PromptMode` with no `default` branch needs one, or a branch for the new
   `PromptMode.DIALOG`.
 
-The release adds [`BedrockProvider`](/docs/modules/hooks#bedrock-players) to `taffy-hooks`, and to `taffy-gui`
+The release adds [`BedrockProvider`](/docs/modules/hooks#bedrock-players) to `taffy-hooks`, which needs no
+dependency in the plugin's build, only `floodgate` and `Geyser-Spigot` in `paper-plugin.yml`, and to `taffy-gui`
 [text asked outside a menu](/docs/modules/gui#text-outside-a-menu) with `TextRequest`, prompts built over
 `Menus.Parts`, the public `Prompts.shutdown()` and the experimental
 [`PromptMode.DIALOG`](/docs/modules/gui#dialog-prompts).

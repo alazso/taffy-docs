@@ -44,8 +44,6 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
 | WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
-| Floodgate | `org.geysermc.floodgate:api` | `alaz.floodgate.api` |
-| Geyser | `org.geysermc.geyser:api`, `org.geysermc.api:base-api` | `alaz.geyser.api`, `alaz.geyser.base.api` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
 | MiniPlaceholders | `io.github.miniplaceholders:miniplaceholders-api` | `alaz.miniplaceholders.api` |
 | DecentHolograms | `com.github.decentsoftware-eu:decentholograms` | `alaz.decentholograms` |
@@ -53,9 +51,11 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
 | HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 
-The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`. The Floodgate and Geyser rows, with their aliases, are available from `0.4.3`. Floodgate and Geyser publish their APIs as snapshots only, so `alaz.floodgate.api` and `alaz.geyser.api` name a `-SNAPSHOT` version.
+The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
 
-A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these and their dependencies resolve from.
+A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
+
+Floodgate and Geyser are not in the table. From `0.4.3`, Taffy reads the two through method handles and compiles against neither API, so the catalog holds no alias for them and a plugin that uses [`BedrockProvider`](#bedrock-players) declares no dependency and no repository for it. It lists only `floodgate` and `Geyser-Spigot` in `paper-plugin.yml`, as the next section shows.
 
 ### Declaring the integrations in paper-plugin.yml
 
@@ -637,10 +637,10 @@ boolean inMarket = wg != null
 ## Bedrock players
 
 <Callout type="info" title="From 0.4.3">
-`BedrockProvider` and the Floodgate and Geyser catalog aliases are available from Taffy `0.4.3`. Earlier versions have no Bedrock hook.
+`BedrockProvider` is available from Taffy `0.4.3`. Earlier versions have no Bedrock hook.
 </Callout>
 
-`BedrockProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn)` detects Floodgate, then Geyser, and gives a provider that tells which players joined from Minecraft Bedrock Edition. The plugin lists `floodgate` and `Geyser-Spigot` under `dependencies.server`. Each of the two is read only when it is installed, enabled and its API classes are visible, and is `FAILED` when a method the provider calls is missing. One that is not visible or lacks the API is warned about, and one that could not be hooked is warned about and reported under `hook.floodgate` or `hook.geyser-spigot`.
+`BedrockProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn)` detects Floodgate, then Geyser, and gives a provider that tells which players joined from Minecraft Bedrock Edition. The plugin needs no dependency in its build for it, only the two soft dependencies in `paper-plugin.yml`: it lists `floodgate` and `Geyser-Spigot` under `dependencies.server` with `load: BEFORE` and `required: false`. Taffy calls `FloodgateApi.getInstance().isFloodgatePlayer(UUID)` and `GeyserApi.api().isBedrockPlayer(UUID)` through method handles. Each of the two is read only when it is installed, enabled and its API classes are visible, and is `FAILED` when a method the provider calls is missing. One that is not visible or lacks the API is warned about, and one that could not be hooked is warned about and reported under `hook.floodgate` or `hook.geyser-spigot`.
 
 | The server has | The result |
 |---|---|
