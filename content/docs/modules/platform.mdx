@@ -848,6 +848,18 @@ voucher.editMeta(meta -> voucherId.set(meta, "spring-sale"));
 
 `get` throws `IllegalArgumentException` when the key holds a value of another type.
 
+From `0.4.4`, `remove(holder)` removes the key from the holder's container, whatever the type of its value, and
+leaves a holder without the key unchanged. Like a write, a removal from an `ItemMeta` reaches its item only once
+the meta is set back. `getOrDefault(holder, fallback)` returns the stored value, or `fallback` when the key is
+absent, and throws as `get` does. `key()` returns the `NamespacedKey`.
+
+```java
+voucher.editMeta(meta -> voucherId.remove(meta));
+```
+
+Every method takes a `PersistentDataHolder`, such as an `ItemMeta`, an entity or a chunk. An `ItemStack` is not
+one, so read and write an item through its meta.
+
 ### Colors and Sounds
 
 `Colors.parse(String)` reads a `org.bukkit.Color` from config: one of the 17 named colors in any case, `#RRGGBB`, or
@@ -920,6 +932,26 @@ if (cooldowns.isOnCooldown(key)) {
 expiry and the new one, and a length of zero or less changes nothing. `remaining` is `Duration.ZERO` when the key is not on cooldown. Lengths are read in whole
 milliseconds. Each call is atomic, but a check followed by a `set` is two calls, so two threads can both pass the
 check for one key.
+
+From `0.4.4`, `tryStart(key, length)` checks and starts in one atomic step. It starts the cooldown and returns
+`true` only when the key has none running, so of the threads that call it for one free key at once, exactly one
+gets `true`. A running cooldown is left as it is. A length of zero or less starts nothing and returns whether the
+key was free.
+
+```java
+if (!cooldowns.tryStart(key, Duration.ofSeconds(30))) {
+    player.sendMessage(text.render("<red>Wait " + Durations.format(cooldowns.remaining(key))));
+    return;
+}
+broadcastListing(player);
+```
+
+Keep `isOnCooldown` and `set` when the cooldown starts only after the action succeeded, and serialise the two calls
+yourself.
+
+An expired cooldown stays in memory until its key is read or started again. From `0.4.4`, `purgeExpired()` removes
+every expired cooldown and returns how many it removed, for keys that are not read again, such as those of players
+who left. Call it from a repeating task, on any thread.
 
 ## Logging
 
