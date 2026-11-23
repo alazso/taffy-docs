@@ -253,6 +253,8 @@ The `ignore` entry stops Dependabot proposing `paper-api` bumps: the `paper` ver
 
 A patch release may raise either version, since FastStats and bStats are two of the few versions a patch changes ([What a patch changes](/docs/versioning#what-a-patch-changes)), and each release names the pair it was tested with. A plugin that declares either SDK in its own build at another version runs a pairing that was not tested. Gradle resolves the two requests to the higher version, so a newer SDK the plugin declares replaces the tested one.
 
+FastStats `0.33.0` is not interchangeable with the versions before it: Taffy `0.4.9` and older start FastStats only beside FastStats `0.32.2` or older, and Taffy from `0.4.10` only beside FastStats `0.33.0` or newer. [FastStats version](/docs/modules/metrics#faststats-version) has the reason.
+
 ## A build that applies the conventions anyway
 
 A build can take the modules by coordinates and still apply a Taffy convention plugin, at the same version as the modules, for example `so.alaz.taffy.java` for the Java 25 toolchain and the compiler flags. The Gradle plugin resolves through `pluginManagement`, next to the `dependencyResolutionManagement` block above, and its catalog entry refers to the same `taffy` version as the modules:

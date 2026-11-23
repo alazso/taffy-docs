@@ -77,6 +77,10 @@ bStats refuses to start from classes that were not relocated. FastStats cannot c
 
 Neither SDK may be listed as a Paper runtime library (`paperPlugin.runtimeLibrary(...)`), which would load it unrelocated.
 
+### FastStats version
+
+From `0.4.10`, `taffy-metrics` is built for FastStats `0.33.0`, and the plugin jar shades FastStats `0.33.0` or newer. FastStats `0.33.0` removed `BukkitContext`, which `taffy-metrics` `0.4.9` and older name, and added `FastStatsBukkit`, which `0.4.10` names. So FastStats does not start for `0.4.9` or older beside FastStats `0.33.0` (`start()` throws `NoClassDefFoundError`), nor for `0.4.10` beside FastStats `0.32.2` or older. A build that applies `so.alaz.taffy.paper-plugin`, or that takes FastStats only as the runtime dependency of `taffy-metrics`, shades the right version without a change. A build that declares `dev.faststats.metrics:bukkit` itself declares `0.33.0` or newer from `0.4.10`. [FastStats and bStats versions](/docs/consuming-by-coordinates#faststats-and-bstats-versions) lists the version each release was tested with.
+
 ## Starting metrics
 
 In `onEnable`, a plugin:
@@ -194,6 +198,8 @@ On the first start of a server with no `plugins/faststats/config.properties`, Fa
 
 A provider that fails to start is logged as one warning through the owner's logger (`bStats metrics failed to start: ...` or `FastStats metrics failed to start: ...`) and skipped, and enable goes on. A FastStats start that fails after its context exists shuts the context down with submission turned off, so it sends nothing. Taffy logs nothing else. FastStats with its `debug` option on logs each send through the plugin's logger.
 
+FastStats starts only for a plugin that is enabled, so `start()` runs in `onEnable` or later, not in the plugin's constructor or `onLoad`. From `0.4.10`, a FastStats context that cannot be made ready, as for a plugin that is not enabled yet, gives two lines on the owner's logger: FastStats' own error `Failed to make the FastStats context for <plugin> ready: <cause>` with its stack trace, then the warning `FastStats metrics failed to start: FastStats could not make its context ready`. Before, it was the one warning `FastStats metrics failed to start: <cause>`.
+
 ## Charts
 
 Each `MetricChart` factory takes an id and a supplier, and maps to one chart on each provider:
@@ -274,7 +280,7 @@ The state readers report what each provider is actually doing, for a plugin's di
 | Reader | Reads |
 |---|---|
 | `bStatsStarted()` | `true` while bStats runs. `false` when the server owner turned bStats off in `plugins/bStats/config.yml`. |
-| `fastStatsSdk()` | The FastStats SDK name and version, such as `bukkit 0.32.2`, or `null` when FastStats did not start. |
+| `fastStatsSdk()` | The FastStats SDK name and version, such as `bukkit 0.33.0`, or `null` when FastStats did not start. |
 | `fastStatsEnabled()` | `true` while FastStats runs and is enabled for this server. |
 | `fastStatsSubmitting()` | `true` while FastStats submits metrics. |
 | `fastStatsCharts()` | `true` while FastStats submits the plugin's charts, which needs `submitAdditionalMetrics` on. |
