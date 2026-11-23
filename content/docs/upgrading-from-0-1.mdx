@@ -1675,3 +1675,24 @@ bundled languages, `addMissingKeys`, `send`, `sendActionBar` and `showTitle` by 
 `ConfigReader.sections`, `choiceWithHyphens`, problems as `ConfigProblem` records, `YamlFolder.loadReport` and
 `ConfigLoadException.withProblems`. A Kotlin plugin beside `so.alaz.taffy.paper-plugin` is now tested, and
 [Gradle plugins](/docs/gradle-plugins) has its recipe. A server owner changes nothing for `0.4.8`.
+
+## 0.4.9
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.9"
+}
+```
+
+Every signature of `0.4.8` is still there, and a plugin changes nothing to move to `0.4.9`. Each addition is
+switched on by the plugin. The MySQL connection now sets `rewriteBatchedStatements=true`, which only `Tx.batch`
+uses.
+
+`0.4.9` adds, in [`taffy-storage`](/docs/modules/storage): `Tx.batch`, `intValue` and `bool` on `Params` and
+`Row`, `Storage.backup` for a copy of a running SQLite database, and `Baseline.checkSchema` and
+`Baseline.takeOverSameName`. [Porting a JDBC store](/docs/porting-a-jdbc-store) is a new guide. In
+[`taffy-config`](/docs/modules/config): `AtomicWriter`, `ConfigUpgrade` steps that move and remove keys,
+`ConfigLoader.refuseNewer`, and file versions and a recursive scan in `YamlFolder`. A server owner changes
+nothing for `0.4.9`.
