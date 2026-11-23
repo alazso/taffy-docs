@@ -323,6 +323,8 @@ Problems come in two tiers, and no method throws for a value it cannot use:
 
 A key that is absent gives the fallback with no warning. A single value is a text, a number, `true`/`false` or a date.
 
+From `0.4.8`, `new ConfigReader(ConfigurationSection root, String source, Consumer<String> warnings)` also names the file `root` was read from, such as `config.yml`. The lines are the same with either constructor; `source` is the file of the records [`problems()`](#problems-as-records) returns.
+
 ### Typed readers
 
 | Method | Accepts | Otherwise |
@@ -333,6 +335,7 @@ A key that is absent gives the fallback with no warning. A single value is a tex
 | `double decimal(String path, double fallback)` | Any finite number, whole numbers included | Warning, fallback (`.inf` and `.nan` included) |
 | `boolean bool(String path, boolean fallback)` | A value YAML reads as a boolean | Warning, fallback |
 | `<E extends Enum<E>> E choice(String path, E fallback)` | The name of a constant of the fallback's enum, trimmed, in any letter case | Warning, fallback |
+| `<E extends Enum<E>> E choiceWithHyphens(String path, E fallback)` (from `0.4.8`) | As `choice`, with a hyphen read as an underscore | Warning, fallback |
 | `@Nullable Integer optionalInteger(String path, String fallbackText)` | An `int`; absent gives `null` | Warning naming `fallbackText`, `null` |
 | `Duration duration(String path, Duration fallback)` | The form of `Durations.parseOrNull`, such as `30s` | Warning, fallback |
 | `Duration duration(String path, Duration fallback, Duration min, Duration max)` | As above, from `min` to `max` inclusive | Warning, fallback |
@@ -344,6 +347,8 @@ A key that is absent gives the fallback with no warning. A single value is a tex
 The range overloads of `integer` and `duration` throw `IllegalArgumentException` when `min` is greater than `max` or the fallback lies outside them. A value outside the range gives the warning `<path> is <value>; expected <min> to <max>, so <fallback> is used.`
 
 `choice` matches with `Locale.ROOT`, so the result does not depend on the server's locale. A hyphen does not stand for an underscore. The constants are listed in lower case and in declaration order in the warning.
+
+From `0.4.8`, `choiceWithHyphens` reads as `choice` does and also reads a hyphen as an underscore, so `complete-on-close` names `COMPLETE_ON_CLOSE` as `complete_on_close` does. Its warning is the one of `choice`, with the constants written with their underscores. `choice` is unchanged.
 
 `durations` and `strings` return an unmodifiable list, or the fallback itself.
 
@@ -364,7 +369,7 @@ A number and `true`/`false` read as their text form in `text`, `strictText` and 
 
 ### Blank values
 
-A blank text (empty or only whitespace) reads as an absent key in `integer`, `optionalInteger`, `whole`, `decimal`, `bool`, `duration`, `durations`, `strings`, `parsed` and `choice`: it gives the fallback with no warning. `text`, `quoted` and `strictText` return a blank text as it is, and `requiredText` reports it as an error.
+A blank text (empty or only whitespace) reads as an absent key in `integer`, `optionalInteger`, `whole`, `decimal`, `bool`, `duration`, `durations`, `strings`, `parsed` and `choice`, and from `0.4.8` in `sections` and `choiceWithHyphens`: it gives the fallback with no warning. `text`, `quoted` and `strictText` return a blank text as it is, and `requiredText` reports it as an error.
 
 ### Dates
 
@@ -382,13 +387,17 @@ A value with a time, such as an expiry read through `Expiry`, has to be written 
 | Method | What it does |
 |---|---|
 | `Set<String> children(String path)` | The keys directly beneath the group at `path`, in file order. Absent gives an empty set; a plain value gives an empty set and a warning. |
+| `List<ConfigReader> sections(String path)` (from `0.4.8`) | One reader for each group of keys in the list at `path`. See [Lists of groups](#lists-of-groups). |
 | `boolean absentOrSection(String path)` | Whether `path` is absent or holds a group of keys. |
 | `boolean isSection(String path)` | Whether `path` holds a group of keys. |
 | `@Nullable Object value(String path)` | The raw value: a `ConfigurationSection`, a `List`, the single value, or `null`. |
 | `ConfigurationSection root()` | The section given to the constructor. Nothing is recorded as read. |
 | `void warn(String message)` | Passes a line of the plugin's own to the warning consumer. |
 | `void error(String message)` | Adds a line of the plugin's own to `errors()`. |
+| `void warn(String path, String message, @Nullable String fix)` (from `0.4.8`) | A warning of the plugin's own about one key. See [Problems as records](#problems-as-records). |
+| `void error(String path, String message, @Nullable String fix)` (from `0.4.8`) | An error of the plugin's own about one key. |
 | `List<String> errors()` | The errors collected so far. |
+| `List<ConfigProblem> problems()` (from `0.4.8`) | One record for each warning and each error so far, in order. |
 | `Set<String> readPaths()` | Every path a method was called with, each once, in order of first read, whether or not the key exists. An unmodifiable view that follows later reads. |
 | `List<String> unreadKeys()` | The leaf keys of the root not in `readPaths()`, in file order. A list is one leaf. |
 | `static String describe(@Nullable Object value)` | How warnings and errors write a value. |
@@ -398,6 +407,67 @@ A value with a time, such as an expiry read through `Expiry`, has to be written 
 <Callout type="warn" title="Refused values reach the log">
 A warning names the value it refuses, cut to 100 characters. Part of a mistyped secret, such as a database password written as a list, can therefore reach the log.
 </Callout>
+
+### Lists of groups
+
+From `0.4.8`, `sections(String path)` reads a list in which each entry is a group of keys, such as rewards, costs or conditions, and gives one `ConfigReader` per entry in file order:
+
+```yaml
+rewards:
+  - type: money
+    amount: 50
+  - type: item
+    amount: many
+```
+
+```java
+for (ConfigReader reward : reader.sections("rewards")) {
+    String type = reward.requiredText("type", "write money or item");
+    int amount = reward.integer("amount", 1);
+}
+```
+
+Each reader takes its paths relative to its entry and shares the warning consumer, `errors()`, `problems()` and `readPaths()` of the reader it came from, so the plugin still checks one `errors()` at the end. It writes a key as `<path>[<index>].<key>` in every line and read path, with the index of the entry in the file counted from 0. The second entry above gives:
+
+```text
+rewards[1].amount is "many"; expected a whole number, so 1 is used.
+```
+
+The reader of an entry gives the readers of a list inside that entry the same way, as in `rewards[1].costs[0].amount`. Its `root()` holds the keys of the entry, and its `unreadKeys()` lists the unread keys of the entry in the same form. A key written `""` inside an entry cannot be read: it is left out of the entry without a warning and is not among its unread keys. The `IllegalArgumentException` of a range overload names the key the same way, as in `the fallback 5 of rewards[0].amount is not within 1 to 2`.
+
+| The value at `path` | Result |
+|---|---|
+| Absent, a blank text or an empty list | An empty list, no warning |
+| A list | One reader per group of keys. Any other entry is skipped with a warning, and the other entries keep their index. |
+| Anything else | An empty list and a warning |
+
+`ConfigurationSection.getMapList` drops an entry that is not a group of keys without a word; `sections` warns about each one. The returned list is unmodifiable.
+
+### Problems as records
+
+From `0.4.8`, `problems()` gives every warning and error of the reader as a `ConfigProblem`, for code that lists, counts or sorts them: a validate command, a doctor report, or a reload that tells warnings from errors. No line changes, and the warning consumer and `errors()` receive what they did before.
+
+| Component | Holds |
+|---|---|
+| `@Nullable String file()` | The `source` given to the constructor, or `null` for a reader built without one |
+| `@Nullable String path()` | The key the line names, written as the line writes it, such as `limits.homes` or `rewards[1].type`. `null` for `warn(String)` and `error(String)`. |
+| `ConfigProblem.Severity severity()` | `WARNING` for a line of the warning consumer, `ERROR` for a line of `errors()` |
+| `String message()` | The full line |
+| `@Nullable String fix()` | What the owner has to do, without a full stop. The reader sets it for `requiredText`, from its `fix` argument, and leaves it `null` for its other lines. |
+
+A plugin's own check on one key goes through `warn(String path, String message, @Nullable String fix)` or `error(String path, String message, @Nullable String fix)`. The line is `<path> <message>.`, or `<path> <message>; <fix>.` with a fix, with the path written as the reader writes it, so a check inside an entry of `sections` names `rewards[0].amount` without building that name by hand:
+
+```java
+if (amount <= 0) {
+    reward.error("amount", "must be above 0", "write a whole number such as 5");
+}
+```
+
+```text
+rewards[0].amount must be above 0; write a whole number such as 5.
+```
+
+`message` and `fix` are written without a full stop at the end. Neither call records the path as read.
 
 ## The lines an owner sees
 
@@ -409,6 +479,9 @@ Every warning and error line of `ConfigReader` names the path first and is a ful
 | A value is outside a range | `<path> is <value>; expected <min> to <max>, so <fallback> is used.` |
 | A whole number does not fit an `int` (`integer`, `optionalInteger`; from `0.4.0`) | `<path> is <value>; expected a whole number from -2147483648 to 2147483647, so <fallback> is used.` |
 | A list entry is dropped | `<path> has <entry>, which is not a single value, so it is skipped.` |
+| An entry of `sections` is not a group of keys (from `0.4.8`) | `<path>[<index>] is <entry>, which is not a group of keys, so it is skipped.` |
+| The value of `sections` is not a list (from `0.4.8`) | `<path> is <value>; expected a list of groups of keys, so it is ignored.` |
+| A check of the plugin's own on a key (from `0.4.8`) | `<path> <message>.` or `<path> <message>; <fix>.` |
 | A value where a group of keys belongs | `<path> should hold keys beneath it, so its value is ignored.` |
 | A required text is absent | `<path> is missing; <fix>.` |
 | A required text is blank, a list or a group | `<path> is <value>; <fix>.` |
@@ -535,6 +608,35 @@ A file that fails adds one line to `errors()` and the other files still load:
 | A regular file is named `<name>.yaml` (from `0.4.0`) | `<name>.yaml: rename it to <name>.yml to have it read` |
 
 `load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. The folder is never written to and nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread, and the consumers below are called on it.
+
+### Warnings beside a loaded entry
+
+`Loaded.errors()` holds lines, and a file either loads or adds one. From `0.4.8`, `loadReport(ReportingParser<T> parser)` reads the folder as `load` does and also gives the problems of the load as [`ConfigProblem`](#problems-as-records) records, so a file that loads with warnings keeps its entry and its warnings are listed beside it:
+
+```java
+YamlFolder.Report<Kit> report = folder.loadReport((id, fileName, yaml) -> {
+    ConfigReader reader = new ConfigReader(yaml, fileName, line -> getLogger().warning(fileName + ": " + line));
+    Kit kit = new Kit(id, reader.duration("cooldown", Duration.ofHours(1)), reader.strings("items", List.of()));
+    if (!reader.errors().isEmpty()) {
+        throw ConfigLoadException.withProblems(String.join(" ", reader.errors()), reader.problems());
+    }
+    return new YamlFolder.Parsed<>(kit, reader.problems());
+});
+```
+
+`YamlFolder.ReportingParser<T>` is a functional interface: `YamlFolder.Parsed<T> parse(String id, String fileName, YamlConfiguration yaml) throws ConfigLoadException`. `Parsed<T>` is a record of `T entry()`, never `null`, and `List<ConfigProblem> problems()`. The parser builds its reader with `fileName` as the source, so every record names its file.
+
+`YamlFolder.Report<T>` is a record of `entries()` and `errors()`, which hold what `Loaded` holds for the same folder, and `List<ConfigProblem> problems()` in file name order:
+
+| File | Records |
+|---|---|
+| It loaded | The problems of its `Parsed`, such as the warnings of its reader |
+| Its parser threw `ConfigLoadException` | One `ERROR` record with the file name, no path and the line of `errors()` as the message, then the records given to `ConfigLoadException.withProblems(String message, List<ConfigProblem> problems)`. A failure built with a constructor carries none. |
+| Any other failure | One `ERROR` record with the file name, no path and the line of `errors()` as the message |
+
+The record of a file named `<name>.yaml` has the fix `rename it to <name>.yml`; the other file records have none. `ConfigLoadException.problems()` returns the records a failure carries, and an empty list for one built without them. `Loaded`, `load` and `loadOne` are unchanged, and no `loadOne` returns a `Report`.
+
+The records of a file that loaded are the ones its parser hands over. The line of [`lenient`](#files-saved-in-a-legacy-code-page) about replaced bytes is not among them: it reaches only the consumer given to `lenient`. When two file names give the same id and the later entry replaces the earlier one, the records of both files are kept, each under the name of its file.
 
 ### Parser bugs
 

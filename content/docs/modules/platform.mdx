@@ -739,7 +739,7 @@ Messages messages = Messages.load(
 ```
 
 The bundled English file is written to `<folder>/en.yml` when that file is absent, and every warning names
-`<folder>`. The folder is one path segment: a blank one, `.`, or one that holds `/`, `\` or `..` throws
+`<folder>`. The folder is one path segment: a blank one, `.`, or one that holds `/`, `\`, `:` or `..` throws
 `IllegalArgumentException`. The other loads keep `lang`.
 
 ### Bundled languages
@@ -755,7 +755,10 @@ Messages messages = Messages.load(
 `bundled` opens the bundled file of a code, a new stream on each call. It is asked for `en` and for each code as
 the list writes it; a code that reads as `en` is ignored. This load differs from the others in three ways:
 
-- The load and each `reload()` write every bundled file whose `<folder>/<code>.yml` is absent.
+- The load and each `reload()` write every bundled file whose language has no file in the folder, as
+  `<folder>/<code>.yml` with the code as the list writes it. A file whose name reads as the same locale counts as
+  the file of that language, so an owner's `pt-BR.yml` or `PT_br.yml` keeps the bundled `pt_BR` from being written
+  beside it.
 - At each step of the [lookup](#lookup), a key the owner's file of that locale lacks is taken from the bundled file
   of the same code, before the next step. For `pt_br` the order is the owner's `pt_br.yml`, the bundled `pt_br`,
   the owner's `pt.yml`, the bundled `pt`, the default locale's file, its bundled file, then the bundled English
@@ -793,16 +796,20 @@ if (getConfig().getBoolean("add-new-messages", true)) {
 - `addMissingKeys(String locale)` does the same for the file of one language, from that language's own bundled
   file, after a load that names [bundled languages](#bundled-languages). It adds nothing for a language the plugin
   bundles no file of, so a file is never given English text.
-- Nothing is written when the file lacks no key or is absent. A file that is not valid YAML or is not saved as
-  UTF-8 is left as it is, also after `loadLenient`, with a warning:
+- Nothing is written when the file lacks no key, is absent or was removed since it was read. A key the file writes
+  with no value, as `key:` or `key: ~`, counts as one the file has and is not added. A file that is not valid YAML
+  or is not saved as UTF-8 is left as it is, also after `loadLenient`, with a warning:
 
 ```text
 lang/en.yml is not valid YAML saved as UTF-8, so no key was added to it.
 ```
 
-- A key that cannot stand at the end of the file, as when the file holds text under a key the bundled file uses as
-  a section, leaves the file as it is with the warning `lang/en.yml was not changed, because <keys> cannot be added
-  at its end.` A file that cannot be written is reported as `Could not add keys to lang/en.yml: <reason>.`
+- A file whose end does not take the keys is left as it is with the warning `lang/en.yml was not changed, because
+  <keys> cannot be added at its end.`, which lists every key the file lacks and is logged on each call. That is a
+  file that holds text under a key the bundled file uses as a section, one that ends inside a block scalar (`|` or
+  `>`) with no line break after its last line, one that ends with the document end marker `...`, and one that
+  writes its keys as a flow mapping in braces. A file that cannot be written is reported as
+  `Could not add keys to lang/en.yml: <reason>.`
 
 ### Lookup
 
@@ -830,7 +837,7 @@ A key no file has renders as the visible marker `<red>missing:key` and never thr
 | `lines(Locale, String key, TagResolver...)` | One component per line; a tag opened on one line does not carry into the next. |
 | `template(Locale, String key)` | The raw template, lines joined by a newline. |
 | `has(Locale, String key)` | Whether the key resolves for that locale. |
-| `reload()` | Reads the folder again, with the same warnings as the load, and writes `lang/en.yml` again if it is missing. The bundled text is not read again. |
+| `reload()` | Reads the folder again, with the same warnings as the load, and writes `lang/en.yml` again if it is missing. The one warning that is not repeated is the one a load that names [bundled languages](#bundled-languages) logs once. The bundled text is not read again. |
 | `loadedLanguages()` | The loaded locale codes. |
 | `defaultLocale()`, `perPlayer()` | The values given at load. |
 
@@ -865,8 +872,8 @@ messages.showTitle(text, player, "crate.won.title", "crate.won.subtitle",
 
 - `send` takes any `CommandSender`. A player is the viewer; the console and every other sender get the render
   without a viewer. A message of several lines is sent as one chat message, its lines joined by a newline.
-- An empty message, one whose template is an empty text (`""`) or a list of no lines (`[]`), is not sent, so an
-  owner can switch a message off. An action bar of an empty message is not shown either, and the bar the player
+- An empty message, one whose lines joined by a newline are an empty text (`""`, a list of no lines `[]` or a
+  list of one empty line `[""]`), is not sent, so an owner can switch a message off. An action bar of an empty message is not shown either, and the bar the player
   sees stays. A title is not shown when its title and subtitle are both empty.
 - A key no file has sends the `<red>missing:key` marker.
 - A `null` `subtitleKey` gives an empty subtitle.
@@ -888,8 +895,8 @@ crate:
 messages.showTitle(text, player, "crate.won", Placeholder.component("prize", prize.displayName()));
 ```
 
-A time that no file has, or that is not a whole number of at least 0, is the one of Adventure's
-`Title.DEFAULT_TIMES` (10, 70 and 20 ticks). A `subtitle` no file has gives an empty subtitle, and a `title` no file
+A time that no file has, that is not a whole number of at least 0, or that is too long to count in milliseconds,
+is the one of Adventure's `Title.DEFAULT_TIMES` (10, 70 and 20 ticks). A `subtitle` no file has gives an empty subtitle, and a `title` no file
 has shows the missing-key marker.
 
 ### A prefix from the plugin

@@ -490,6 +490,79 @@ A build that leaves `generateLoader` off generates the same source and builds th
 bStats and FastStats come as runtime dependencies of `taffy-metrics` and are shaded and relocated. Listing `alaz.bstats.bukkit` or `alaz.faststats.bukkit` as a runtime library makes Paper load an unrelocated copy.
 </Callout>
 
+### Kotlin plugins
+
+From `0.4.8`, a plugin written in Kotlin is a supported build: Taffy's own tests build one with `org.jetbrains.kotlin.jvm` `2.4.21` applied beside `so.alaz.taffy.paper-plugin`, on Gradle 9.9.1. The Kotlin Gradle plugin comes from the Gradle Plugin Portal, which the `pluginManagement` block under [Applying the plugins](#applying-the-plugins) already names, and its version is the build's own choice: the `alaz` catalog has no Kotlin entry.
+
+```kotlin title="build.gradle.kts"
+plugins {
+    id("so.alaz.taffy.paper-plugin")
+    id("org.jetbrains.kotlin.jvm") version "2.4.21"
+}
+
+dependencies {
+    compileOnly(alaz.paper.api)
+    implementation(alaz.taffy.platform)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    testImplementation(alaz.junit.jupiter)
+    testRuntimeOnly(alaz.junit.platform.launcher)
+}
+
+tasks.shadowJar {
+    relocate("kotlin", "com.example.myplugin.libs.kotlin") {
+        include("kotlin.**")
+    }
+    relocate("kotlinx", "com.example.myplugin.libs.kotlinx") {
+        include("kotlinx.**")
+    }
+}
+```
+
+What the conventions do for Kotlin sources, and what stays with the build:
+
+- **Java 25 class files.** The Kotlin plugin takes its JVM target from the Java toolchain that `so.alaz.taffy.java` sets, so `src/main/kotlin` compiles to Java 25 class files with no `kotlin` block. A build adds one for its own compiler options, such as `-Xjsr305=strict`.
+- **The standard library is shaded.** The Kotlin plugin adds `kotlin-stdlib` to `implementation`, so the shadow jar carries it. Taffy relocates only its own three packages: the two `relocate` calls above move `kotlin` and `kotlinx` under the plugin's group, each with an include pattern so that `kotlin` does not also match `kotlinx`. Taffy's tests build no plugin that uses `kotlin-reflect`. What the two libraries bring outside those packages stays at the root of the jar under its own name: the `org.jetbrains.annotations` and `org.intellij.lang.annotations` classes of the `org.jetbrains:annotations` dependency of `kotlin-stdlib`, and from `kotlinx-coroutines-core` the `_COROUTINE` classes and `DebugProbesKt.bin` of its debugger, `META-INF/kotlinx_coroutines_core.version` and its ProGuard rule files under `META-INF`. The `_COROUTINE` package is a fixed name the coroutine debugger looks up and is not relocated.
+- **Taffy is relocated in Kotlin classes too.** A Kotlin class that names `so.alaz.taffy.gui.Answer` ships naming `<group>.libs.taffy.gui.Answer`, in its bytecode and in its Kotlin metadata.
+- **Module files are kept.** Shadow writes the `META-INF/*.kotlin_module` file of each Kotlin module it relocates as `META-INF/<module>.shadow.kotlin_module`, one per module, the plugin's own included. No two share a name, so `DuplicatesStrategy.EXCLUDE` drops none. Shadow still prints a warning for each module file on every `shadowJar` run, because the convention sets that strategy: `'META-INF/kotlin-stdlib.kotlin_module' is matched by ... KotlinModuleMetadataTransformer ... but its DuplicatesStrategy is EXCLUDE`, with the advice to set `INCLUDE` or `WARN`. The warning is harmless here and the jar is complete.
+- **Tests and coverage.** Kotlin tests under `src/test/kotlin` run on the JUnit Platform with the [test locale and time zone](#test-locale-and-time-zone). The coverage gate measures the Kotlin class files, where a top-level function of `Shop.kt` is in `ShopKt.class`, and JaCoCo counts the instructions the compiler generates for coroutines and inline functions. A build sets `coverage.minimum` from what it measures.
+- **`RuntimeLibraries` is Java.** The generated class compiles beside the Kotlin sources, and Kotlin code in the group package reads `RuntimeLibraries.COORDINATES` directly.
+- **Java-only settings.** The javac and javadoc flags apply to Java sources only, and `compileAgainstPaperFloor` compiles the Java sources only, so it does not check a Kotlin call against the oldest supported Paper. Its classpath holds no Kotlin output, so in a plugin whose Java sources name a Kotlin class of the same project the task fails with `cannot find symbol`, and such a plugin cannot run it. A plugin written in Kotlin only, and one whose Java sources name no Kotlin class, run it as before.
+
+Taffy's sealed types and enums are exhaustive in a `when`. Over `Answer`, `Icon` and `EconomyResult.Status`, a `when` used as an expression compiles with no `else` branch:
+
+```kotlin
+fun label(answer: Answer): String = when (answer) {
+    is Answer.Accept -> "accept"
+    is Answer.Retry -> "retry"
+    is Answer.Later -> "later"
+}
+```
+
+A later release may add a result to `Answer`, and such a `when` then stops compiling on the upgrade until it names the new one. An `else` branch keeps it compiling.
+
+Taffy has no Kotlin in a runtime module and no `kotlinx` type in a public signature, so a coroutine dispatcher over [`Scheduler`](/docs/modules/platform#scheduler) is the plugin's own class. One for the global region thread:
+
+```kotlin title="src/main/kotlin/com/example/myplugin/GlobalDispatcher.kt"
+package com.example.myplugin
+
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import so.alaz.taffy.platform.Scheduler
+
+class GlobalDispatcher(private val scheduler: Scheduler) : CoroutineDispatcher() {
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        if (!scheduler.global(block)) {
+            context.cancel()
+            Dispatchers.IO.dispatch(context, block)
+        }
+    }
+}
+```
+
+`Scheduler.global` returns `false` when the plugin is not enabled, and a dispatcher may not drop a block: the coroutine is cancelled and its block runs on `Dispatchers.IO`, where it meets the cancellation. `scheduler.asyncExecutor().asCoroutineDispatcher()` gives a dispatcher for async work, and a `CompletableFuture` that Taffy returns is awaited with `kotlinx.coroutines.future.await`.
+
 ## so.alaz.taffy.paper-api
 
 Applies `so.alaz.taffy.java` and `maven-publish`, for a module other plugins compile against, such as a plugin's public API.
