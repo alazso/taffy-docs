@@ -82,6 +82,8 @@ Log lines and exception messages are written for the server owner or for the dev
 - the warning and error shapes of `ConfigReader` and its `describe`,
 - the `StrictYaml` message shapes, such as `<source> is larger than 16 MiB` and `<source> is not valid YAML: <problem> at line <n>, column <m>`,
 - the clause form of the `ConfigLoadException` message (written for the server owner, with no full stop at the end, so it reads after a lead-in),
+- from `0.4.9`, the `ConfigLoader` messages `config.yml is version 3, newer than the version 2 this build knows, so it is not read` and `the step that upgrades config.yml from version 1 failed: <exception class> <message>`,
+- from `0.4.9`, the `YamlFolder` lines `<name>: <versionKey> is 3, newer than the version 2 this build knows, so the file is not read` and `<name>: the step that upgrades it from version 1 failed: <exception class> <message>`, and its log line `Upgraded <name> from version 1 to 2; the previous file is kept as <file name>.v1.bak.`,
 - the `<red>missing:key` marker that `Messages` renders for a key no language file has.
 
 Plugin code branches on exception types, statuses and return values, never on a message. A test that pins one of Taffy's own log lines (for example through `CapturedLog`) can break on any upgrade.

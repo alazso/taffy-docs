@@ -10,6 +10,8 @@ description: Strict YAML loading, typed reading that reports every problem at on
 - `ConfigHolder`, which holds the settings in effect and replaces them on a reload only when the new ones load.
 - `RestartKeys`, which names the settings a reload changed that take effect only after a restart.
 - `YamlFolder`, which reads a folder in which each `.yml` file is one entry (one kit, one menu) and reports a bad file without stopping the others.
+- `ConfigUpgrade`, the steps that rename, move and remove keys when `config.yml` or a file of a folder is brought to a newer layout version (from `0.4.9`).
+- `AtomicWriter`, which writes a file the plugin edits so that a crash never leaves half of it, and replaces it only while it still holds what the edit started from (from `0.4.9`).
 - `StrictYaml`, the one way a file becomes a `YamlConfiguration`: a file that is missing, not UTF-8 or not valid YAML fails instead of reading as empty.
 - `ConfigLoadException`, the one checked exception of the module, whose message is written for the server owner.
 
@@ -243,9 +245,9 @@ In the owner's file the version may also be written as text, and a number is rea
 | The owner's file | What `load()` does |
 |---|---|
 | Absent | Writes the shipped text byte for byte, logs that it wrote the default file and loads it. |
-| Older version | Adds every shipped key the file lacks, with its comments, sets the version to the shipped one, writes the previous file to `config.yml.v<N>.bak` (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs the keys it added. |
+| Older version | Runs the [upgrade steps](#renamed-moved-and-removed-keys) the plugin gave, adds every shipped key the file lacks, with its comments, sets the version to the shipped one, writes the previous file to `config.yml.v<N>.bak` (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs the keys it added. |
 | Same version | Reads the file as it is, even when a shipped key is missing. |
-| Newer version | Reads the file as it is and logs a warning. Nothing is changed. |
+| Newer version | Reads the file as it is and logs a warning. Nothing is changed. After [`refuseNewer()`](#a-file-newer-than-the-plugin) the load throws in place of that. |
 
 During an upgrade the owner's keys and values are kept, unknown keys included. A shipped key is not added beneath a path where the owner's file holds a plain value. The `.bak` copy holds the file exactly as it was, byte for byte. YAML drops a key whose value is empty or null while it parses, so such a key counts as missing: it gets the shipped value and comments when the shipped file has the key, and is left out of the saved file otherwise.
 
@@ -285,6 +287,62 @@ ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoa
 
 The baseline is the version of the layout those releases wrote, and the first shipped file with the key carries the same number. A file that holds a version is not affected. `version` is 0 or more, and a negative one throws `IllegalArgumentException`. A baseline above the shipped `config-version` is a mistake in the plugin: every `load()` throws `ConfigLoadException` with `the baseline version 3 is above the config-version 2 of the config.yml inside the plugin jar` and writes nothing.
 
+### Renamed, moved and removed keys
+
+An upgrade without steps only adds keys. When version 2 of a plugin renames `cooldown` to `cooldown-seconds`, it adds `cooldown-seconds` with the shipped default: the owner's value is no longer read, and the old key stays in the file and shows up in `ConfigReader.unreadKeys()` on every load.
+
+From `0.4.9`, `ConfigUpgrade` holds a step for each version whose layout changed, and `ConfigLoader.upgrades(ConfigUpgrade upgrades)` gives a copy of the loader that runs them:
+
+```java
+ConfigUpgrade upgrades = ConfigUpgrade.none()
+    .from(1, keys -> keys.move("cooldown", "cooldown-seconds"))
+    .from(2, keys -> {
+        keys.move("storage.host", "storage.mysql.host");
+        keys.remove("legacy-mode");
+    });
+
+ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger())
+    .upgrades(upgrades);
+```
+
+`ConfigUpgrade.none()` has no steps, and `from(int version, Consumer<ConfigUpgrade.Keys> step)` returns a copy with one step added under the version it upgrades from. `version` is 0 or more, and a negative one or a second step for one version throws `IllegalArgumentException`. A `ConfigUpgrade` is immutable.
+
+For an owner's file of version `v` and a shipped version `s`, the steps registered under `v` up to, not including, `s` run in ascending order on the parsed file, before the shipped keys are added. A file of version 1 under a shipped version 3 runs the steps of 1 and 2; a version without a step is skipped. A file without a usable `config-version` counts as the [baseline version](#a-file-without-a-version). A file that already has the shipped version runs no step, so a saved upgrade is not repeated.
+
+Every path a step names is a full dotted path from the top of the file. `ConfigUpgrade.Keys` has:
+
+| Method | What it does |
+|---|---|
+| `boolean move(String from, String to)` | Moves the value or the section at `from` to `to`, which renames a key when both paths are in one section. The value stays as the owner wrote it, with the comments above and beside it; a section moves with every key beneath it. Returns whether the file held a key at `from`. |
+| `boolean remove(String path)` | Removes the key with its comments, and every key beneath it. Returns whether the file held it. |
+| `YamlConfiguration yaml()` | The parsed file, for any other change, such as a value rewritten in another unit. |
+
+The rules of `move`:
+
+- What the file already holds at `to` wins. A value there is kept and the moved one is dropped. When both paths hold a section, each key beneath `from` moves unless the section at `to` already has it.
+- A moved key is also dropped where the file holds a plain value above its new place, as `storage: local` does for `storage.mysql.host`.
+- In each of those cases the key is still removed from `from`.
+- When the file has no key at `from`, or both paths are the same, nothing changes. A step that runs twice on one file leaves it as the first run did.
+- The moved key is written after the keys its new section already has. No other key changes its place or its comments.
+- The section `from` was in stays, also when the move leaves it empty. `remove` leaves an emptied section in place too; a step removes it by its own path.
+- A blank path throws `IllegalArgumentException`.
+
+The result goes through the same check, copy and save as any upgrade. `config.yml.v<N>.bak` holds the file as it was before the steps ran. When the save fails, the file stays as the owner left it and the next load runs the steps again on that file. The log line of the upgrade names the shipped keys that were added and not the keys a step moved.
+
+A step that throws a `RuntimeException` stops the load: `load()` throws `ConfigLoadException` with `the step that upgrades config.yml from version 1 failed: <exception class> <message>` and that exception as the cause. Nothing is written and no copy is made.
+
+### A file newer than the plugin
+
+An owner who goes back to an older build of the plugin has a `config.yml` whose `config-version` is above the shipped one. `load()` reads such a file as it is and logs a warning, and the older build may misread keys whose meaning changed.
+
+From `0.4.9`, `ConfigLoader.refuseNewer()` gives a copy of the loader that does not read it: `load()` throws `ConfigLoadException` with `config.yml is version 3, newer than the version 2 this build knows, so it is not read`. With or without it, a newer file is never rewritten or given a lower version. At startup the exception stops the start, and on a reload a [`ConfigHolder`](#configholder) keeps the settings in effect.
+
+```java
+ConfigLoader files = new ConfigLoader(getDataPath(), () -> getResource(ConfigLoader.FILE_NAME), getLogger())
+    .upgrades(upgrades)
+    .refuseNewer();
+```
+
 ### Owner-keyed sections
 
 Some sections hold entries the owner names, such as a list of kits. Without help, an upgrade adds back a shipped entry the owner renamed or removed. The four-argument constructor takes those sections as full dotted paths, each with the keys under it that are not entries:
@@ -310,7 +368,7 @@ When the owner's file already holds `kits` with at least one key, a shipped entr
 
 ### Failures
 
-`load()` throws `ConfigLoadException` when the shipped file is absent, unreadable, not UTF-8 or not valid YAML, when it has no whole number of 1 or more under `config-version` (from `0.4.0`, with the message `the config.yml inside the plugin jar has no whole number of 1 or more under config-version`), when the owner's file cannot be read, is not UTF-8 or is not valid YAML, or when a missing file cannot be written. An existing file is not changed in any of these cases. From `0.4.0`, a message about a file that cannot be read or written names it as `config.yml`, without its path (`cannot write config.yml: AccessDeniedException`), and the I/O failure is the cause. The loader holds no state between loads, and calls to `load()` must not overlap; `ConfigHolder.reload()` never overlaps, so a loader used only through a holder keeps to that.
+`load()` throws `ConfigLoadException` when the shipped file is absent, unreadable, not UTF-8 or not valid YAML, when it has no whole number of 1 or more under `config-version` (from `0.4.0`, with the message `the config.yml inside the plugin jar has no whole number of 1 or more under config-version`), when the owner's file cannot be read, is not UTF-8 or is not valid YAML, or when a missing file cannot be written. From `0.4.9` it also throws when an [upgrade step](#renamed-moved-and-removed-keys) throws, and for a [newer file](#a-file-newer-than-the-plugin) after `refuseNewer()`. An existing file is not changed in any of these cases. From `0.4.0`, a message about a file that cannot be read or written names it as `config.yml`, without its path (`cannot write config.yml: AccessDeniedException`), and the I/O failure is the cause. The loader holds no state between loads, and calls to `load()` must not overlap; `ConfigHolder.reload()` never overlaps, so a loader used only through a holder keeps to that.
 
 ## ConfigReader
 
@@ -607,7 +665,7 @@ A file that fails adds one line to `errors()` and the other files still load:
 | The parser returns `null` | `<file name>: NullPointerException the parser returned null` |
 | A regular file is named `<name>.yaml` (from `0.4.0`) | `<name>.yaml: rename it to <name>.yml to have it read` |
 
-`load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. The folder is never written to and nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread, and the consumers below are called on it.
+`load` reports a subfolder whose name ends in `.yml` as a file that cannot be read. A folder built with one of the two constructors above is never written to. Nothing is kept between calls, so one instance may be used from any thread. The reads block the calling thread, and the consumers below are called on it.
 
 ### Warnings beside a loaded entry
 
@@ -656,6 +714,93 @@ YamlFolder folder = new YamlFolder(getDataPath().resolve("vouchers")).lenient(ge
 ```
 
 Each byte sequence that is not UTF-8 is read as U+FFFD, the file loads, and `warnings` receives one line per file that names it and the first line with a replaced character. Strict reading stays the default.
+
+### Files with a version
+
+From `0.4.9`, a third constructor reads a layout version from each file, upgrades an older file and does not read a newer one:
+
+```java
+ConfigUpgrade upgrades = ConfigUpgrade.none()
+    .from(1, keys -> keys.move("prize", "reward"));
+
+YamlFolder crates = new YamlFolder(getDataPath().resolve("crates"), getLogger(), "crate-version", 2, upgrades, false);
+```
+
+`new YamlFolder(Path folder, Logger logger, String versionKey, int currentVersion, ConfigUpgrade upgrades, boolean recursive)` takes the key that holds the version as a full dotted path, the version of the layout the plugin reads (1 or more) and the [steps](#renamed-moved-and-removed-keys), each under the version it upgrades from. A blank key or a version below 1 throws `IllegalArgumentException`. The version of a file is read as `ConfigLoader` reads `config-version`: a number, or text holding a whole number of at most nine digits, and 0 for a file without a usable one. So a folder whose files never had the key registers its first step under 0, and every such file is rewritten once, with the key added after the keys it has.
+
+| The file | What a load does |
+|---|---|
+| Current version | Reads it as it is. It is never written. |
+| Older version | Runs the steps registered under its version up to, not including, the current one on the parsed file, sets the version key and hands the result to the parser. Writes the previous file, byte for byte, to `<file name>.v<N>.bak` beside it (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs `Upgraded <name> from version 1 to 2; the previous file is kept as <file name>.v1.bak.` |
+| Newer version | Does not parse, upgrade or write it. Adds the line `<name>: <versionKey> is 3, newer than the version 2 this build knows, so the file is not read`, and the other files still load. |
+
+The save rewrites the file [as an upgrade of `config.yml` does](#what-an-upgrade-rewrites), and both the copy and the save go through a temporary file that replaces its target in one step. When the save fails, the file stays as it was, byte for byte, the parser still gets the upgraded file and the next load tries again; the logger receives a warning that starts with `Could not save the upgraded <name>: ` and states the reason. A file is not saved when its text would not be read back as it is, when it changed on the disk since it was read, or when it holds bytes that are not UTF-8 and was read through [`lenient`](#files-saved-in-a-legacy-code-page).
+
+A step that throws leaves its file unchanged, and the parser does not see the file. The file adds the line `<name>: the step that upgrades it from version 1 failed: <exception class> <message>`, and the logger receives a warning with the exception, so its stack trace is in the log.
+
+`loadOne` upgrades its file the same way. Such a folder is written only inside `load`, `loadReport` and `loadOne`, on the calling thread. Two loads of one folder that overlap both load every entry, and the one that comes second to a file logs that it could not save it. The `.bak` copies and the temporary files do not end in `.yml`, so no load reads them.
+
+With `recursive` set, the files in subfolders are read too:
+
+- The name of a file, in the lines and for the parser, is its path from the folder with `/` between the parts, such as `rare/gold.yml`. Its id is that name without the suffix: `rare/gold`.
+- The files are read in the order of those names.
+- A folder whose name starts with a dot is skipped with everything in it, and a folder reached through a symbolic link is not entered.
+- `loadOne("rare/gold", parser)` reads that one file. It returns `null` when a part of the id is empty, starts with a dot or is not a plain name.
+
+With `false`, only the files directly inside the folder are read, as the other constructors read them.
+
+## AtomicWriter
+
+A plugin that edits its own files from a command or a menu saves them with `YamlConfiguration.save(file)` or `Files.writeString`, which truncate the file and then write it: a crash or a full disk in between leaves half a file, and a second writer replaces what the first one wrote. From `0.4.9`, `AtomicWriter` writes a text file, as UTF-8 and exactly as given, through a temporary file named as the target followed by `.tmp`. The temporary file is flushed to the device and then put in place in one step, so a reader sees the previous file or the new one. All four methods are static.
+
+| Method | What it does |
+|---|---|
+| `void create(Path file, String text)` | Writes a new file. Throws `FileAlreadyExistsException` when `file` exists, a symbolic link included, and leaves that file as it is. |
+| `void write(Path file, String text)` | Replaces the file, or writes it when it does not exist. |
+| `String revision(byte[] content)` | The SHA-256 of the bytes as 64 lower-case hex digits. |
+| `Result replace(Path file, String text, String baseRevision, Path backups, int keep)` | Replaces the file only while it still has `baseRevision`, and keeps a copy of what it replaced. |
+
+`create` gives the flushed temporary file its name with a hard link, which the file system refuses when the name is taken, so of two writers of one new id only one succeeds. On a file system without hard links it moves the file without replacing, which Windows does in one step and other systems do as a check followed by a move.
+
+```java
+try {
+    AtomicWriter.create(vouchersFolder.resolve(id + ".yml"), yaml.saveToString());
+} catch (FileAlreadyExistsException taken) {
+    // another voucher has the id
+}
+```
+
+An edit that starts from what the file held takes the revision of the bytes it read, and `replace` writes only while the file still has it:
+
+```java
+byte[] read = Files.readAllBytes(file);
+String base = AtomicWriter.revision(read);
+YamlConfiguration yaml = StrictYaml.parse(new String(read, StandardCharsets.UTF_8), "gold.yml");
+yaml.set("reward", "EMERALD");
+
+switch (AtomicWriter.replace(file, yaml.saveToString(), base, dataFolder.resolve("backups"), 10)) {
+    case AtomicWriter.Written written -> base = written.revision();
+    case AtomicWriter.Conflict conflict -> tellTheEditorTheFileChanged();
+}
+```
+
+- `AtomicWriter.Result` is sealed. `Written` is a record of `String revision()`, the revision of the content now in the file, and `Path backup()`, the copy of the content that was replaced, or `null` when the file did not exist. `Conflict` is a record of `String currentRevision()`; nothing was written or copied.
+- `AtomicWriter.ABSENT` (`absent`) is the revision of a file that does not exist: as `baseRevision` it writes the file only when there is none, and a `Conflict` carries it when the file is gone.
+- The copy is written to `backups`, which is created when missing, as `<file name>.<path id>.<yyyyMMdd-HHmmss-SSS>.bak`. The time is UTC, `-<n>` follows it for a further copy of the same millisecond, and the path id is the first 12 hex digits of the SHA-256 of the file's absolute path, so files of one name in different folders can share one folder of copies. The copy holds the file byte for byte. No copy is taken when the newest copy of that file already holds the same bytes.
+- After the write, the copies of that file beyond the newest `keep` are deleted. `keep` is 1 to 1000, and another number throws `IllegalArgumentException`. A delete that fails leaves that copy and does not fail the call.
+
+`write` and `replace` follow a symbolic link to the file it names, so the link stays and the file it leads to is replaced. The new file gets the POSIX permissions of the file it replaces where the file system has them, and so does the copy. A file written where none existed gets the permissions of any new file. A missing parent folder is created. A hard link of the target is not updated.
+
+Every method throws the `IOException` of the step that failed:
+
+| Failure | What is left |
+|---|---|
+| The device is full, or the temporary file cannot be written | The file holds what it held before the call. The temporary file and the copy `replace` took in that call are removed. |
+| The folder refuses new files | The same, and nothing was written. |
+| The file is marked read-only | On a POSIX file system the file is replaced, because the folder allows the rename, and the new file has the same permissions. On Windows the move is refused, and the file and its attribute stay. |
+| The temporary file cannot be removed after a failure | It stays until the next write of that name removes it. |
+
+Every call blocks the calling thread for its file I/O and uses no scheduler: call it from an async task, on Paper and on Folia. Calls for one file made through the plugin's copy of the class run one after another. A change by another plugin, another process or the owner's editor is not held off, and only the revision check of `replace` detects it. `ConfigLoader` and a `YamlFolder` with a version write through the same routine.
 
 ## StrictYaml
 
@@ -727,7 +872,7 @@ final class SettingsTest {
 
 ## Behaviour summary
 
-- **Threads:** no class keeps a thread. File reads and writes block the calling thread. `ConfigHolder.get()` and `YamlFolder` are safe from any thread; `ConfigReader` and the returned `YamlConfiguration` objects are not thread-safe; calls to one `ConfigLoader.load()` must not overlap.
+- **Threads:** no class keeps a thread. File reads and writes block the calling thread. `ConfigHolder.get()`, `YamlFolder`, `ConfigUpgrade` and `AtomicWriter` are safe from any thread; `ConfigReader` and the returned `YamlConfiguration` objects are not thread-safe; calls to one `ConfigLoader.load()` must not overlap.
 - **Failure handling:** `ConfigLoadException` is the only checked exception. A bad value is a warning with a fallback or a collected error, never an exception; the plugin's loader turns errors into a `ConfigLoadException`.
 - **Reloads:** a failed reload keeps the settings in effect and reports one line; a missing `config.yml` is written again and its defaults take effect.
 - **Not bundled:** the Paper API and SnakeYAML come from the server. `taffy-platform` comes with the module.
