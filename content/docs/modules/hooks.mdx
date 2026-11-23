@@ -14,6 +14,7 @@ description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard,
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
 - `PlaceholderCache` gives a placeholder its last known value at once and refreshes it off the asking thread (from `0.4.7`).
 - `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
+- `HologramProvider.displays` places them as display entities, with no hologram plugin (from `0.4.11`).
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
 
 No public signature names an integration type. Each integration sits behind an interface of `so.alaz.taffy.hooks`, and the class that calls it loads only after its API classes are found visible to the plugin (and, for every integration but Vault, after its plugin is found installed and enabled). A server without an integration never loads a class that names it.
@@ -878,6 +879,107 @@ When the plugin disables, the provider removes its holograms by itself. Paper fi
 
 Both removals run on the thread that disables the plugin. On Paper that is the main thread. On Folia it is the thread that called `disablePlugin`, and while the server stops it is Folia's shutdown thread, not the global region thread. If a hologram plugin refuses a call from that thread, the removal fails like any other call: one warning and a report under `hook.<plugin key>`. The hologram then stays until the hologram plugin drops it, at the latest when the server stops, since it never saves it. A plugin that disables itself on Folia does so through `scheduler.global(() -> getServer().getPluginManager().disablePlugin(this))`, as [storage](/docs/modules/storage#starting-storage) does, so the removal runs on the global region thread.
 
+### Display holograms
+
+<Callout type="info" title="From 0.4.11">
+`HologramProvider.displays` and `DisplayHolograms` are available from Taffy `0.4.11`.
+</Callout>
+
+`HologramProvider.displays(Plugin owner, Scheduler scheduler, ErrorReports errors)` returns a `DisplayHolograms`: a `HologramProvider` that needs no hologram plugin. A hologram is one `TextDisplay` for each line and an optional `ItemDisplay` above them. Its `plugin()` is `null`, and `HologramPlugin` still names only hologram plugins that are detected. Call it on the server thread while the plugin is enabled, normally in `onEnable`, with the plugin's own `Scheduler`. A plugin holds one display provider at a time: close the held one before building another.
+
+Choose between the two by what the server owner gets:
+
+| | A hologram plugin, `detect` | Display entities, `displays` |
+|---|---|---|
+| Needs | The hologram plugin installed, and its entry in `paper-plugin.yml`. | Nothing. |
+| Lines | MiniMessage. | Adventure components, or MiniMessage through the `HologramProvider` methods. |
+| PlaceholderAPI in a line | Filled in for each viewer. | Shown as written. |
+| Item above the text | No. | Yes, one `ItemStack`. |
+| Calls | On the server's global thread. | From any thread. |
+
+A plugin that wants holograms on every server prefers the hologram plugin the owner chose and falls back to display entities when detection gives no provider:
+
+```java
+private final ErrorReports errors = new ErrorReports();
+private Scheduler scheduler;
+private HologramProvider holograms;
+
+@Override
+public void onEnable() {
+    scheduler = new Scheduler(this, errors);
+    holograms = chooseHolograms();
+}
+
+private HologramProvider chooseHolograms() {
+    HologramPlugin chosen = HologramPlugin.byKey(settings.get().hologramPlugin());
+    if (chosen != null) {
+        HologramProvider detected = HologramProvider.detect(this, errors, true, chosen).provider();
+        if (detected != null) {
+            return detected;
+        }
+    }
+    return HologramProvider.displays(this, scheduler, errors);
+}
+
+boolean showDailyCrate(Location block, String opener) {
+    Location base = block.clone().add(0.5, 1.6, 0.5);
+    if (holograms instanceof DisplayHolograms displays) {
+        return displays.create("daily-crate", base, crateLines(opener), ItemStack.of(Material.CHEST));
+    }
+    return holograms.create("daily-crate", base,
+        List.of("<gold>Daily crate", "<gray>Opened by " + HologramProvider.literal(opener)));
+}
+
+void showOpener(String opener) {
+    if (holograms instanceof DisplayHolograms displays) {
+        displays.update("daily-crate", crateLines(opener), ItemStack.of(Material.ENDER_CHEST));
+    } else {
+        holograms.update("daily-crate",
+            List.of("<gold>Daily crate", "<gray>Opened by " + HologramProvider.literal(opener)));
+    }
+}
+
+private static List<Component> crateLines(String opener) {
+    return List.of(
+        Component.text("Daily crate", NamedTextColor.GOLD),
+        Component.text("Opened by ", NamedTextColor.GRAY).append(Component.text(opener)));
+}
+
+@Override
+public void onDisable() {
+    Shutdown.closeQuietly("remove holograms", () -> holograms.close(), getLogger(), errors);
+    scheduler.close();
+}
+```
+
+`opener` is a player's name. It goes into a component as `Component.text(opener)`, which shows it as written, and never through MiniMessage. On the hologram plugin branch it goes through `HologramProvider.literal`.
+
+| Method | What it does on display entities |
+|---|---|
+| `boolean create(String id, Location location, List<Component> lines, @Nullable ItemStack item)` | Places a hologram of component lines and an optional item. `false` when the id is in use, the location has no world or its world unloaded, or the provider is not available. |
+| `boolean update(String id, List<Component> lines, @Nullable ItemStack item)` | Replaces every line and the item. `false` when the id is not in use. |
+| `boolean create(String id, Location location, List<String> lines)` | The same placement with MiniMessage lines and no item. Also `false` when MiniMessage refuses a line. |
+| `boolean update(String id, List<String> lines)` | Replaces every line and keeps the item. Also `false` when MiniMessage refuses a line. |
+| `boolean move(String id, Location location)` | Removes the entities and spawns them again at the new location. `false` when the id is not in use, or the location has no world or its world unloaded. |
+| `boolean remove(String id)` | Removes the hologram. `false` when the id is not in use. |
+| `boolean exists(String id)`, `Set<String> ids()` | Answer from the provider's records, also before the entities stand and while the hologram's chunk is not loaded. |
+| `int removeAll()`, `void close()` | As for every `HologramProvider`. |
+| `boolean available()` | The provider is not closed and the plugin is enabled. |
+
+What to know:
+
+- **Layout.** The location is the bottom centre of the text. The lines stack upward from it, the last line lowest, `DisplayHolograms.LINE_SPACING` (0.28) blocks apart. The item is centred `DisplayHolograms.ITEM_RISE` (0.45) blocks above the bottom of the top line, or above the location when there are no lines, at `DisplayHolograms.ITEM_SCALE` (0.75) of its size with the `FIXED` item transform. Every entity faces the viewer (`Billboard.CENTER`). A line is centred, shadowed, not see-through, on the default background, and never wraps.
+- **Who sees it.** Every player in range. The view range is Paper's default of `1.0`, about 64 blocks. There is no per-player visibility and no per-viewer text.
+- **Ids.** An id is 1 to 48 of `a-z`, `0-9`, `_` and `-`, and is not prefixed. `create` with an id in use answers `false` and leaves that hologram as it is.
+- **Threads.** Every method may be called from any thread, on Paper and on Folia. A call changes the provider's records and answers at once. Each spawn, text change, move and removal of an entity then runs on the region thread of the hologram's location through the plugin's `Scheduler`: the main thread on Paper, a tick later at the earliest. A removal made on the thread that owns the location is done before the call returns. A `true` means the change was accepted. Several changes to one hologram made before its region thread runs are shown as one.
+- **Updates.** Text is changed in place when the number of lines stays the same and an item neither appears nor goes. Otherwise the entities are removed and spawned again.
+- **Chunks.** The entities stand only while the chunk of the location is loaded. A hologram created in a chunk that is not loaded is kept and spawned when the chunk loads, and its entities are removed when the chunk unloads. `exists` stays `true` throughout, and the plugin does nothing.
+- **Worlds.** A location with no world, or whose world has unloaded, makes `create` and `move` answer `false`. When a world unloads, the provider removes its holograms from the world and from its records, as every `HologramProvider` does. Place them again from a `WorldLoadEvent` listener with a location built on `event.getWorld()`.
+- **Nothing is saved.** Every entity is non-persistent (`setPersistent(false)`), so the server never writes it to a world file, and none survives a restart or a crash. Place the holograms again in `onEnable`.
+- **Leftovers.** Every entity carries the plugin's persistent data key `<plugin namespace>:taffy_hologram` with the hologram's id. An entity with that key that the provider does not hold is removed when the provider is built, in every loaded chunk, and whenever the entities of a chunk load. An entity something else removed, such as with `/kill`, is spawned again at the next `update` of its hologram or the next load of its chunk.
+- **A failed spawn.** The entities it had spawned are removed, the hologram is forgotten so `exists` answers `false`, one warning is logged at most once a minute, and the failure is reported under `hook.displays`.
+- **Disable.** The provider removes every hologram when the plugin's `PluginDisableEvent` fires, before `onDisable`, and `close()` does the same. On Paper both run on the main thread and the entities are gone before the call returns. On Folia a disabling plugin can schedule nothing, so only the entities whose location the disabling thread owns are removed. The others stay in the world until their chunk unloads or the server stops, are never saved, and are removed by the next display provider the plugin builds. Call `close()` before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
+
 ## Placeholders
 
 `PlaceholderExpansionBuilder` collects the plugin's placeholders and registers them with PlaceholderAPI and MiniPlaceholders, each when it is installed, enabled and its API classes are visible. With the identifier `shop`, the name `balance` is `%shop_balance%` in PlaceholderAPI and `<shop_balance>` in MiniPlaceholders.
@@ -993,6 +1095,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.worldguard` | A failed detection, and every failed lookup. |
 | `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
+| `hook.displays` | From `0.4.11`, a failed spawn of a display hologram, and a line MiniMessage refuses. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
 Reading an item's id, resolving a placeholder and, from `0.4.7`, a refresh of a `PlaceholderCache` log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
@@ -1004,6 +1107,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `CustomItems.detect`, `PermissionProvider.luckPerms`, `RegionProvider.worldGuard`, `PlaceholderExpansionBuilder.register` | The server thread, in `onEnable`. |
 | `BedrockProvider.detect` | The server thread, in `onEnable`. |
 | `HologramProvider.detect` | The server thread while the plugin is enabled, normally in `onEnable`, and again after the held provider is closed. |
+| `HologramProvider.displays` | From `0.4.11`. The server thread while the plugin is enabled, normally in `onEnable`, and again after the held provider is closed. |
 | `EconomyProvider.vault` | In `onEnable`, on the first tick, and from `EconomyWatcher` on the thread that fires the service event. |
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
@@ -1014,6 +1118,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `RegionProvider.regionsAt` | Any thread. |
 | `BedrockProvider.bedrock` | The thread that asks. `Prompts` asks on the player's entity thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
+| `DisplayHolograms` calls | From `0.4.11`. Any thread. The entities change on the region thread of the hologram's location. |
 | `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. Before detecting again, the server's global thread. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |
