@@ -300,7 +300,7 @@ The constructor throws `IllegalArgumentException` when the state is `ON` or `LOA
 
 ## Custom items
 
-`CustomItems.detect(Plugin owner, ErrorReports errors, Set<CustomItemPlugin> switchedOn)` detects every custom item plugin once and logs one line naming the state of each. Plugins not in `switchedOn` are `SWITCHED_OFF`.
+`CustomItems.detect(Plugin owner, ErrorReports errors, Set<CustomItemPlugin> switchedOn)` detects every custom item plugin once and logs one line naming the state of each. Plugins not in `switchedOn` are `SWITCHED_OFF`. From `0.4.7`, a second `detect` also takes a [callback](#when-an-item-plugin-loads-or-reloads-its-items) that runs when an item plugin has loaded or reloaded its items.
 
 ### CustomItemPlugin
 
@@ -410,7 +410,7 @@ A later version may add reasons, so a `switch` over `Built.Reason` keeps a `defa
 - **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items. From `0.3.1`, Nexo is `LOADING` until it fires `NexoItemsLoadedEvent` and Oraxen until it fires `OraxenItemsLoadedEvent`, or `ON` at once when the plugin already knows an item name at detection, which is the usual case for Oraxen, since it loads its items while it enables. While one of them is `LOADING`, `create` skips it, `build` gives `NOT_READY` and `ready()` is `false`, and `resolve` and `idOrNull` still read its ids. Each integration registers a listener for the owner, as the ItemsAdder one does. A `detect` that follows an items-loaded event an earlier `detect` of the same plugin heard in this server run reads `ON` at once. With no such event heard, a Nexo or Oraxen that loaded with no item at all knows no item name, so after a `detect` that follows its load it reads `LOADING` until its next items-loaded event.
 - **HeadDatabase** only builds heads: `hdb:1234` builds head `1234`. It is never asked for an id and never counts as a failure in `resolve`. It knows no id until it has loaded its database shortly after startup, so `create` returns `null` until then. From `0.3.1`, it is `LOADING` until it fires `DatabaseLoadEvent` when it gives no random head at detection: `create` skips it, `build` gives `NOT_READY` and `ready()` is `false` until then, where before `0.3.1` it read `ON` and `ready()` read `true` during the load. Its integration registers a listener for the owner, as the ItemsAdder one does. A `detect` that follows a `DatabaseLoadEvent` an earlier `detect` of the same plugin heard in this server run reads `ON` at once. HeadDatabase has no query for whether its database is loaded, so any other `detect` asks it for a random head and reads `ON` at once when it gives one. A database that holds no head gives none, so it then reads `LOADING` until its next `DatabaseLoadEvent`.
 
-`CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item.
+`CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item. It stays immutable when an item plugin reloads its items: `ready()` keeps reading `true` during the reload, and from `0.4.7` a [callback](#when-an-item-plugin-loads-or-reloads-its-items) tells the plugin when the reload is over.
 
 ### Detecting again
 
@@ -424,6 +424,33 @@ void reloadItems() {
 ```
 
 Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo, Oraxen and HeadDatabase listeners, and a `detect` without it leaves one more listener for each of the four whose integration is on. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
+
+### When an item plugin loads or reloads its items
+
+From `0.4.7`, `CustomItems.detect(Plugin owner, ErrorReports errors, Set<CustomItemPlugin> switchedOn, Consumer<CustomItemPlugin> onItemsLoaded)` detects as the three-argument `detect` does and runs `onItemsLoaded` each time a plugin whose integration is on finishes loading its items, with that plugin as the argument. Before `0.4.7` a plugin can only poll `ready()`, which says nothing about a reload. An item built before a reload keeps the look it was built with, so a plugin that shows custom items, as in a menu or a display, checks its ids and builds them again from the callback:
+
+```java
+items = CustomItems.detect(this, errors, EnumSet.allOf(CustomItemPlugin.class),
+    loaded -> scheduler.global(this::rebuildItems));
+if (items.ready()) {
+    rebuildItems();
+}
+```
+
+The callback runs inside the event the item plugin fires, in the integration's `MONITOR` listener, on the thread the item plugin fires it on. All four are synchronous events, which Paper has a plugin fire on the server thread and Folia on a ticking thread, without saying which one. So the callback only hands the work on, as `Scheduler.global` does above, and builds nothing itself. By the time it runs, the plugin it names counts as loaded: `build` asks it and its status is `ON`. `ready()` can still be `false` then, when another plugin is still loading.
+
+| Plugin | Event | Fires |
+|---|---|---|
+| ItemsAdder | `ItemsAdderLoadDataEvent` | When ItemsAdder finishes loading its data, at startup and on each reload of it. |
+| Nexo | `NexoItemsLoadedEvent` | At the end of every load of its items: the first one, and each time Nexo's reload command reloads them. |
+| Oraxen | `OraxenItemsLoadedEvent` | Once after Oraxen has enabled, and each time Oraxen's reload command reloads its items. |
+| HeadDatabase | `DatabaseLoadEvent` | When HeadDatabase has loaded its database, shortly after startup. HeadDatabase does not say whether a later refresh of the database fires it again. |
+
+Every supported plugin has such an event, so none goes without a notice. The Nexo and Oraxen rows are read from Nexo 1.30.2 and Oraxen 1.220.1. ItemsAdder and HeadDatabase publish only the signatures of their API, so their rows follow what each documents.
+
+- A plugin that had loaded its items before `detect` is not announced until its next reload. `ready()` on the result covers the load that is already over, as the example shows.
+- A callback that throws does not stop the event: the failure is logged at most once a minute per item plugin, with its stack the first time, and reported under `hook.<key>`, such as `hook.nexo`.
+- `close()` ends the callbacks together with the listeners, and so does the plugin disabling. A `detect` that is not closed keeps running its own callback, so a plugin that detects again without `close()` is called once per result.
 
 ## Economy
 
@@ -955,7 +982,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 
 | Source | Reported for |
 |---|---|
-| `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, and an item that could not be built. |
+| `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, an item that could not be built, and from `0.4.7` an items-loaded callback that threw. |
 | `hook.vault` | A lookup that failed, once per lookup. |
 | `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
 | `hook.worldguard` | A failed detection, and every failed lookup. |
@@ -976,6 +1003,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `PlaceholderRegistration.unregister` | The server thread, at the start of `onDisable`, after `ComfiConfConnection.close` when the plugin uses taffy-comficonf. |
 | `CustomItems` calls | The thread that owns the item. |
 | `CustomItems.close` | The server thread, before the plugin detects again. |
+| The items-loaded callback of `CustomItems.detect` | From `0.4.7`. Called by Taffy on the thread the item plugin fires its event on: the server thread on Paper, a ticking thread on Folia. |
 | `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
