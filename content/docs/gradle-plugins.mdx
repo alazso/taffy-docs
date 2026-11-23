@@ -190,7 +190,7 @@ Applies `so.alaz.taffy.java` and `jacoco`, and adds the `coverage` extension (`s
 | `minimum` | `Property<BigDecimal>` | `0.80` | Instruction coverage the whole module must reach |
 | `classMinimum` | `Property<BigDecimal>` | `0`, and `0.50` under `so.alaz.taffy.library` | Instruction coverage each class must reach. `0` turns the per-class rule off |
 | `exclusions` | `ListProperty<String>` | empty | Ant patterns of class files left out of the gate, relative to the classes directory |
-| `conventionExclusions` | `ListProperty<String>` | empty, `**/RuntimeLibraries.class` under `so.alaz.taffy.paper-plugin` | Patterns other conventions add, applied in addition to `exclusions` |
+| `conventionExclusions` | `ListProperty<String>` | empty, `**/RuntimeLibraries.class` under `so.alaz.taffy.paper-plugin`, from `0.4.5` also `**/RuntimeLibrariesLoader.class` while `paperPlugin.generateLoader` is on | Patterns other conventions add, applied in addition to `exclusions` |
 
 ```kotlin title="build.gradle.kts"
 coverage {
@@ -325,6 +325,7 @@ The `paperPlugin` extension (`so.alaz.taffy.gradle.PaperPluginExtension`) lists 
 |---|---|---|
 | `runtimeLibraries` | `ListProperty<String>` | Coordinates as `group:name:version` |
 | `runtimeLibrary(library)` | takes `Provider<MinimalExternalModuleDependency>` | Adds a version catalog entry as `group:name:version`, with the version the catalog requires |
+| `generateLoader` | `Property<Boolean>`, `false` unless set | From `0.4.5`. Also generates the `PluginLoader` that reads the coordinates: see [Generated loader](#generated-loader) |
 
 ```kotlin title="build.gradle.kts"
 dependencies {
@@ -386,7 +387,7 @@ The paperPlugin.runtimeLibraries entry "org.junit.platform:junit-platform-launch
 
 The Aether forms with an extension or a classifier, `group:name:extension:version` and `group:name:extension:classifier:version`, pass the check and are written as they are.
 
-The build does not register a loader. The plugin writes a Paper `PluginLoader` in the group package that hands the coordinates to Paper's `MavenLibraryResolver`:
+The build does not register a loader. The plugin writes a Paper `PluginLoader` in the group package that hands the coordinates to Paper's `MavenLibraryResolver`, or from `0.4.5` has the build [generate it](#generated-loader):
 
 ```java title="src/main/java/com/example/myplugin/MyPluginLoader.java"
 package com.example.myplugin;
@@ -426,6 +427,64 @@ paperPlugin.runtimeLibraries lists 4 libraries and src/main/resources/paper-plug
 Before `0.4.1`, such a build passed, with tests green on the `testRuntimeOnly` copies of the libraries, and the plugin failed on the server with a `NoClassDefFoundError` such as `com/zaxxer/hikari/HikariConfig`. The check reads only the key: it does not look at the class the key names. It does nothing while the list is empty, and nothing when the main resources hold no `paper-plugin.yml`.
 
 HikariCP and the drivers in the catalog are published on Maven Central, and `MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR` is the Maven Central address Paper's API provides for a loader. The loader class is plugin code under the coverage gate like any other class; the `coverage` example above excludes it. Paper's documentation on [plugin loaders](https://docs.papermc.io/paper/dev/getting-started/paper-plugins/) covers the loader itself.
+
+### Generated loader
+
+From `0.4.5`, the build can write the loader class. `generateLoader` is off unless the build sets it:
+
+```kotlin title="build.gradle.kts"
+paperPlugin {
+    runtimeLibrary(alaz.hikari)
+    runtimeLibrary(alaz.sqlite.jdbc)
+    generateLoader.set(true)
+}
+```
+
+With runtime libraries listed, `generateRuntimeLibraries` then writes a second file beside `RuntimeLibraries.java`, in the same package. With `group=com.example.myplugin` it generates:
+
+```java title="build/generated/sources/runtimeLibraries/java/main/com/example/myplugin/RuntimeLibrariesLoader.java"
+package com.example.myplugin;
+
+import io.papermc.paper.plugin.loader.PluginClasspathBuilder;
+import io.papermc.paper.plugin.loader.PluginLoader;
+import io.papermc.paper.plugin.loader.library.impl.MavenLibraryResolver;
+import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.graph.Dependency;
+import org.eclipse.aether.repository.RemoteRepository;
+
+/** Generated at build time. Do not edit. */
+final class RuntimeLibrariesLoader implements PluginLoader {
+
+    /** Has Paper download {@link RuntimeLibraries#COORDINATES} from its Maven Central mirror. */
+    @Override
+    public void classloader(PluginClasspathBuilder classpathBuilder) {
+        MavenLibraryResolver resolver = new MavenLibraryResolver();
+        resolver.addRepository(new RemoteRepository.Builder(
+            "central", "default", MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR).build());
+        for (String coordinates : RuntimeLibraries.COORDINATES) {
+            resolver.addDependency(new Dependency(new DefaultArtifact(coordinates), null));
+        }
+        classpathBuilder.addLibrary(resolver);
+    }
+}
+```
+
+The plugin deletes its own loader class and names the generated one. The build still writes no descriptor key:
+
+```yaml title="src/main/resources/paper-plugin.yml"
+loader: com.example.myplugin.RuntimeLibrariesLoader
+```
+
+What the setting changes, and what it leaves alone:
+
+- **The class is always `<group>.RuntimeLibrariesLoader`.** It is package-private, like `RuntimeLibraries`: Paper makes the constructor of the class under `loader` accessible before it calls it. Its name and package cannot be set.
+- **One repository.** The loader gives the resolver Paper's Maven Central mirror and nothing else. A library published elsewhere needs a loader the plugin writes in the group package, which can call `new RuntimeLibrariesLoader().classloader(classpathBuilder)` and then add a resolver of its own.
+- **paper-api on the compile classpath.** The class compiles with the plugin's other sources, so the build needs `compileOnly(alaz.paper.api)`. `compileAgainstPaperFloor` compiles it too: `MavenLibraryResolver.MAVEN_CENTRAL_DEFAULT_MIRROR` is in the oldest supported paper-api.
+- **Outside the coverage gate.** While the setting is on, `**/RuntimeLibrariesLoader.class` is in `coverage.conventionExclusions`.
+- **The `loader` key is still checked, and only the key.** With the key missing, `verifyPluginLoader` fails with the line to add: `Add loader: com.example.myplugin.RuntimeLibrariesLoader, the PluginLoader class paperPlugin.generateLoader generates`. A key that names another class passes, and Paper then runs that class, not the generated one.
+- **No libraries, no loader.** With an empty `runtimeLibraries`, neither class is generated. A `loader` key that still names `<group>.RuntimeLibrariesLoader` then fails `verifyPluginLoader`, with a message that says to remove the key or list a library, so the build does not produce a jar Paper cannot load. The check reads a plain or quoted value on the line of the key or on the line after it.
+
+A build that leaves `generateLoader` off generates the same source and builds the same jar as on `0.4.4`.
 
 <Callout type="error" title="Never list the metrics SDKs">
 bStats and FastStats come as runtime dependencies of `taffy-metrics` and are shaded and relocated. Listing `alaz.bstats.bukkit` or `alaz.faststats.bukkit` as a runtime library makes Paper load an unrelocated copy.

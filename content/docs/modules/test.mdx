@@ -431,7 +431,7 @@ Behaviour:
 - The faults are shared by every connection the data source opened, those opened before a fault was armed included.
 - The JDBC driver for the URL must be on the test runtime classpath. `taffy-test` brings none.
 - Closing a wrapper closes the connection it wraps. `kill()` closes nothing: a wrapped data source and the connections already taken from it stay open until the test closes them, and after a kill the wrapped data source is asked for no further connection.
-- `getLogWriter()` is `null`, `getLoginTimeout()` is 0 and the setters do nothing, also over a wrapped data source. `unwrap` returns the data source itself for a type it implements and throws `SQLException` otherwise. From `0.4.5`, over a wrapped data source `unwrap` and `isWrapperFor` also answer for that data source, so `unwrap(HikariDataSource.class)` returns a wrapped pool.
+- `getLogWriter()` is `null`, `getLoginTimeout()` is 0 and the setters do nothing, also over a wrapped data source. `unwrap` returns the data source itself for a type it implements and throws `SQLException` otherwise. From `0.4.5`, over a wrapped data source `unwrap` and `isWrapperFor` also answer for that data source and, for any other type, pass the question on to it, so `unwrap(HikariDataSource.class)` returns a wrapped pool and a type the pool unwraps to, such as its driver data source, is still reached. `isWrapperFor` is `false` when the wrapped data source throws. No other method calls the wrapped data source: `createConnectionBuilder()` and `createShardingKeyBuilder()` are the JDK defaults, which throw `SQLFeatureNotSupportedException`.
 
 ## JvmDefaults
 
@@ -691,7 +691,7 @@ The fixtures are a variant in the Gradle module metadata of `taffy-platform`, so
 | `tags()` | The tag of every dispatch so far in call order, those refused, dropped or still held included. A copy that does not change. |
 | `hold()` | Queues every task dispatched from now until `runHeld()`. A held task's future stays incomplete. |
 | `held()` | The number of tasks held now. |
-| `runHeld()` | Runs the held tasks on the calling thread in dispatch order and ends the hold, also for a task a held task dispatches. With nothing held it does nothing, and leaves a dispatcher that refuses or drops as it is. |
+| `runHeld()` | Runs the held tasks on the calling thread in dispatch order and ends the hold, also for a task a held task dispatches. With no task held it runs nothing: it still ends a hold, and leaves a dispatcher that refuses or drops as it is. |
 | `refuse()` | Refuses every dispatch from now, and the tasks held now: none runs, and each future completes with `RejectedExecutionException` for `ThreadTag.GLOBAL` and `ThreadTag.ASYNC`, or with an `EntityUnavailableException` carrying the id for an entity tag. |
 | `drop()` | Accepts every dispatch from now without running its task or completing its future, and forgets the tasks held now the same way. |
 

@@ -1021,6 +1021,11 @@ call to write and no `listener()` method. It also starts a load for every player
 path as a join, so a plugin enabled while players are online has their values too. Build it while the plugin is
 enabled, such as in `onEnable`, on the thread that enables the plugin.
 
+On Folia a quit is handled on a region thread while the constructor runs on another. A player who was online and
+whose quit is handled before the constructor reaches them keeps an entry, with its value or the retries of its
+failed load, until that player joins or quits again or the cache is closed. It takes a plugin enabled while
+players are online, and cannot happen on Paper, where the quit and the constructor share the main thread.
+
 | Method | What it does |
 |---|---|
 | `get(UUID player)` | An `Optional` of the value of the player's last load that succeeded since they joined. |
@@ -1044,7 +1049,9 @@ if (balance.isEmpty()) {
 
 The join starts the load at `EventPriority.LOWEST` and the loader runs on an async thread, so the value is not
 there yet in the plugin's own `PlayerJoinEvent` handler. The quit forgets the player at `EventPriority.MONITOR`,
-after the plugin's own quit handlers have read the value.
+so a quit handler of the plugin at any lower priority still reads the value. A quit handler at `MONITOR` reads it
+only when its listener was registered before the cache was built, because the server calls the handlers of one
+priority in the order they were registered.
 
 The values are read from any thread while a load may replace them, so `T` is immutable or thread-safe: a record
 of immutable fields, or a `Map.copyOf`.
@@ -1085,9 +1092,49 @@ The cache does not load at `AsyncPlayerPreLoginEvent`, does not save a value at 
 lets the next join read it. `close()` may run at any point of the [disable order](#disable-order): it waits for
 nothing.
 
+### Testing a plugin that uses it
+
 In a plugin test, pass a [`FakeDispatcher`](/docs/modules/test#fakedispatcher) and a timer that collects its
 tasks, so the test decides when a load and a retry run. The constructor still needs a `Plugin` whose server has
-a plugin manager, which the test mocks.
+a plugin manager, which the test mocks. A player the mocked server lists in `getOnlinePlayers()` is loaded when
+the cache is built.
+
+A join or a quit reaches the cache only through the listener it registers, and the class of that listener is
+not public, so a test cannot call its handlers directly. Capture the listener from the mocked plugin manager and
+run a handler through Paper's `EventExecutor`, as the server does. The handlers are named `onJoin` and `onQuit`:
+
+```java title="BalanceCacheTest.java"
+Plugin plugin = mock(Plugin.class);
+Server server = mock(Server.class);
+PluginManager manager = mock(PluginManager.class);
+when(plugin.getServer()).thenReturn(server);
+when(plugin.getLogger()).thenReturn(Logger.getLogger("test"));
+when(server.getPluginManager()).thenReturn(manager);
+
+FakeDispatcher dispatcher = new FakeDispatcher();
+List<Runnable> retries = new ArrayList<>();
+PlayerCache<Balance> balances = new PlayerCache<>(plugin, new ErrorReports(), dispatcher,
+    (task, delay) -> retries.add(task), uuid -> CompletableFuture.completedFuture(new Balance(5)));
+
+ArgumentCaptor<Listener> registered = ArgumentCaptor.forClass(Listener.class);
+verify(manager).registerEvents(registered.capture(), same(plugin));
+Listener listener = registered.getValue();
+
+Player player = mock(Player.class);
+UUID uuid = UUID.randomUUID();
+when(player.getUniqueId()).thenReturn(uuid);
+
+EventExecutor.create(listener.getClass().getDeclaredMethod("onJoin", PlayerJoinEvent.class), PlayerJoinEvent.class)
+    .execute(listener, new PlayerJoinEvent(player, Component.empty()));
+assertThat(balances.get(uuid)).contains(new Balance(5));
+
+EventExecutor.create(listener.getClass().getDeclaredMethod("onQuit", PlayerQuitEvent.class), PlayerQuitEvent.class)
+    .execute(listener, new PlayerQuitEvent(player, Component.empty(), PlayerQuitEvent.QuitReason.DISCONNECTED));
+assertThat(balances.ready(uuid)).isFalse();
+```
+
+`EventExecutor` is `org.bukkit.plugin.EventExecutor` of paper-api. A plain `Method.invoke` on the handler fails
+with an `IllegalAccessException`, because the listener class is not public.
 
 ## Logging
 

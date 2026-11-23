@@ -159,7 +159,7 @@ paperPlugin {
 }
 ```
 
-A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. From `0.4.1`, the build fails when a library is listed and `paper-plugin.yml` has no `loader` key. [Gradle plugins](/docs/gradle-plugins#runtime-libraries) shows the loader class and the `loader` line, and [Storage](/docs/modules/storage) the libraries each database needs. bStats and FastStats are never runtime libraries: they are shaded and relocated.
+A non-empty list generates `RuntimeLibraries` in the group's package, a package-private class whose `COORDINATES` field holds each library as `group:name:version`, in the order listed. The plugin's own `PluginLoader`, declared as `loader` in `paper-plugin.yml` and placed in the same package, reads it and hands the coordinates to Paper's library resolver. From `0.4.1`, the build fails when a library is listed and `paper-plugin.yml` has no `loader` key. From `0.4.5`, `generateLoader.set(true)` in the `paperPlugin` block has the build write that loader as `RuntimeLibrariesLoader` in the same package, and the plugin writes only the `loader` line that names it. [Gradle plugins](/docs/gradle-plugins#runtime-libraries) shows the loader class and the `loader` line, and [Storage](/docs/modules/storage) the libraries each database needs. bStats and FastStats are never runtime libraries: they are shaded and relocated.
 
 </Step>
 <Step>
