@@ -528,7 +528,7 @@ void pay(UUID player, BigDecimal amount) {
 }
 ```
 
-`current()` gives the latest `Detected<EconomyProvider>` and is safe to read from any thread. `close()` unregisters the listener and stops every later lookup, the one on the first tick included; `current()` then keeps the last result. Close the watch before starting another, as in a reload command. The server unregisters the listener itself when the plugin disables. Options that are switched off register nothing and schedule nothing, and `current()` reads `SWITCHED_OFF`. When the scheduler refuses the first-tick task, which it does while the plugin is not enabled, one warning is logged.
+`current()` gives the latest `Detected<EconomyProvider>` and is safe to read from any thread. `close()` unregisters the listener and stops every later lookup, the one on the first tick included; `current()` then keeps the last result. Close the watch before starting another, as in a reload command. The server unregisters the listener itself when the plugin disables. Options that are switched off register nothing and schedule nothing, and `current()` reads `SWITCHED_OFF`. Call `watchVault` in `onEnable` or later: the server registers a listener only for a plugin that is enabled, so with options that are switched on, a call before the plugin is enabled or once it is disabled throws `IllegalStateException` before anything is looked up, logged or registered. When the scheduler still refuses the first-tick task, one warning is logged.
 
 ### EconomyProvider
 
@@ -623,8 +623,11 @@ Detection follows the [states](#detection-and-status) of every other integration
 **Async only.** PlayerPoints loads a balance that is not in its cache from its database on the calling thread, so every call belongs off the server threads. `balance`, `has`, `withdraw` and `deposit` throw `IllegalStateException` on a thread `Server.isPrimaryThread()` is `true` on: the main thread on Paper, and every region thread and the global region thread on Folia. The message names `thread(player)` and `Scheduler.dispatch`, as the [Vault provider's](#the-thread-rule) does, and no points move. `scale()`, `thread(UUID)`, `probe()` and detection are not checked. PlayerPoints declares Folia support, and its calls are safe on an async thread on both Paper and Folia: its `PlayerPointsChangeEvent` is fired as an asynchronous event there.
 
 ```java
-scheduler.dispatch(points.thread(player), () -> points.withdraw(player, price))
-    .thenAccept(result -> { /* hop back to the player's thread before touching the world */ });
+EconomyProvider money = points.provider();
+if (money != null) {
+    scheduler.dispatch(money.thread(player), () -> money.withdraw(player, price))
+        .thenAccept(result -> { /* hop back to the player's thread before touching the world */ });
+}
 ```
 
 **One withdraw at a time per player.** PlayerPoints checks a balance and queues the change in two steps, so the provider runs its withdraws for one player one after the other, from the balance read through `start` to the take. Two purchases at once cannot both pass the balance check. `start` runs while the other withdraws for that player wait, so it must not wait for a withdraw of another player. A change another plugin makes to the same account is not held back.
@@ -925,13 +928,13 @@ placeholders = new PlaceholderExpansionBuilder()
     .register(this, errors, true);
 ```
 
-- A prefix holds the same characters as a name, and is written without the `_` that ends it. A later prefix placeholder of the same kind and prefix replaces the earlier one.
+- A prefix holds the same characters as a name, and is written without the `_` that ends it: a prefix that ends with `_`, such as `keys_`, throws `IllegalArgumentException`. A later prefix placeholder of the same kind and prefix replaces the earlier one.
 - In PlaceholderAPI a placeholder registered by its whole name answers first, so `player("keys_vote", ...)` wins over the prefix `keys` for `%shop_keys_vote%`. After the whole names, the longest prefix that fits answers: with the prefixes `keys` and `keys_virtual`, `%shop_keys_virtual_vote%` gives `vote` to `keys_virtual`. No shorter prefix is asked when that handler gives no value.
 - A global prefix wins over an offline or player one of the same prefix, and an offline one over a player one, as with whole names.
 - The rest is passed as written, in the case it was typed in, and is empty for `%shop_keys_%`. `%shop_keys%` alone is not answered by the prefix.
 - In MiniPlaceholders the prefix is the tag and the rest is its argument: `<shop_keys:vote>`. Several arguments are joined with `:`, so `<shop_keys:a:b>` gives `a:b`. The tag without an argument, `<shop_keys>`, goes to the placeholder registered under that whole name, when there is one, and otherwise gives no value. An offline prefix is not registered with MiniPlaceholders.
 - The rest is text whoever wrote the placeholder chose, which can be a player. Check it against what the plugin knows, such as its crate ids, before using it, and return `null` for anything else.
-- A handler that throws gives no value, and the failure is logged at most once a minute per prefix.
+- A handler that throws gives no value, and the failure is logged as `The prefix placeholder shop_keys_ failed`, at most once a minute per prefix and apart from a placeholder registered under the whole name `keys`.
 
 ### PlaceholderCache
 
@@ -958,9 +961,11 @@ private @Nullable String salesText(OfflinePlayer player) {
 - The cache owns no thread. `refresh` is called on the thread that called `get`, so it only starts the work and returns its future: a `Scheduler.dispatch`, or a storage call that already returns a `CompletableFuture`. The value is stored on the thread that completes the future.
 - A stale value is still returned while its refresh runs, so a reader sees the old value until the new one arrives.
 - A refresh fails when `refresh` throws or returns `null`, or when its future completes with a failure, such as a `Scheduler.dispatch` to a player who has just quit. The last known value is kept, the next refresh of that key starts no sooner than one `timeToLive` later, and the failure is logged at most once a minute for the whole cache, with its stack the first time. It is not reported to `ErrorReports`.
-- A future that never completes stops further refreshes of its key until `forget` or `clear`.
-- The cache keeps at most `maximumEntries` keys, counting a key whose first refresh still runs. A new key beyond that drops the key asked for longest ago.
-- A refresh that completes after its key was dropped stores nothing.
+- A future that never completes stops further refreshes of its key, and keeps the key in the cache, until `forget` or `clear`.
+- An `Error` other than a `LinkageError` that `refresh` throws leaves `get` and is not logged by the cache. The key is otherwise treated as after a failed refresh.
+- The cache keeps at most `maximumEntries` keys, counting a key whose first refresh still runs. A new key beyond that drops the key asked for longest ago among the keys with no refresh running, so a refresh that runs is never started a second time for its key.
+- While every kept key has a refresh running, a new key is not kept: `get` returns `null` for it and starts no refresh, and a later `get` tries again. Set `maximumEntries` above the number of keys asked for at once, such as the most players a scoreboard or leaderboard shows.
+- A refresh that completes after `forget` or `clear` dropped its key stores nothing.
 - Every method may be called from any thread. Call `forget` from a `PlayerQuitEvent` listener for a cache keyed by player, and `clear` in `onDisable` after `PlaceholderRegistration.unregister`.
 
 ### PlaceholderRegistration
@@ -983,7 +988,8 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | Source | Reported for |
 |---|---|
 | `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, an item that could not be built, and from `0.4.7` an items-loaded callback that threw. |
-| `hook.vault` | A lookup that failed, once per lookup. |
+| `hook.vault` | A lookup that failed, once per lookup. From `0.4.7`, once per change of status when the lookup is given the previous result or runs in a `VaultWatch`. |
+| `hook.playerpoints` | From `0.4.7`. A failed detection. |
 | `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
 | `hook.worldguard` | A failed detection, and every failed lookup. |
 | `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
@@ -1004,7 +1010,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `CustomItems` calls | The thread that owns the item. |
 | `CustomItems.close` | The server thread, before the plugin detects again. |
 | The items-loaded callback of `CustomItems.detect` | From `0.4.7`. Called by Taffy on the thread the item plugin fires its event on: the server thread on Paper, a ticking thread on Folia. |
-| `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. |
+| `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. From `0.4.7` the PlayerPoints provider names `ThreadTag.ASYNC` for every player and throws `IllegalStateException` on the main thread on Paper and on every region thread and the global region thread on Folia. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
 | `BedrockProvider.bedrock` | The thread that asks. `Prompts` asks on the player's entity thread. |
