@@ -5,7 +5,7 @@ description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard,
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
 
-- `CustomItems` builds and reads items of ItemsAdder, Nexo, Oraxen and HeadDatabase.
+- `CustomItems` builds and reads items of ItemsAdder, Nexo, Oraxen and HeadDatabase, and from `0.4.12` of CraftEngine and MMOItems.
 - `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
 - `EconomyProvider.playerPoints` gives PlayerPoints points behind the same interface (from `0.4.7`).
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
@@ -44,6 +44,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Nexo | `com.nexomc:nexo` | `alaz.nexo` |
 | Oraxen | `io.th0rgal:oraxen` | `alaz.oraxen` |
 | HeadDatabase | `com.github.Arcaniax-Development:HeadDatabase-API` | `alaz.headdatabase.api` |
+| CraftEngine (from `0.4.12`) | `net.momirealms:craft-engine-bukkit`, `net.momirealms:craft-engine-core` | `alaz.craftengine.bukkit`, `alaz.craftengine.core` |
+| MMOItems (from `0.4.12`) | `net.Indyuce:MMOItems-API`, `io.lumine:MythicLib-dist` | `alaz.mmoitems.api`, `alaz.mythiclib` |
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
 | PlayerPoints (from `0.4.7`) | `org.black_ixx:playerpoints` | `alaz.playerpoints` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
@@ -56,6 +58,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 
 The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
+
+`0.4.12` is built against CraftEngine `26.10` and against MMOItems-API `6.10.1-SNAPSHOT` with MythicLib `1.7.1-SNAPSHOT`. MMOItems and MythicLib publish only snapshots of their API, so those two catalog versions are snapshot versions. MythicLib is in the catalog because the MMOItems classes extend types of it: a plugin that calls MMOItems itself adds both aliases with `compileOnly`.
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -78,6 +82,12 @@ dependencies:
       load: BEFORE
       required: false
     HeadDatabase:
+      load: BEFORE
+      required: false
+    CraftEngine:
+      load: BEFORE
+      required: false
+    MMOItems:
       load: BEFORE
       required: false
     Vault:
@@ -118,7 +128,7 @@ dependencies:
       required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `CraftEngine` and `MMOItems` (both from `0.4.12`), `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
 
 A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
@@ -312,14 +322,18 @@ The constants run in resolution order:
 | `NEXO` | `Nexo` | `nexo` | |
 | `ORAXEN` | `Oraxen` | `oraxen` | |
 | `HEADDATABASE` | `HeadDatabase` | `headdatabase` | `hdb` |
+| `CRAFTENGINE` (from `0.4.12`) | `CraftEngine` | `craftengine` | |
+| `MMOITEMS` (from `0.4.12`) | `MMOItems` | `mmoitems` | |
 
-From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `CustomItemPlugin` needs a `default` branch. A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects an added plugin from the release that adds it. [Upgrading](/docs/upgrading-from-0-1#customitemplugin-may-gain-a-constant) shows the change to a `switch`.
+From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `CustomItemPlugin` needs a `default` branch. `0.4.12` adds `CRAFTENGINE` and `MMOITEMS` at the end of the order. A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects an added plugin from the release that adds it. [Upgrading](/docs/upgrading-from-0-1#customitemplugin-may-gain-a-constant) shows the change to a `switch`.
 
 `CustomItemPlugin.byKey(String hint)` finds a plugin by key or alias, ignoring case and surrounding white space, and returns `null` for `null`, blank or unknown text.
 
 ### Ids and references
 
-An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`, and from `0.3.1` also `gems:ruby`).
+An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`, and from `0.4.12` `craftengine:default:topaz` and `mmoitems:SWORD:CUTLASS`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`, and from `0.3.1` also `gems:ruby`).
+
+From `0.4.12`, a reference that starts with `craftengine:` or `mmoitems:` names that plugin and goes only to it, and `hasKnownProvider()` is `true` for it. Before `0.4.12` neither key names a plugin, so such a reference is offered whole to each plugin, as the next paragraphs describe.
 
 `CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config. The second message holds from `0.3.1`; before it, `create` returns `null` for such a reference without asking any plugin:
 
@@ -372,7 +386,7 @@ if (found.id() != null) {
 | `statuses()` | One `HookStatus` per `CustomItemPlugin`, read now: `LOADING`, `ON` or `NOT_ENABLED` for a plugin that is on, the detected state for every other. |
 | `close()` | From `0.3.1`. Unregisters every listener `detect` registered for the owner. A second call does nothing. |
 
-A plugin that is on but no longer enabled is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that is still loading its items is skipped by `create`. In `resolve`, ItemsAdder is skipped while it loads and counts as a failure, because it reads ids from the items it has loaded; from `0.3.1`, Nexo and Oraxen can also be loading, and `resolve` still asks them, because they read the id from the item's own data. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
+A plugin that is on but no longer enabled is skipped by `create` and `resolve`, and counts as a failure in `resolve`. A plugin that is still loading its items is skipped by `create`. In `resolve`, ItemsAdder is skipped while it loads and counts as a failure, because it reads ids from the items it has loaded; from `0.3.1`, Nexo and Oraxen can also be loading, and `resolve` still asks them, because they read the id from the item's own data, as CraftEngine does from `0.4.12`. A plugin that throws is skipped with a warning (at most once a minute, with its stack the first time). In `create` the failure is also reported to `ErrorReports` under `hook.<key>`, such as `hook.nexo`; in `resolve` it is not reported.
 
 ### Why no item was built
 
@@ -410,6 +424,9 @@ A later version may add reasons, so a `switch` over `Built.Reason` keeps a `defa
 - **Nexo** and **Oraxen** read an item's id from the item's own data, so ids are read before the plugin has loaded its items. From `0.3.1`, Nexo is `LOADING` until it fires `NexoItemsLoadedEvent` and Oraxen until it fires `OraxenItemsLoadedEvent`, or `ON` at once when the plugin already knows an item name at detection, which is the usual case for Oraxen, since it loads its items while it enables. While one of them is `LOADING`, `create` skips it, `build` gives `NOT_READY` and `ready()` is `false`, and `resolve` and `idOrNull` still read its ids. Each integration registers a listener for the owner, as the ItemsAdder one does. A `detect` that follows an items-loaded event an earlier `detect` of the same plugin heard in this server run reads `ON` at once. With no such event heard, a Nexo or Oraxen that loaded with no item at all knows no item name, so after a `detect` that follows its load it reads `LOADING` until its next items-loaded event.
 - **HeadDatabase** only builds heads: `hdb:1234` builds head `1234`. It is never asked for an id and never counts as a failure in `resolve`. It knows no id until it has loaded its database shortly after startup, so `create` returns `null` until then. From `0.3.1`, it is `LOADING` until it fires `DatabaseLoadEvent` when it gives no random head at detection: `create` skips it, `build` gives `NOT_READY` and `ready()` is `false` until then, where before `0.3.1` it read `ON` and `ready()` read `true` during the load. Its integration registers a listener for the owner, as the ItemsAdder one does. A `detect` that follows a `DatabaseLoadEvent` an earlier `detect` of the same plugin heard in this server run reads `ON` at once. HeadDatabase has no query for whether its database is loaded, so any other `detect` asks it for a random head and reads `ON` at once when it gives one. A database that holds no head gives none, so it then reads `LOADING` until its next `DatabaseLoadEvent`.
 
+- **CraftEngine** (from `0.4.12`, built against CraftEngine `26.10`) has ids of the form `<namespace>:<id>`: `craftengine:default:topaz` builds the item `default:topaz` through `CraftEngineItems.byId`, and `resolve` reads the id back through `CraftEngineItems.getCustomItemId`, which reads it from the item's own data. An id without a colon, or with nothing before or after its first colon, names no item, like an id CraftEngine does not know: `create` returns `null` and `build` gives `UNKNOWN_ID`. CraftEngine finishes its first load after the server has started, so at a plugin's `onEnable` it is `LOADING`: `create` skips it, `build` gives `NOT_READY` and `ready()` is `false`, while `resolve` and `idOrNull` still read its ids. It is `ON` from its `CraftEngineReloadEvent`, which it fires at the end of its first load and of every reload. A `detect` that runs later reads `ON` at once when CraftEngine says it is fully loaded (`CraftEngine.isFullyLoaded()`), or when an earlier `detect` in this server run heard that event. A CraftEngine without that flag, such as `26.6`, logs one warning at detection and is `LOADING` until the event. Its integration registers a listener for the owner, as the ItemsAdder one does. Call `create` and `resolve` on the thread that owns the item.
+- **MMOItems** (from `0.4.12`, built against MMOItems-API `6.10.1-SNAPSHOT`) has ids of the form `<type>:<id>`: `mmoitems:SWORD:CUTLASS` builds the item `CUTLASS` of the type `SWORD` through `MMOItems.getItem(String, String)`, with no player, level or tier. The type and the id are matched exactly as MMOItems holds them. It holds its types, and the ids it reads from its files, in upper case, so `mmoitems:sword:cutlass` names no item. A type that does not exist, an id the type does not hold, and an id without a colon or with nothing before or after its first colon all name no item: `create` returns `null` and `build` gives `UNKNOWN_ID`. `resolve` reads the type and the id from the item's own NBT through `MMOItems.getTypeName` and `MMOItems.getID` and gives `mmoitems:<type>:<id>`, and an item that lacks either is not an MMOItems item. MMOItems reads its types and items while it loads and enables, so it is never `LOADING`: it is `ON` from detection. MMOItems does not run on Folia, and its items are built and read on the server thread. Its integration registers a listener for the owner, for the [callback](#when-an-item-plugin-loads-or-reloads-its-items).
+
 `CustomItems` is immutable and thread-safe. Each call runs the integration plugins on the calling thread, so call it on the thread that owns the item. It stays immutable when an item plugin reloads its items: `ready()` keeps reading `true` during the reload, and from `0.4.7` a [callback](#when-an-item-plugin-loads-or-reloads-its-items) tells the plugin when the reload is over.
 
 ### Detecting again
@@ -423,7 +440,7 @@ void reloadItems() {
 }
 ```
 
-Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo, Oraxen and HeadDatabase listeners, and a `detect` without it leaves one more listener for each of the four whose integration is on. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
+Before `0.3.1` there is no `close()`, and each further `detect` leaves one more ItemsAdder listener registered until the plugin disables. From `0.3.1`, `close()` also unregisters the Nexo, Oraxen and HeadDatabase listeners, and from `0.4.12` the CraftEngine and MMOItems ones, and a `detect` without it leaves one more listener for each plugin whose integration is on. A closed `CustomItems` keeps answering, but a plugin that was still loading its items stays `LOADING` in it, because the event that ends its load is no longer heard. The server unregisters the listeners itself when the plugin disables, so `onDisable` needs no `close()`.
 
 ### When an item plugin loads or reloads its items
 
@@ -437,7 +454,7 @@ if (items.ready()) {
 }
 ```
 
-The callback runs inside the event the item plugin fires, in the integration's `MONITOR` listener, on the thread the item plugin fires it on. All four are synchronous events, which Paper has a plugin fire on the server thread and Folia on a ticking thread, without saying which one. So the callback only hands the work on, as `Scheduler.global` does above, and builds nothing itself. By the time it runs, the plugin it names counts as loaded: `build` asks it and its status is `ON`. `ready()` can still be `false` then, when another plugin is still loading.
+The callback runs inside the event the item plugin fires, in the integration's `MONITOR` listener, on the thread the item plugin fires it on. Each is a synchronous event, which Paper has a plugin fire on the server thread and Folia on a ticking thread, without saying which one. So the callback only hands the work on, as `Scheduler.global` does above, and builds nothing itself. By the time it runs, the plugin it names counts as loaded: `build` asks it and its status is `ON`. `ready()` can still be `false` then, when another plugin is still loading.
 
 | Plugin | Event | Fires |
 |---|---|---|
@@ -445,8 +462,14 @@ The callback runs inside the event the item plugin fires, in the integration's `
 | Nexo | `NexoItemsLoadedEvent` | At the end of every load of its items: the first one, and each time Nexo's reload command reloads them. |
 | Oraxen | `OraxenItemsLoadedEvent` | Once after Oraxen has enabled, and each time Oraxen's reload command reloads its items. |
 | HeadDatabase | `DatabaseLoadEvent` | When HeadDatabase has loaded its database, shortly after startup. HeadDatabase does not say whether a later refresh of the database fires it again. |
+| CraftEngine (from `0.4.12`) | `CraftEngineReloadEvent` | At the end of its first load, after the server has started, and at the end of every reload. |
+| MMOItems (from `0.4.12`) | `MMOItemsReloadEvent` | When MMOItems' reload command starts, before it reads its files again. Not at startup. |
 
-Every supported plugin has such an event, so none goes without a notice. The Nexo and Oraxen rows are read from Nexo 1.30.2 and Oraxen 1.220.1. ItemsAdder and HeadDatabase publish only the signatures of their API, so their rows follow what each documents.
+Every supported plugin has such an event, so none goes without a notice. The Nexo and Oraxen rows are read from Nexo 1.30.2 and Oraxen 1.220.1, and the CraftEngine and MMOItems rows from CraftEngine 26.10 and MMOItems-API 6.10.1-SNAPSHOT. ItemsAdder and HeadDatabase publish only the signatures of their API, so their rows follow what each documents.
+
+<Callout type="warn" title="MMOItems is announced before its reload, not after">
+MMOItems has no event for the end of a load. It fires `MMOItemsReloadEvent` on the server thread first, then reads its files again, and has read them by the time its reload command returns. While the callback runs, MMOItems still builds the items of before the reload. Work the callback hands on to a later tick, as `Scheduler.global` does above, finds the reloaded ones.
+</Callout>
 
 - A plugin that had loaded its items before `detect` is not announced until its next reload. `ready()` on the result covers the load that is already over, as the example shows.
 - A callback that throws does not stop the event: the failure is logged at most once a minute per item plugin, with its stack the first time, and reported under `hook.<key>`, such as `hook.nexo`.
@@ -1089,7 +1112,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 
 | Source | Reported for |
 |---|---|
-| `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase` | A failed detection, an item that could not be built, and from `0.4.7` an items-loaded callback that threw. |
+| `hook.itemsadder`, `hook.nexo`, `hook.oraxen`, `hook.headdatabase`, and from `0.4.12` `hook.craftengine` and `hook.mmoitems` | A failed detection, an item that could not be built, and from `0.4.7` an items-loaded callback that threw. |
 | `hook.vault` | A lookup that failed, once per lookup. From `0.4.7`, once per change of status when the lookup is given the previous result or runs in a `VaultWatch`. |
 | `hook.playerpoints` | From `0.4.7`. A failed detection. |
 | `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
