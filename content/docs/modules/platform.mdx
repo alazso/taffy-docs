@@ -16,6 +16,7 @@ All classes live in one package, `so.alaz.taffy.platform`.
 | Text | `Text`, `Messages`, `LegacyText` |
 | Items | `ItemBuilder`, `SkullBuilder`, `Items`, `InventoryFit`, `PdcKey`, `Colors`, `Sounds` |
 | Time | `Durations`, `Expiry`, `CooldownManager` |
+| Amounts | `AmountFormat`, `Amounts`, from `0.4.6` |
 | Players | `PlayerCache`, from `0.4.5` |
 | Logging | `ThrowLog`, `Classes` |
 | Discord | `DiscordWebhook`, `WebhookPayload` |
@@ -1055,6 +1056,113 @@ An expired cooldown stays in memory until its key is read, started again or exte
 `purgeExpired()` removes every expired cooldown and returns how many it removed, for keys that are not read again,
 such as those of players who left. It removes them key by key, so a cooldown started while it runs is kept. Call it
 from a repeating task, on any thread.
+
+## Amounts
+
+From `0.4.6`, `AmountFormat` writes an amount of money for a player and `Amounts` reads one a player typed. Both
+work on `BigDecimal` and never on a `double`.
+
+### AmountFormat
+
+`AmountFormat` is a record of a symbol, an optional number pattern and a scale: the decimal places of the currency,
+from 0 to `AmountFormat.MAX_SCALE` (18). The constructor throws `NullPointerException` for a `null` symbol and
+`IllegalArgumentException` for a scale outside that range or a pattern `checkPattern` refuses.
+
+```java
+AmountFormat coins = new AmountFormat("$", null, economy.scale());
+
+coins.format(new BigDecimal("1250.5"), player.locale());   // $1,250.50, or $1.250,50 for a German client
+coins.number(new BigDecimal("1250.5"), player.locale());   // 1,250.50
+```
+
+| Method | Behaviour |
+|---|---|
+| `number(BigDecimal, Locale)` | the number alone, with the digits, the separators and the minus sign of the locale |
+| `format(BigDecimal, Locale)` | the symbol directly before that number; with an empty symbol, the number alone |
+| `checkPattern(String)` | the pattern, or `IllegalArgumentException` with `invalid number pattern '<value>': expected ` followed by `AmountFormat.EXPECTED` |
+
+Use `number` when a language line places the symbol or the currency name itself.
+
+The pattern is a `java.text.DecimalFormat` pattern such as `#,##0.00`, in which `,` and `.` stand for the grouping
+and decimal separators of the player's locale. With `null` for the pattern the number has grouped whole digits and
+exactly `scale` decimal places. With a pattern it has the decimal places the pattern allows, or `scale` when that is
+more, so an amount is never shown with fewer decimal places than it holds up to the scale:
+
+| Pattern | Scale | `1500` | `1500.25` | `1500.255` |
+|---|---|---|---|---|
+| `null` | 2 | `1,500.00` | `1,500.25` | `1,500.26` |
+| `#,##0` | 2 | `1,500` | `1,500.25` | `1,500.26` |
+| `#,##0.##` | 4 | `1,500` | `1,500.25` | `1,500.255` |
+| `0.000` | 2 | `1500.000` | `1500.250` | `1500.255` |
+
+An amount with more decimal places than that is rounded with `RoundingMode.HALF_EVEN`, so `0.125` is `0.12` and
+`0.135` is `0.14` at two places. An amount that rounds to zero is written without a minus sign: `-0.004` is `0.00`.
+
+`checkPattern` is for a pattern an owner writes in config. It refuses a `null` or blank pattern, one `DecimalFormat`
+refuses, and one that holds `%`, the per mille sign, the currency sign `¤` or `E`, quoted or not: those make
+`DecimalFormat` multiply the amount, add the currency symbol of the locale or write an exponent. It does not trim
+the pattern.
+
+```java
+String pattern = reader.parsed("currency.format", "#,##0.00", AmountFormat.EXPECTED, AmountFormat::checkPattern);
+AmountFormat coins = new AmountFormat(reader.text("currency.symbol", "$"), pattern, economy.scale());
+```
+
+An `AmountFormat` holds no `DecimalFormat`, which is not thread-safe: each call builds its own, so one
+`AmountFormat` can be used from any thread.
+
+### Amounts
+
+`Amounts.parse(String input, Locale locale, BigDecimal maximum)` reads an amount a player typed in chat, an anvil
+or a command, from zero to `maximum`.
+
+```java
+Locale locale = player.locale();
+switch (Amounts.parse(typed, locale, new BigDecimal("1000000000"))) {
+    case Amounts.Amount amount ->
+        list(player, amount.value().setScale(economy.scale(), RoundingMode.HALF_EVEN));
+    case Amounts.Refused refused -> {
+        String key = "price.refused." + refused.reason().name().toLowerCase(Locale.ROOT);
+        player.sendMessage(messages.render(locale, key));
+    }
+}
+```
+
+The accepted form is the digits `0` to `9` with at most one decimal separator and a digit on at least one side of
+it, then nothing or one of `k` (a thousand), `m` (a million) and `b` (a thousand million) in either letter case.
+Whitespace around the input is ignored. The decimal separator is that of the locale, and a full stop is read as
+one too unless the locale groups with it.
+
+| Input | `en-US` | `de-DE` |
+|---|---|---|
+| `1500` | `1500` | `1500` |
+| `2.5` | `2.5` | `GROUPING_SEPARATOR` |
+| `2,5` | `GROUPING_SEPARATOR` | `2.5` |
+| `1k`, `1K`, ` 1k ` | `1000` | `1000` |
+| `2.5m` | `2500000` | `GROUPING_SEPARATOR` |
+| `1b` | `1000000000` | `1000000000` |
+| `1,000` | `GROUPING_SEPARATOR` | `1` |
+| `-5`, `-0` | `NEGATIVE` | `NEGATIVE` |
+| `+5`, `1e9`, `1kk`, `1 k`, `0x10`, `k`, `1.5.5k`, `NaN` | `NOT_A_NUMBER` | `NOT_A_NUMBER` |
+
+The result is an `Amounts.Amount` or an `Amounts.Refused`. `Amount.value()` is exact: the digits are multiplied by
+the suffix with no rounding, so `0.0001k` is `0.1`, and the value keeps every decimal place the player typed, with
+no trailing zero. Round it to the scale of the currency before it is used. An input equal to `maximum` is accepted,
+and a `maximum` below zero throws `IllegalArgumentException`.
+
+`Refused.reason()` tells the plugin which of its own messages to show. The reasons are checked in this order:
+
+| `Amounts.Reason` | The input |
+|---|---|
+| `EMPTY` | is empty or only whitespace |
+| `TOO_LONG` | is longer than `Amounts.MAX_LENGTH` (64) characters, whatever it holds |
+| `NOT_A_NUMBER` | is not in the accepted form: a plus sign, an exponent, a second suffix, a space before the suffix, letters, or digits other than `0` to `9` |
+| `GROUPING_SEPARATOR` | would be in the accepted form without its grouping separators: that of the locale, a comma that is not its decimal separator, or a full stop where the locale groups with one |
+| `NEGATIVE` | is in the accepted form after a minus sign, `-0` included |
+| `OVER_MAXIMUM` | is an amount above `maximum` |
+
+A grouping separator is refused and never guessed, since `1,000` is a thousand in one locale and one in another. A
+later release may add a reason, so give a `switch` over the reasons a `default` branch.
 
 ## PlayerCache
 
