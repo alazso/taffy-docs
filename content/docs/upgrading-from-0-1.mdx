@@ -1602,3 +1602,20 @@ threads, `CooldownManager.tryStart` and `purgeExpired`, and `PdcKey.remove`, `ge
 `Scheduler.global`, `async`, `delayedAsync` and `repeatingAsync` now carry `@CheckReturnValue`, so IntelliJ IDEA
 can flag a call that drops their `boolean`. Nothing fails to compile, and the result says whether the task was
 accepted. A server owner changes nothing for `0.4.4`.
+
+## 0.4.5
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.5"
+}
+```
+
+Every signature of `0.4.4` is still there, and a plugin rebuilds with no change. `0.4.5` only adds:
+[`PlayerCache`](/docs/modules/platform) in `taffy-platform`, `FakeDispatcher` as test fixtures of `taffy-platform`
+and a `FaultyDataSource` over an existing `DataSource` ([Test kit](/docs/modules/test)), `MenuTesting` in
+`taffy-gui` ([GUI](/docs/modules/gui)), and the opt-in `paperPlugin.generateLoader`
+([Gradle plugins](/docs/gradle-plugins#runtime-libraries)). A build that sets none of them produces the same jar
+as on `0.4.4`. A server owner changes nothing for `0.4.5`.
