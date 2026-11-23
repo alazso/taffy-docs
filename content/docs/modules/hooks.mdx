@@ -1,12 +1,13 @@
 ---
 title: taffy-hooks
-description: Custom items, a Vault economy, LuckPerms, WorldGuard, Bedrock players, placeholders and holograms behind Taffy interfaces, detected safely at enable.
+description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard, Bedrock players, placeholders and holograms behind Taffy interfaces, detected safely at enable.
 ---
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
 
 - `CustomItems` builds and reads items of ItemsAdder, Nexo, Oraxen and HeadDatabase.
 - `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
+- `EconomyProvider.playerPoints` gives PlayerPoints points behind the same interface (from `0.4.7`).
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
 - `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
 - `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
@@ -43,6 +44,7 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Oraxen | `io.th0rgal:oraxen` | `alaz.oraxen` |
 | HeadDatabase | `com.github.Arcaniax-Development:HeadDatabase-API` | `alaz.headdatabase.api` |
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
+| PlayerPoints (from `0.4.7`) | `org.black_ixx:playerpoints` | `alaz.playerpoints` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
 | WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
@@ -115,7 +117,7 @@ dependencies:
       required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
 
 A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
@@ -462,12 +464,51 @@ An economy plugin that enables after the caller registers with Vault only then, 
 
 Each lookup is a new detection: a Vault that stays `NOT_VISIBLE`, `API_MISSING` or `FAILED` is warned about (and a `FAILED` lookup reported) once per lookup, so at least twice at startup.
 
+From `0.4.7`, `EconomyProvider.vault(VaultOptions options, @Nullable Detected<EconomyProvider> previous)` takes the result of the lookup before it and stays quiet when nothing changed. When the status of the new lookup equals `previous.status()` in plugin, state, version and reason, no warning is logged and nothing is reported. Any other status, and every status when `previous` is `null`, is warned about and reported as before. The reason of a `FAILED` status names what was thrown, so a lookup that fails in another way is warned about and reported again. The result is the same either way, and the entry points without `previous` still warn and report on every lookup.
+
+```java
+private Detected<EconomyProvider> lookUpEconomy() {
+    return EconomyProvider.vault(
+        VaultOptions.of(this, errors, scheduler.mode() == Scheduler.Mode.FOLIA), economy);
+}
+```
+
+### VaultWatch
+
+From `0.4.7`, `EconomyProvider.watchVault(VaultOptions options, Scheduler scheduler)` does the three steps above and returns a `VaultWatch`:
+
+- it looks the economy up before it returns;
+- while the options are switched on, it registers an `EconomyWatcher` for the owner and looks the economy up once more on the first tick through `Scheduler.global`;
+- each lookup after the first takes the result before it, so a status is warned about (and a `FAILED` lookup reported) once, and again only after the status changed.
+
+```java
+private VaultWatch economy;
+
+@Override
+public void onEnable() {
+    scheduler = new Scheduler(this, errors);
+    economy = EconomyProvider.watchVault(
+        VaultOptions.of(this, errors, scheduler.mode() == Scheduler.Mode.FOLIA)
+            .switchedOn(getConfig().getBoolean("hooks.vault")),
+        scheduler);
+}
+
+void pay(UUID player, BigDecimal amount) {
+    EconomyProvider money = economy.current().provider();
+    if (money != null) {
+        scheduler.dispatch(money.thread(player), () -> money.deposit(player, amount));
+    }
+}
+```
+
+`current()` gives the latest `Detected<EconomyProvider>` and is safe to read from any thread. `close()` unregisters the listener and stops every later lookup, the one on the first tick included; `current()` then keeps the last result. Close the watch before starting another, as in a reload command. The server unregisters the listener itself when the plugin disables. Options that are switched off register nothing and schedule nothing, and `current()` reads `SWITCHED_OFF`. When the scheduler refuses the first-tick task, which it does while the plugin is not enabled, one warning is logged.
+
 ### EconomyProvider
 
 | Method | Behaviour |
 |---|---|
 | `int scale()` | Decimal places, from 0 to 4. |
-| `ThreadTag thread(UUID player)` | The thread to call the economy on. The Vault provider gives `ThreadTag.GLOBAL` for every player, unless the lookup opted in to the [entity thread rule](#the-thread-rule). |
+| `ThreadTag thread(UUID player)` | The thread to call the economy on. The Vault provider gives `ThreadTag.GLOBAL` for every player, unless the lookup opted in to the [entity thread rule](#the-thread-rule). The [PlayerPoints provider](#playerpoints) gives `ThreadTag.ASYNC`. |
 | `BigDecimal balance(UUID player)` | The balance rounded half-even to `scale()`, possibly negative. Throws `IllegalStateException` when the economy reports a value that is not finite. |
 | `boolean has(UUID player, BigDecimal amount)` | Compares the balance, not rounded to `scale()`, with the amount rounded half-even to `scale()`. Accepts any amount. The Vault provider asks the economy instead when the lookup opted in to the [native funds check](#the-funds-check). |
 | `EconomyResult withdraw(UUID player, BigDecimal amount)` | Takes money when `has` holds. Never `NOT_STARTED`. |
@@ -475,7 +516,7 @@ Each lookup is a new detection: a Vault that stays `NOT_VISIBLE`, `API_MISSING` 
 | `EconomyResult deposit(UUID player, BigDecimal amount)` | Gives money. |
 | `String probe()` | A self-test that reads what the economy reports about itself and moves no money. Returns one line naming what was reached (for Vault, the economy's name and its decimal places). Throws a `RuntimeException` when nothing was reached. |
 
-Every call is synchronous and runs on the thread `thread(UUID)` names; from `0.3.2` the Vault provider [throws on any other thread](#the-thread-rule). A withdraw or deposit rounds the amount half-even to `scale()` and throws `IllegalArgumentException` for an amount that is negative, rounds to zero, or cannot reach the economy exactly. Vault carries amounts as `double` (the Vault 1.7 API), so an amount that does not survive the conversion to `double` and back is refused. A withdraw or deposit that throws has an unknown outcome: money may or may not have moved.
+Every call is synchronous and runs on the thread `thread(UUID)` names; from `0.3.2` the Vault provider [throws on any other thread](#the-thread-rule). A withdraw or deposit rounds the amount half-even to `scale()` and throws `IllegalArgumentException` for an amount that is negative, rounds to zero, or cannot reach the economy exactly. Vault carries amounts as `double` (the Vault 1.7 API), so an amount that does not survive the conversion to `double` and back is refused. The [PlayerPoints provider](#playerpoints) holds whole points and refuses an amount with a fraction of a point instead of rounding it. A withdraw or deposit that throws has an unknown outcome: money may or may not have moved.
 
 From `0.3.2`, a balance read from Vault is rounded half-even to 8 decimal places, four more than `EconomyProvider.MAX_SCALE`, before it is compared or rounded to `scale()`, and a balance within 16 units in the last place of the `double` of an amount at `scale()` reads as that amount. An economy that keeps balances as `double` holds `0.09999999999999998` after a player with `1.00` pays `0.90`, and that balance now covers `0.10`; one that holds `1000000428.0799999` after a player with `1000000456.18` pays `28.10` covers `1000000428.08`. Before `0.3.2`, `has` answered `false` and `withdraw` gave `INSUFFICIENT` for both. The balance read after a withdraw is measured in units of the balance read before it, so a withdraw of the whole balance gives `OK`, not `OVERDRAWN`. A balance that is short by more than that, such as `0.0999`, is still short. Once the balance covers the amount the provider asks the economy, and an economy that compares its own `double` balance may still refuse, which gives `FAILED` with the economy's message and no money moved. Where one such unit nears the smallest amount at `scale()`, which is from about 1e13 at 2 decimal places and from about 1e11 at 4, a `double` no longer holds the amount and a comparison can be off by one unit of `scale()`.
 
@@ -529,6 +570,41 @@ Detected<EconomyProvider> economy = EconomyProvider.vault(
 ```
 
 Under `NATIVE` a withdraw the economy refuses gives `FAILED` with the economy's message, or `the economy refused it` when it gives none, for a short balance too: a Vault response has no type for insufficient funds. A withdraw never gives `INSUFFICIENT` or `OVERDRAWN`, and one that leaves the balance below zero gives `OK`. A plugin that tells the player "not enough money" on `INSUFFICIENT` asks `has` first under `NATIVE`, or shows the message of the `FAILED` result. The amount, the calling thread and the disabled economy plugin are checked as under `EMULATED`, and `NOT_IMPLEMENTED` still gives `UNSUPPORTED`.
+
+### PlayerPoints
+
+From `0.4.7`, `EconomyProvider.playerPoints(Plugin owner, ErrorReports errors, boolean switchedOn)` detects PlayerPoints and gives an `EconomyProvider` on its points. Taffy compiles against PlayerPoints `3.3.5`. The plugin lists `PlayerPoints` under `dependencies.server` with `load: BEFORE` and `required: false`.
+
+```java
+Detected<EconomyProvider> points = EconomyProvider.playerPoints(this, errors, true);
+```
+
+Detection follows the [states](#detection-and-status) of every other integration but Vault: PlayerPoints is read only when it is switched on, installed, enabled and its API is visible, and it is `FAILED` (logged and reported under `hook.playerpoints`) when a method the provider calls is missing. Detection reads and moves no points. Unlike the Vault economy, the result is bound to the PlayerPoints plugin, so its status reads `NOT_ENABLED` while PlayerPoints is disabled, and no watcher is needed.
+
+| Call | The PlayerPoints provider |
+|---|---|
+| `scale()` | Always 0. Points are whole, and PlayerPoints holds them as `int`. |
+| `thread(player)` | `ThreadTag.ASYNC` for every player. |
+| `balance(player)` | The points, with no decimal places. |
+| `has(player, amount)` | Compares the points with the amount rounded half-even to whole points. Accepts any amount. |
+| `withdraw` | Reads the points, gives `INSUFFICIENT` when they are short, runs `start`, then takes the points. |
+| `deposit` | Gives the points. |
+| `probe()` | `PlayerPoints <version>, whole points`. Throws `IllegalStateException` while PlayerPoints is disabled. |
+
+**Whole points only.** A withdraw or deposit is never rounded, since rounding would take or give a different number of points than the caller asked for. An amount with a fraction of a point, such as `2.5`, throws `IllegalArgumentException`, as does one above `Integer.MAX_VALUE`, a negative one and zero, before anything in PlayerPoints is called. An amount written with decimal zeros, such as `2.00`, is whole. A plugin that prices in fractions rounds the price to `scale()` itself, with a rounding mode it chose, before it calls the provider.
+
+**Async only.** PlayerPoints loads a balance that is not in its cache from its database on the calling thread, so every call belongs off the server threads. `balance`, `has`, `withdraw` and `deposit` throw `IllegalStateException` on a thread `Server.isPrimaryThread()` is `true` on: the main thread on Paper, and every region thread and the global region thread on Folia. The message names `thread(player)` and `Scheduler.dispatch`, as the [Vault provider's](#the-thread-rule) does, and no points move. `scale()`, `thread(UUID)`, `probe()` and detection are not checked. PlayerPoints declares Folia support, and its calls are safe on an async thread on both Paper and Folia: its `PlayerPointsChangeEvent` is fired as an asynchronous event there.
+
+```java
+scheduler.dispatch(points.thread(player), () -> points.withdraw(player, price))
+    .thenAccept(result -> { /* hop back to the player's thread before touching the world */ });
+```
+
+**One withdraw at a time per player.** PlayerPoints checks a balance and queues the change in two steps, so the provider runs its withdraws for one player one after the other, from the balance read through `start` to the take. Two purchases at once cannot both pass the balance check. `start` runs while the other withdraws for that player wait, so it must not wait for a withdraw of another player. A change another plugin makes to the same account is not held back.
+
+**Refusals.** PlayerPoints moves the whole amount or nothing. A take or a give it refuses gives `FAILED` with the message `PlayerPoints refused it` and moves no points: a listener cancelled its `PlayerPointsChangeEvent`, the balance no longer covers the amount, or a deposit would pass `Integer.MAX_VALUE`. A balance that cannot be read at the start of a withdraw gives `FAILED` too. While PlayerPoints is disabled, `withdraw` and `deposit` give `FAILED` with `the economy plugin PlayerPoints is disabled`, before the amount is checked. A withdraw never gives `OVERDRAWN` or `UNSUPPORTED`.
+
+Two things are outside the provider's sight. A listener that changes the amount of a `PlayerPointsChangeEvent` changes how many points move, and the result is still `OK`. PlayerPoints answers a balance it could not load from its database as 0, so such a player reads as having no points.
 
 ### EconomyResult
 
