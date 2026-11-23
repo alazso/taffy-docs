@@ -52,7 +52,7 @@ Declare the modules in the plugin's own version catalog, beside its third-party 
 ```toml title="gradle/libs.versions.toml"
 [versions]
 paper = "26.3.build.256-stable"
-taffy = "0.4.6"
+taffy = "0.4.7"
 shadow = "9.6.1"
 
 [libraries]
@@ -247,6 +247,7 @@ The `ignore` entry stops Dependabot proposing `paper-api` bumps: the `paper` ver
 | `0.4.4` | `0.32.2` | `3.2.1` |
 | `0.4.5` | `0.32.2` | `3.2.1` |
 | `0.4.6` | `0.32.2` | `3.2.1` |
+| `0.4.7` | `0.32.2` | `3.2.1` |
 
 A patch release may raise either version, since FastStats and bStats are two of the few versions a patch changes ([What a patch changes](/docs/versioning#what-a-patch-changes)), and each release names the pair it was tested with. A plugin that declares either SDK in its own build at another version runs a pairing that was not tested. Gradle resolves the two requests to the higher version, so a newer SDK the plugin declares replaces the tested one.
 

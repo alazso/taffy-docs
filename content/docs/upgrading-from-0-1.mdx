@@ -1635,3 +1635,23 @@ Every signature of `0.4.5` is still there, and a plugin rebuilds with no change.
 model, model data, enchantment, colour, tag and glow style setters, `ItemBuilder.deserializeAnyOrThrow`, which
 also reads bare base64, `AmountFormat` and `Amounts.parse`. `ItemBuilder(Material)` builds the same item as on
 `0.4.5`. A server owner changes nothing for `0.4.6`.
+
+## 0.4.7
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.7"
+}
+```
+
+Every signature of `0.4.6` is still there. One thing in a plugin's source can need a change to compile: a method
+reference to `Text.resolve` or `Text.plain` with no target type, such as one assigned to `var`, since each now has
+an `OfflinePlayer` overload. A call with arguments compiles as before.
+
+`0.4.7` adds, in [`taffy-hooks`](/docs/modules/hooks): prefix placeholders, `PlaceholderCache`,
+`EconomyProvider.playerPoints`, the `vault` lookup that takes the previous result, `VaultWatch`, and the
+`CustomItems.detect` callback for a custom item plugin that loads or reloads its items. In
+[`taffy-platform`](/docs/modules/platform), `Text` renders for an `OfflinePlayer` and, with `renderGlobal`, for no
+player. A server owner changes nothing for `0.4.7`.
