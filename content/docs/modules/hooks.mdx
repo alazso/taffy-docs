@@ -958,13 +958,13 @@ public void onDisable() {
 |---|---|
 | `boolean create(String id, Location location, List<Component> lines, @Nullable ItemStack item)` | Places a hologram of component lines and an optional item. `false` when the id is in use, the location has no world or its world unloaded, or the provider is not available. |
 | `boolean update(String id, List<Component> lines, @Nullable ItemStack item)` | Replaces every line and the item. `false` when the id is not in use. |
-| `boolean create(String id, Location location, List<String> lines)` | The same placement with MiniMessage lines and no item. Also `false` when MiniMessage refuses a line. |
-| `boolean update(String id, List<String> lines)` | Replaces every line and keeps the item. Also `false` when MiniMessage refuses a line. |
+| `boolean create(String id, Location location, List<String> lines)` | The same placement with MiniMessage lines and no item. Also `false` when MiniMessage refuses a line, which is logged and reported under `hook.displays` unless the call answers `false` for another reason. |
+| `boolean update(String id, List<String> lines)` | Replaces every line and keeps the item. Also `false` when MiniMessage refuses a line, reported the same way. |
 | `boolean move(String id, Location location)` | Removes the entities and spawns them again at the new location. `false` when the id is not in use, or the location has no world or its world unloaded. |
 | `boolean remove(String id)` | Removes the hologram. `false` when the id is not in use. |
 | `boolean exists(String id)`, `Set<String> ids()` | Answer from the provider's records, also before the entities stand and while the hologram's chunk is not loaded. |
 | `int removeAll()`, `void close()` | As for every `HologramProvider`. |
-| `boolean available()` | The provider is not closed and the plugin is enabled. |
+| `boolean available()` | The provider is not closed and the plugin is enabled. While it is `false`, every other call answers `false`, `0` or an empty set. |
 
 What to know:
 
@@ -977,8 +977,9 @@ What to know:
 - **Worlds.** A location with no world, or whose world has unloaded, makes `create` and `move` answer `false`. When a world unloads, the provider removes its holograms from the world and from its records, as every `HologramProvider` does. Place them again from a `WorldLoadEvent` listener with a location built on `event.getWorld()`.
 - **Nothing is saved.** Every entity is non-persistent (`setPersistent(false)`), so the server never writes it to a world file, and none survives a restart or a crash. Place the holograms again in `onEnable`.
 - **Leftovers.** Every entity carries the plugin's persistent data key `<plugin namespace>:taffy_hologram` with the hologram's id. An entity with that key that the provider does not hold is removed when the provider is built, in every loaded chunk, and whenever the entities of a chunk load. An entity something else removed, such as with `/kill`, is spawned again at the next `update` of its hologram or the next load of its chunk.
-- **A failed spawn.** The entities it had spawned are removed, the hologram is forgotten so `exists` answers `false`, one warning is logged at most once a minute, and the failure is reported under `hook.displays`.
-- **Disable.** The provider removes every hologram when the plugin's `PluginDisableEvent` fires, before `onDisable`, and `close()` does the same. On Paper both run on the main thread and the entities are gone before the call returns. On Folia a disabling plugin can schedule nothing, so only the entities whose location the disabling thread owns are removed. The others stay in the world until their chunk unloads or the server stops, are never saved, and are removed by the next display provider the plugin builds. Call `close()` before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
+- **A failed spawn or text change.** The hologram's entities are removed, the hologram is forgotten so `exists` answers `false`, one warning is logged at most once a minute, and the failure is reported under `hook.displays`. An entity that refuses its removal is logged and reported the same way, and the other entities are still removed.
+- **A refused change.** A change the plugin's `Scheduler` refuses, which it does once the plugin is disabling, answers `false`. A refused `create` or `move` forgets the hologram, and a refused `update` keeps it.
+- **Disable.** The provider removes every hologram when the plugin's `PluginDisableEvent` fires, before `onDisable`, and `close()` does the same. On Paper both run on the main thread and the entities are gone before the call returns, those of a move or removal that still waits for its region thread included. On Folia a disabling plugin can schedule nothing, so only the entities whose location the disabling thread owns are removed. The others stay in the world until their chunk unloads or the server stops, are never saved, and are removed by the next display provider the plugin builds. Call `close()` before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
 
 ## Placeholders
 
@@ -1095,7 +1096,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.worldguard` | A failed detection, and every failed lookup. |
 | `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
-| `hook.displays` | From `0.4.11`, a failed spawn of a display hologram, and a line MiniMessage refuses. |
+| `hook.displays` | From `0.4.11`, a failed spawn, text change or removal of a display hologram, and a line MiniMessage refuses. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
 Reading an item's id, resolving a placeholder and, from `0.4.7`, a refresh of a `PlaceholderCache` log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
