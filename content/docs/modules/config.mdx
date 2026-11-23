@@ -313,7 +313,7 @@ Every path a step names is a full dotted path from the top of the file. `ConfigU
 
 | Method | What it does |
 |---|---|
-| `boolean move(String from, String to)` | Moves the value or the section at `from` to `to`, which renames a key when both paths are in one section. The value stays as the owner wrote it, with the comments above and beside it; a section moves with every key beneath it. Returns whether the file held a key at `from`. |
+| `boolean move(String from, String to)` | Moves the value or the section at `from` to `to`, which renames a key when both paths are in one section. The value stays as the owner wrote it, with the comments above and beside it; a section moves with every key beneath it. Returns whether the file held a key at `from` that is no longer there, so `false` when both paths are the same. |
 | `boolean remove(String path)` | Removes the key with its comments, and every key beneath it. Returns whether the file held it. |
 | `YamlConfiguration yaml()` | The parsed file, for any other change, such as a value rewritten in another unit. |
 
@@ -732,9 +732,9 @@ YamlFolder crates = new YamlFolder(getDataPath().resolve("crates"), getLogger(),
 |---|---|
 | Current version | Reads it as it is. It is never written. |
 | Older version | Runs the steps registered under its version up to, not including, the current one on the parsed file, sets the version key and hands the result to the parser. Writes the previous file, byte for byte, to `<file name>.v<N>.bak` beside it (N is the old version; an earlier copy of that name is replaced) and saves the upgraded file. Logs `Upgraded <name> from version 1 to 2; the previous file is kept as <file name>.v1.bak.` |
-| Newer version | Does not parse, upgrade or write it. Adds the line `<name>: <versionKey> is 3, newer than the version 2 this build knows, so the file is not read`, and the other files still load. |
+| Newer version | Does not hand it to the parser, upgrade or write it. Adds the line `<name>: <versionKey> is 3, newer than the version 2 this build knows, so the file is not read`, and the other files still load. |
 
-The save rewrites the file [as an upgrade of `config.yml` does](#what-an-upgrade-rewrites), and both the copy and the save go through a temporary file that replaces its target in one step. When the save fails, the file stays as it was, byte for byte, the parser still gets the upgraded file and the next load tries again; the logger receives a warning that starts with `Could not save the upgraded <name>: ` and states the reason. A file is not saved when its text would not be read back as it is, when it changed on the disk since it was read, or when it holds bytes that are not UTF-8 and was read through [`lenient`](#files-saved-in-a-legacy-code-page).
+The save rewrites the file [as an upgrade of `config.yml` does](#what-an-upgrade-rewrites), and both the copy and the save go through a temporary file that replaces its target in one step. When the save fails, the file stays as it was, byte for byte, the parser still gets the upgraded file and the next load tries again; the logger receives a warning that starts with `Could not save the upgraded <name>: ` and states the reason. A file is not saved when its text would not be read back as it is, when it changed on the disk since it was read, when it holds bytes that are not UTF-8 and was read through [`lenient`](#files-saved-in-a-legacy-code-page), or when the version key is a dotted path beneath a key of the file that holds a value, which stays as the owner wrote it.
 
 A step that throws leaves its file unchanged, and the parser does not see the file. The file adds the line `<name>: the step that upgrades it from version 1 failed: <exception class> <message>`, and the logger receives a warning with the exception, so its stack trace is in the log.
 
@@ -755,7 +755,7 @@ A plugin that edits its own files from a command or a menu saves them with `Yaml
 
 | Method | What it does |
 |---|---|
-| `void create(Path file, String text)` | Writes a new file. Throws `FileAlreadyExistsException` when `file` exists, a symbolic link included, and leaves that file as it is. |
+| `void create(Path file, String text)` | Writes a new file. Throws `FileAlreadyExistsException` when `file` exists, a symbolic link included, and leaves that file as it is. A parent of `file` that exists and is not a folder throws it too. |
 | `void write(Path file, String text)` | Replaces the file, or writes it when it does not exist. |
 | `String revision(byte[] content)` | The SHA-256 of the bytes as 64 lower-case hex digits. |
 | `Result replace(Path file, String text, String baseRevision, Path backups, int keep)` | Replaces the file only while it still has `baseRevision`, and keeps a copy of what it replaced. |
@@ -786,10 +786,11 @@ switch (AtomicWriter.replace(file, yaml.saveToString(), base, dataFolder.resolve
 
 - `AtomicWriter.Result` is sealed. `Written` is a record of `String revision()`, the revision of the content now in the file, and `Path backup()`, the copy of the content that was replaced, or `null` when the file did not exist. `Conflict` is a record of `String currentRevision()`; nothing was written or copied.
 - `AtomicWriter.ABSENT` (`absent`) is the revision of a file that does not exist: as `baseRevision` it writes the file only when there is none, and a `Conflict` carries it when the file is gone.
-- The copy is written to `backups`, which is created when missing, as `<file name>.<path id>.<yyyyMMdd-HHmmss-SSS>.bak`. The time is UTC, `-<n>` follows it for a further copy of the same millisecond, and the path id is the first 12 hex digits of the SHA-256 of the file's absolute path, so files of one name in different folders can share one folder of copies. The copy holds the file byte for byte. No copy is taken when the newest copy of that file already holds the same bytes.
+- The copy is written to `backups`, which is created when missing, as `<file name>.<path id>.<yyyyMMdd-HHmmss-SSS>.bak`. The time is UTC, `-<n>` follows it for a further copy of the same millisecond, and the path id is the first 12 hex digits of the SHA-256 of the file's absolute path without its `.` and `..` parts, so files of one name in different folders can share one folder of copies. The letter case of the path as given is part of the name and of the id, so on a file system that ignores letter case a plugin passes one spelling of a file to keep its copies together. The copy holds the file byte for byte. No copy is taken when the newest copy of that file already holds the same bytes, and a call whose text is what the file already holds is a write like any other and takes its copy.
+- The copies are ordered by the time in their names alone. A copy never gets a time before the one of the newest copy of its file: when the clock is behind that copy, the new one gets its time and the next `-<n>`.
 - After the write, the copies of that file beyond the newest `keep` are deleted. `keep` is 1 to 1000, and another number throws `IllegalArgumentException`. A delete that fails leaves that copy and does not fail the call.
 
-`write` and `replace` follow a symbolic link to the file it names, so the link stays and the file it leads to is replaced. The new file gets the POSIX permissions of the file it replaces where the file system has them, and so does the copy. A file written where none existed gets the permissions of any new file. A missing parent folder is created. A hard link of the target is not updated.
+`write` and `replace` follow a symbolic link to the file it names, so the link stays and the file it leads to is replaced. A link that leads to a file that does not exist is not followed: both throw `NoSuchFileException` and write nothing. The new file gets the POSIX permissions of the file it replaces where the file system has them, and so does the copy. A file written where none existed gets the permissions of any new file. A missing parent folder is created. A hard link of the target is not updated.
 
 Every method throws the `IOException` of the step that failed:
 

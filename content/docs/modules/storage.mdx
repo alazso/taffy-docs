@@ -336,9 +336,9 @@ Optional<Kit> kit = tx.queryOne("SELECT uses, enabled FROM " + tx.table("kits") 
     row -> new Kit(id, row.intValue("uses"), row.bool("enabled")));
 ```
 
-- **`Row.intValue` refuses what does not fit.** It returns `null` for `NULL` and throws `SQLException` for a number below `Integer.MIN_VALUE` or above `Integer.MAX_VALUE`, with the same message on every database: `uses holds 2147483648, which does not fit an int`.
+- **`Row.intValue` refuses what does not fit.** It returns `null` for `NULL` and throws `SQLException` for a number below `Integer.MIN_VALUE` or above `Integer.MAX_VALUE`, with the same message on every database: `uses holds 2147483648, which does not fit an int`. On SQLite it also throws `SQLException` for a column that holds text, a number with a fraction or bytes, which the SQLite driver would read as 0 or cut: `uses holds a value that is not a whole number`.
 - **A boolean column is declared `BOOLEAN` in every script.** That is `TINYINT(1)` on MySQL and MariaDB, a column that holds the whole number on SQLite, and a native `boolean` on PostgreSQL.
-- **On SQLite, MySQL and MariaDB a boolean is the whole number 1 or 0**, so any whole-number column holds one, `WHERE enabled = 1` matches it, and `Row.integer` reads it back as `1` or `0`. `Row.bool` returns `null` for `NULL` and throws `SQLException` for any other number: `enabled holds 2, which is neither 0 nor 1`.
+- **On SQLite, MySQL and MariaDB a boolean is the whole number 1 or 0**, so any whole-number column holds one, `WHERE enabled = 1` matches it, and `Row.integer` reads it back as `1` or `0`. `Row.bool` returns `null` for `NULL` and throws `SQLException` for any other number: `enabled holds 2, which is neither 0 nor 1`. Text is refused as well, so a column a former store filled with `'true'` and `'false'` is converted by a migration first: on SQLite the driver would read such text as 0, and `Row.bool` throws `SQLException` for it there.
 - **PostgreSQL keeps the two types apart.** It refuses a boolean for an `INTEGER` or `SMALLINT` column, so a PostgreSQL column that stores 0 and 1 as numbers is bound with `intValue`. `Row.bool` reads there what the driver reads as a boolean: a `boolean` column, or a whole-number column that holds 0 or 1.
 - `Row.intValue` and `Row.bool` return the boxed type, like every `Row` reader, because the column may hold `NULL`.
 
@@ -419,10 +419,16 @@ public CompletableFuture<int[]> saveCurrencies(List<Currency> currencies) {
 }
 ```
 
-- **Each binder binds every placeholder** of the statement, for one run of it. An empty list runs nothing and returns an empty array, and a `null` list or binder throws `NullPointerException`.
+- **Each binder binds every placeholder** of the statement, for one run of it. A JDBC driver runs a placeholder a binder leaves out with the value the binder before it bound, so `batch` throws `SQLException` before it sends anything when a binder binds another number of values than the first one. An empty list runs nothing and returns an empty array, and a `null` list or binder throws `NullPointerException`.
 - **The result holds one element for each binder, in order**: the count `update` gives for that run (see [row counts](#row-counts-differ-per-dialect)), or `Statement.SUCCESS_NO_INFO` (`-2`) where the driver ran the row and does not know its count.
-- **MySQL rewrites a batch.** MySQL connections are opened with `rewriteBatchedStatements=true`, so the driver sends a batch as one multi-row `INSERT` or as several statements in one packet, and reports `SUCCESS_NO_INFO` for the rows of a rewritten batch. Work that needs the count of every row on MySQL runs `update` for each. SQLite, MariaDB and PostgreSQL report the counts. The property changes no other statement.
-- **A run that fails throws what the driver threw**, usually a `java.sql.BatchUpdateException`. The runs before it stay part of the open transaction, like every statement before them: work that lets the exception through rolls all of it back, and nothing of the batch is written. On PostgreSQL a failed statement ends the transaction, so the work can only throw. On the other databases, work that catches the exception and returns commits what the earlier runs wrote.
+- **MySQL rewrites a batch.** MySQL connections are opened with `rewriteBatchedStatements=true`, so the driver sends a batch as one multi-row `INSERT` or as several statements in one packet, and reports `SUCCESS_NO_INFO` for the rows of a rewritten batch. Work that needs the count of every row on MySQL runs `update` for each. SQLite, MariaDB and PostgreSQL report the counts. The property changes no other statement. `Server.properties` accepts `rewriteBatchedStatements`, and the value given there replaces this one: with `false` the MySQL driver sends each run by itself and counts it.
+- **A run that fails throws what the driver threw**, usually a `java.sql.BatchUpdateException`. Work lets the exception through: its transaction rolls back, and nothing of the batch is written. Which runs the open transaction holds after the failure is not defined, so work that catches the exception and returns reads a row back before it relies on it:
+
+  | Database | What the transaction holds after a failed batch |
+  |---|---|
+  | SQLite | The runs before the failing one. |
+  | MySQL, MariaDB | No run of an `INSERT` batch. Of an `UPDATE` or `DELETE` batch, the runs before the failing one and the ones after it, which the driver still runs. |
+  | PostgreSQL | Nothing: the failed statement ends the transaction, and every later statement of the work fails. |
 - Generated keys are not returned: a row that needs its key is inserted with a key the plugin makes, such as a UUID.
 
 ### Dialect SQL
@@ -781,6 +787,7 @@ The expected tables and columns are read from the statements of the scripts up t
 - Column types, constraints, indexes and rows are not compared, and the database may hold tables and columns the scripts do not create, such as the tables of another plugin or a column an owner added.
 - With N at 0 no script is recorded as applied, and nothing is compared.
 - A mismatch fails the future of `start` with a `StorageException` that lists what is missing, a table as its name and a column as `table.column`: `the table db_version records schema version 5, but the database lacks provouchers_stash.arg, provouchers_use_totals, which the migrations up to that version create; restore a backup of the database, or install the plugin version that set it up and let it finish its own upgrade`. Nothing has changed at that point: no SQLite backup is taken and the old table keeps its name.
+- In a column list, and after `ADD`, the first word of an element names a column unless it starts a constraint (`CONSTRAINT`, `PRIMARY`, `UNIQUE`, `FOREIGN`, `CHECK`, and `EXCLUDE` on PostgreSQL), an index or a partition on MySQL and MariaDB (`KEY`, `INDEX`, `FULLTEXT`, `SPATIAL`, `PARTITION`) or a `PERIOD FOR` on MariaDB. Any other table element is read as a column of that name, which the database does not have, so the start stops. Comments are skipped: `--` and `/* */` everywhere, and `#` on MySQL and MariaDB.
 - The check reads the scripts as text, so a script that builds its tables in a way the table above does not list, such as a stored procedure, is covered only as far as its statements are read. A plugin turns the check on once its own tests take over a database of every old version with it.
 
 ## Porting a store from plain JDBC
