@@ -548,9 +548,31 @@ is absent, its pass is skipped.
 | `send(Player player, String miniMessage)` | renders with the player as viewer and sends it |
 | `resolve(String input, Player viewer)` | PlaceholderAPI only, no MiniMessage |
 | `plain(String input, Player viewer)` | the rendered text flattened to plain text |
+| `render(String input, OfflinePlayer player)` | from `0.4.7`, as `render(String, Player)`, with PlaceholderAPI asked for a player who may be offline |
+| `render(String template, OfflinePlayer player, TagResolver... values)` | from `0.4.7`, the same, with values filled in |
+| `resolve(String input, OfflinePlayer player)` | from `0.4.7`, PlaceholderAPI only, for a player who may be offline |
+| `plain(String input, OfflinePlayer player)` | from `0.4.7`, the offline render flattened to plain text |
+| `renderGlobal(String input)` | from `0.4.7`, as `render(String, Player)`, with PlaceholderAPI asked for no player |
+| `renderGlobal(String template, TagResolver... values)` | from `0.4.7`, the same, with values filled in |
+| `resolveGlobal(String input)` | from `0.4.7`, PlaceholderAPI only, for no player |
+| `plainGlobal(String input)` | from `0.4.7`, the global render flattened to plain text |
 | `withPlaceholderFormatting()` | from `0.2.0`, a `Text` that also parses formatting tags in placeholder output |
 
-The viewer parameters accept `null`.
+The viewer and player parameters accept `null`, which skips PlaceholderAPI.
+
+From `0.4.7`, `Text` also asks PlaceholderAPI for an `OfflinePlayer` and for no player:
+
+- The `OfflinePlayer` methods are for text about a player who may be offline, such as a line in a leaderboard or a
+  mail. Which placeholders give a value is up to each expansion: one that needs an online player returns nothing,
+  and its placeholder stays as written.
+- The `Global` methods are for text without a player, such as a console line or a broadcast template. Each
+  expansion is asked with a `null` player, so `%server_online%` is filled in and `%player_name%` stays as written.
+  `render(String input)` is unchanged and asks PlaceholderAPI for nothing.
+- Both insert what a placeholder returns as text, as [placeholder output](#placeholder-output) describes.
+- MiniPlaceholders' audience tags are filled in only for a `Player`, so an `OfflinePlayer` who is not one and no
+  player get its global tags alone. An `OfflinePlayer` that is a `Player` renders as `render(String, Player)` does.
+- A call that passes a literal `null` as the second argument, as `text.render(input, null)` does, still picks the
+  `Player` method.
 
 ```java
 Text text = new Text(getLogger());
@@ -636,6 +658,9 @@ as `Placeholder.unparsed` or `Placeholder.component` are inserted unchanged, sec
 
 An instance is thread-safe and may be shared. PlaceholderAPI expansions and MiniPlaceholders audience tags run on
 the calling thread and read the viewer, so a call that passes a viewer belongs on the thread that owns that player.
+From `0.4.7`, a call with an `OfflinePlayer` or a `Global` call runs the PlaceholderAPI expansions on the calling
+thread as well, with no player to own it: whether an expansion may be asked off the server thread is up to that
+expansion.
 
 A PlaceholderAPI pass that throws, or a MiniPlaceholders resolver that cannot be built or throws during parsing, is
 skipped and logged through `ThrowLog` under the sources `placeholderapi` and `miniplaceholders`. Nothing is
@@ -1487,7 +1512,7 @@ webhook.postBody(url, body, reason -> getLogger().warning("Discord webhook faile
 |---|---|
 | `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog` | any thread |
 | `PlayerCache` | any thread for `get`, `ready`, `refresh` and `close`; the loader runs on an async thread |
-| `Text`, `Messages` | any thread without a viewer; the player's thread with one |
+| `Text`, `Messages` | any thread without a viewer; the player's thread with one; for the `OfflinePlayer` and `Global` methods of `Text`, a thread the asked PlaceholderAPI expansions accept |
 | `Items.giveOrDrop`, `Sounds.play` | the thread that owns the player |
 | `InventoryFit.fits` | the thread that owns the inventory, for live slots |
 | `SkullBuilder.fromName`, `fromUuid` | any thread; the future completes on the lookup executor, or on the calling thread for a cached texture |

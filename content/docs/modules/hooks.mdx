@@ -11,6 +11,7 @@ description: Custom items, a Vault economy, LuckPerms, WorldGuard, Bedrock playe
 - `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
 - `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
+- `PlaceholderCache` gives a placeholder its last known value at once and refreshes it off the asking thread (from `0.4.7`).
 - `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
 
@@ -129,6 +130,9 @@ Every entry point takes the same arguments in the same order: the owner `Plugin`
 ```java title="ShopPlugin.java"
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.Nullable;
 import so.alaz.taffy.hooks.CustomItemPlugin;
@@ -138,21 +142,20 @@ import so.alaz.taffy.hooks.EconomyProvider;
 import so.alaz.taffy.hooks.EconomyWatcher;
 import so.alaz.taffy.hooks.HookStatus;
 import so.alaz.taffy.hooks.PermissionProvider;
+import so.alaz.taffy.hooks.PlaceholderCache;
 import so.alaz.taffy.hooks.PlaceholderExpansionBuilder;
 import so.alaz.taffy.hooks.PlaceholderRegistration;
 import so.alaz.taffy.hooks.RegionProvider;
 import so.alaz.taffy.platform.ErrorReports;
 import so.alaz.taffy.platform.Scheduler;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
-public final class ShopPlugin extends JavaPlugin {
+public final class ShopPlugin extends JavaPlugin implements Listener {
 
     private final ErrorReports errors = new ErrorReports();
     private Scheduler scheduler;
@@ -161,12 +164,13 @@ public final class ShopPlugin extends JavaPlugin {
     private Detected<RegionProvider> regions;
     private volatile Detected<EconomyProvider> economy;
     private PlaceholderRegistration placeholders;
-    private final Map<UUID, String> balances = new ConcurrentHashMap<>();
-    private final Set<UUID> refreshing = ConcurrentHashMap.newKeySet();
+    private PlaceholderCache<UUID> balances;
 
     @Override
     public void onEnable() {
         scheduler = new Scheduler(this, errors);
+        balances = new PlaceholderCache<>(Duration.ofSeconds(5), 1000, getLogger());
+        getServer().getPluginManager().registerEvents(this, this);
         items = CustomItems.detect(this, errors, EnumSet.allOf(CustomItemPlugin.class));
         permissions = PermissionProvider.luckPerms(this, errors, true);
         regions = RegionProvider.worldGuard(this, errors, true);
@@ -194,16 +198,13 @@ public final class ShopPlugin extends JavaPlugin {
             return null;
         }
         UUID id = player.getUniqueId();
-        if (refreshing.add(id)) {
-            scheduler.dispatch(money.thread(id), () -> money.balance(id).toPlainString())
-                .whenComplete((text, failure) -> {
-                    if (text != null) {
-                        balances.put(id, text);
-                    }
-                    refreshing.remove(id);
-                });
-        }
-        return balances.get(id);
+        return balances.get(id,
+            () -> scheduler.dispatch(money.thread(id), () -> money.balance(id).toPlainString()));
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        balances.forget(event.getPlayer().getUniqueId());
     }
 
     void showHooks(CommandSender sender) {
@@ -224,6 +225,9 @@ public final class ShopPlugin extends JavaPlugin {
         if (placeholders != null) {
             placeholders.unregister();
         }
+        if (balances != null) {
+            balances.clear();
+        }
         if (scheduler != null) {
             scheduler.close();
         }
@@ -231,7 +235,7 @@ public final class ShopPlugin extends JavaPlugin {
 }
 ```
 
-PlaceholderAPI may call `balanceText` from any thread, so it reads a cached balance and asks for a fresh one on the thread `thread(UUID)` names through `Scheduler.dispatch`, with at most one refresh per player in flight. The first request for a player gives no value.
+PlaceholderAPI may call `balanceText` from any thread, so it reads the last known balance from a [`PlaceholderCache`](#placeholdercache), which asks for a fresh one on the thread `thread(UUID)` names through `Scheduler.dispatch` once the value is five seconds old, with at most one refresh per player in flight. The first request for a player gives no value. Before `0.4.7` the example kept the balances in a map of its own, which never dropped a player.
 
 In a real plugin each `true` comes from the plugin's own config, so the owner can switch an integration off. Register the `EconomyWatcher` and the first-tick lookup only while the economy is switched on. Detection runs once, on the server thread, in `onEnable`. An integration plugin that is not enabled by then stays off until the plugin detects again. There is no listener for an integration enabled later, except the Vault economy through `EconomyWatcher`. [Detecting again](#detecting-again) shows a second detection of the custom item plugins.
 
@@ -788,6 +792,9 @@ placeholders = new PlaceholderExpansionBuilder()
 | `player(String name, Function<Player, @Nullable String> handler)` | Resolved for an online player. In PlaceholderAPI it gives no value for an offline player. |
 | `offline(String name, Function<OfflinePlayer, @Nullable String> handler)` | Resolved for a player who may be offline. PlaceholderAPI only. |
 | `global(String name, Supplier<@Nullable String> handler)` | No player. |
+| `playerPrefix(String prefix, BiFunction<Player, String, @Nullable String> handler)` | From `0.4.7`. A [prefix placeholder](#prefix-placeholders) for an online player. |
+| `offlinePrefix(String prefix, BiFunction<OfflinePlayer, String, @Nullable String> handler)` | From `0.4.7`. A prefix placeholder for a player who may be offline. PlaceholderAPI only. |
+| `globalPrefix(String prefix, Function<String, @Nullable String> handler)` | From `0.4.7`. A prefix placeholder with no player. |
 | `register(Plugin owner, ErrorReports errors, boolean switchedOn)` | Registers what was added so far, PlaceholderAPI first, and returns the `PlaceholderRegistration`. |
 
 Without `identifier`, the identifier is the owner's name in lower case with only the letters `a` to `z` and digits kept. When that leaves nothing, `register` throws `IllegalStateException`, also when switched off. A name holds only lower case `a` to `z`, digits, `_` and `-`; any other name throws `IllegalArgumentException`. A later placeholder of the same kind and name replaces the earlier one.
@@ -801,6 +808,57 @@ Behaviour to know:
 - Registering replaces any PlaceholderAPI expansion that already uses the identifier. MiniPlaceholders refuses an identifier another expansion uses, which makes it `FAILED`. The PlaceholderAPI expansion stays registered across `/papi reload`.
 - A backend that refuses or throws is `FAILED`: logged, reported under `hook.placeholderapi` or `hook.miniplaceholders`, with the warning's text as its reason. The other backend is still registered. A backend that is installed but not enabled, not visible, or lacks the API is skipped with a warning; one that is not installed is skipped silently.
 - Call `register` on the server thread in `onEnable`: PlaceholderAPI fires a synchronous event when it registers. The owner's authors and version describe the expansion.
+
+### Prefix placeholders
+
+From `0.4.7`, a prefix placeholder answers every name that starts with its prefix and a `_`, and its handler takes the rest of the name. With the identifier `shop` and the prefix `keys`, `%shop_keys_vote%` gives the handler `vote`:
+
+```java
+placeholders = new PlaceholderExpansionBuilder()
+    .identifier("shop")
+    .playerPrefix("keys", (player, crate) -> keyCount(player, crate))
+    .offlinePrefix("spent", (offlinePlayer, currency) -> spentText(offlinePlayer.getUniqueId(), currency))
+    .globalPrefix("stock", item -> stockText(item))
+    .register(this, errors, true);
+```
+
+- A prefix holds the same characters as a name, and is written without the `_` that ends it. A later prefix placeholder of the same kind and prefix replaces the earlier one.
+- In PlaceholderAPI a placeholder registered by its whole name answers first, so `player("keys_vote", ...)` wins over the prefix `keys` for `%shop_keys_vote%`. After the whole names, the longest prefix that fits answers: with the prefixes `keys` and `keys_virtual`, `%shop_keys_virtual_vote%` gives `vote` to `keys_virtual`. No shorter prefix is asked when that handler gives no value.
+- A global prefix wins over an offline or player one of the same prefix, and an offline one over a player one, as with whole names.
+- The rest is passed as written, in the case it was typed in, and is empty for `%shop_keys_%`. `%shop_keys%` alone is not answered by the prefix.
+- In MiniPlaceholders the prefix is the tag and the rest is its argument: `<shop_keys:vote>`. Several arguments are joined with `:`, so `<shop_keys:a:b>` gives `a:b`. The tag without an argument, `<shop_keys>`, goes to the placeholder registered under that whole name, when there is one, and otherwise gives no value. An offline prefix is not registered with MiniPlaceholders.
+- The rest is text whoever wrote the placeholder chose, which can be a player. Check it against what the plugin knows, such as its crate ids, before using it, and return `null` for anything else.
+- A handler that throws gives no value, and the failure is logged at most once a minute per prefix.
+
+### PlaceholderCache
+
+PlaceholderAPI asks for a value on whatever thread the requester runs on, often the server thread or a Folia region thread, so a handler must never wait for a database or another thread. From `0.4.7`, `PlaceholderCache<K>` holds the last known value of each key and refreshes it behind the handler:
+
+```java
+PlaceholderCache<UUID> sales = new PlaceholderCache<>(Duration.ofSeconds(30), 1000, getLogger());
+
+private @Nullable String salesText(OfflinePlayer player) {
+    UUID id = player.getUniqueId();
+    String known = sales.get(id, () -> store.countSales(id).thenApply(String::valueOf));
+    return known == null ? "..." : known;
+}
+```
+
+| Method | Behaviour |
+|---|---|
+| `new PlaceholderCache<>(Duration timeToLive, int maximumEntries, Logger logger)` | An empty cache. A `timeToLive` of zero or less, or a `maximumEntries` below one, throws `IllegalArgumentException`. |
+| `get(K key, Supplier<CompletableFuture<@Nullable String>> refresh)` | The last known value, without waiting. Starts a refresh when the key has no value yet or its value is at least `timeToLive` old, unless one is already running for that key. |
+| `forget(K key)` | Drops one key, as for a player who quits. |
+| `clear()` | Drops every key, as in `onDisable`. The cache can be used again afterwards. |
+
+- Before the first refresh of a key completes, `get` returns `null`. A handler passes that on as no value, or returns a text of its own as above. A refresh that gives `null` leaves the key with no value until the next one.
+- The cache owns no thread. `refresh` is called on the thread that called `get`, so it only starts the work and returns its future: a `Scheduler.dispatch`, or a storage call that already returns a `CompletableFuture`. The value is stored on the thread that completes the future.
+- A stale value is still returned while its refresh runs, so a reader sees the old value until the new one arrives.
+- A refresh fails when `refresh` throws or returns `null`, or when its future completes with a failure, such as a `Scheduler.dispatch` to a player who has just quit. The last known value is kept, the next refresh of that key starts no sooner than one `timeToLive` later, and the failure is logged at most once a minute for the whole cache, with its stack the first time. It is not reported to `ErrorReports`.
+- A future that never completes stops further refreshes of its key until `forget` or `clear`.
+- The cache keeps at most `maximumEntries` keys, counting a key whose first refresh still runs. A new key beyond that drops the key asked for longest ago.
+- A refresh that completes after its key was dropped stores nothing.
+- Every method may be called from any thread. Call `forget` from a `PlayerQuitEvent` listener for a cache keyed by player, and `clear` in `onDisable` after `PlaceholderRegistration.unregister`.
 
 ### PlaceholderRegistration
 
@@ -829,7 +887,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
-Reading an item's id and resolving a placeholder log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
+Reading an item's id, resolving a placeholder and, from `0.4.7`, a refresh of a `PlaceholderCache` log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
 
 A `null` argument throws `NullPointerException`, except where a parameter is marked `@Nullable`, and except a reference given to `CustomItemRef.parse`, `CustomItems.create` or `CustomItems.build`, which throws `IllegalArgumentException`.
 
@@ -850,3 +908,4 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. Before detecting again, the server's global thread. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |
+| `PlaceholderCache` | Any thread. `refresh` runs on the thread that called `get`. |
