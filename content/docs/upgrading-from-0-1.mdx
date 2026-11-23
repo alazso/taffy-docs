@@ -1619,3 +1619,19 @@ and a `FaultyDataSource` over an existing `DataSource` ([Test kit](/docs/modules
 `taffy-gui` ([GUI](/docs/modules/gui)), and the opt-in `paperPlugin.generateLoader`
 ([Gradle plugins](/docs/gradle-plugins#runtime-libraries)). A build that sets none of them produces the same jar
 as on `0.4.4`. A server owner changes nothing for `0.4.5`.
+
+## 0.4.6
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.6"
+}
+```
+
+Every signature of `0.4.5` is still there, and a plugin rebuilds with no change. `0.4.6` only adds, all in
+[`taffy-platform`](/docs/modules/platform): an `ItemBuilder` that starts from an existing `ItemStack`, its item
+model, model data, enchantment, colour, tag and glow style setters, `ItemBuilder.deserializeAnyOrThrow`, which
+also reads bare base64, `AmountFormat` and `Amounts.parse`. `ItemBuilder(Material)` builds the same item as on
+`0.4.5`. A server owner changes nothing for `0.4.6`.
