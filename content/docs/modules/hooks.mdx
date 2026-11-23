@@ -9,7 +9,7 @@ description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard,
 - `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
 - `EconomyProvider.playerPoints` gives PlayerPoints points behind the same interface (from `0.4.7`).
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
-- `RegionProvider.worldGuard` gives the WorldGuard region ids at a location.
+- `RegionProvider.worldGuard` gives the WorldGuard region ids at a location and, from `0.4.12`, whether WorldGuard lets a player build there.
 - `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
 - `PlaceholderCache` gives a placeholder its last known value at once and refreshes it off the asking thread (from `0.4.7`).
@@ -49,7 +49,7 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
 | PlayerPoints (from `0.4.7`) | `org.black_ixx:playerpoints` | `alaz.playerpoints` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
-| WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
+| WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldguard:worldguard-bukkit` (from `0.4.12`), `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldguard.bukkit`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
 | MiniPlaceholders | `io.github.miniplaceholders:miniplaceholders-api` | `alaz.miniplaceholders.api` |
 | DecentHolograms | `com.github.decentsoftware-eu:decentholograms` | `alaz.decentholograms` |
@@ -60,6 +60,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
 
 `0.4.12` is built against CraftEngine `26.10` and against MMOItems-API `6.10.1-SNAPSHOT` with MythicLib `1.7.1-SNAPSHOT`. MMOItems and MythicLib publish only snapshots of their API, so those two catalog versions are snapshot versions. MythicLib is in the catalog because the MMOItems classes extend types of it: a plugin that calls MMOItems itself adds both aliases with `compileOnly`.
+
+`0.4.12` is built against WorldGuard `7.0.20` and WorldEdit `7.4.4`, the WorldEdit version that WorldGuard release is built against. From `0.4.12` Taffy also compiles against `worldguard-bukkit`, which holds `WorldGuardPlugin.wrapPlayer` for the [build check](#whether-a-player-may-build).
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -760,6 +762,7 @@ Before `0.3.1` the same setup is `FAILED`, with a report under `hook.worldguard`
 |---|---|
 | `boolean available()` | WorldGuard is enabled. |
 | `List<String> regionsAt(Location location)` | The ids of every region covering the block, in an unmodifiable list. |
+| `boolean canBuild(Player player, Location location)` | From `0.4.12`. Whether WorldGuard lets the player build at the location. |
 
 `regionsAt` returns an empty list when WorldGuard is not available, the location has no world or its world has unloaded, WorldGuard keeps no regions for that world, or the lookup fails. Only a failed lookup is logged (at most once a minute) and reported under `hook.worldguard`. A lookup may run on any thread, since WorldGuard's region index supports concurrent reads.
 
@@ -770,6 +773,38 @@ RegionProvider wg = regions.provider();
 boolean inMarket = wg != null
     && wg.regionsAt(player.getLocation()).stream().anyMatch(id -> id.equalsIgnoreCase("market"));
 ```
+
+### Whether a player may build
+
+From `0.4.12`, `canBuild(Player player, Location location)` answers whether WorldGuard lets a player build at a location, for a plugin that places or breaks a block for a player. It is built against WorldGuard `7.0.20` and WorldEdit `7.4.4`.
+
+```java
+RegionProvider wg = regions.provider();
+if (wg != null && !wg.canBuild(player, block.getLocation())) {
+    return; // WorldGuard protects the block from this player
+}
+```
+
+The answer comes in two steps, as in WorldGuard's own listeners:
+
+1. A player WorldGuard lets through answers `true` (`SessionManager.hasBypass`). That is a player with the permission `worldguard.region.bypass.<world>` for the world of the location, unless the player turned the bypass off with WorldGuard's `/rg bypass`. It is also a player another plugin marked as an NPC, while WorldGuard's `regions.fake-player-build-override` setting is on for that world.
+2. Every other player gets what WorldGuard's region query gives for the `build` flag at the location (`RegionQuery.testBuild`): the regions covering the block, their members and owners, their priorities and the global region.
+
+| Case | Answer |
+|---|---|
+| WorldGuard is not installed, switched off or not `ON` at detection | There is no provider: `regions.provider()` is `null`, and the plugin lets the player build, as in the example. |
+| WorldGuard was detected and is disabled now (`available()` is `false`) | `true`, and WorldGuard is not asked. |
+| The location has no world, or its world has unloaded | `true`, and WorldGuard is not asked. |
+| WorldGuard's regions are turned off in that world | `true`. |
+| WorldGuard could not load the region data of that world | `false`, as WorldGuard denies building there, unless the player has the bypass. |
+| WorldGuard throws, or lacks a method the check calls | `true`, logged as a warning (at most once a minute) and reported under `hook.worldguard`. |
+| The player has left the server | Asked in the same way. A player who is not online has no bypass, so the answer is the one of the `build` flag. |
+| `player` or `location` is `null` | `NullPointerException`. |
+
+- **Only the `build` flag is read.** WorldGuard's listeners also read flags such as `block-break`, `block-place`, `use` and `chest-access` for the action at hand, and its `build-permission-nodes` setting. `canBuild` reads none of them, so a region that sets `build` to deny and `block-break` to allow answers `false`.
+- **Thread.** Call it on the thread that owns the player: the main thread on Paper. The provider asks WorldGuard on the calling thread and schedules nothing. WorldGuard does not run on Folia, so `RegionProvider.worldGuard` gives no provider there and nothing is asked.
+- **Detection is unchanged.** `RegionProvider.worldGuard` does not look for the methods the build check calls, so it gives the same status as before `0.4.12`.
+- **Other providers.** `canBuild` is a default method of `RegionProvider` that answers `true`. A `RegionProvider` a plugin or a test implements itself keeps compiling and lets every player build until it overrides the method.
 
 ## Bedrock players
 
@@ -1116,7 +1151,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.vault` | A lookup that failed, once per lookup. From `0.4.7`, once per change of status when the lookup is given the previous result or runs in a `VaultWatch`. |
 | `hook.playerpoints` | From `0.4.7`. A failed detection. |
 | `hook.luckperms` | A failed detection, every failed call, and from `0.3.2` a push of a saved write that threw. |
-| `hook.worldguard` | A failed detection, and every failed lookup. |
+| `hook.worldguard` | A failed detection, and every failed lookup. From `0.4.12`, also every failed build check. |
 | `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.displays` | From `0.4.11`, a failed spawn, text change or removal of a display hologram, and a line MiniMessage refuses. |
@@ -1140,6 +1175,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. From `0.4.7` the PlayerPoints provider names `ThreadTag.ASYNC` for every player and throws `IllegalStateException` on the main thread on Paper and on every region thread and the global region thread on Folia. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
+| `RegionProvider.canBuild` | From `0.4.12`. The thread that owns the player: the main thread on Paper. |
 | `BedrockProvider.bedrock` | The thread that asks. `Prompts` asks on the player's entity thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `DisplayHolograms` calls | From `0.4.11`. Any thread. The entities change on the region thread of the hologram's location. |
