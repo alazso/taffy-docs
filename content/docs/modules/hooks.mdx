@@ -216,9 +216,7 @@ public final class ShopPlugin extends JavaPlugin implements Listener {
         all.add(regions.status());
         all.addAll(placeholders.statuses());
         for (HookStatus status : all) {
-            sender.sendPlainMessage(status.reason() == null
-                ? status.describe()
-                : status.describe() + ". " + status.reason());
+            sender.sendPlainMessage(status.line());
         }
     }
 
@@ -271,6 +269,7 @@ A version that was not read shows as `unknown`.
 - `version()` is `null` for `SWITCHED_OFF`, `NOT_INSTALLED` and `NOT_ENABLED`, and set (possibly to `unknown`) for every other state.
 - `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, for a placeholder backend's `FAILED`, and from `0.3.1` for a `NOT_ENABLED` read while the plugin runs as another instance than the one detected.
 - `describe()` never includes the reason. `describe()` plus `reason()` is the owner's line.
+- From `0.4.10`, `line()` returns that line: `describe()` alone when there is no reason, and otherwise `describe()`, a full stop, one space and `reason()`. Before `0.4.10` a plugin joins the two itself, as `status.reason() == null ? status.describe() : status.describe() + ". " + status.reason()`. A [`DiagnosticReport`](/docs/modules/platform#diagnostics) takes it as a line without a label, `DiagnosticReport.Line.redacted("", status.line())`: the reason of a `FAILED` status quotes the class and message of an exception another plugin threw, and `Line.redacted` passes the line through [`Redaction.hide`](/docs/modules/platform#redaction).
 
 The constructor throws `NullPointerException` for a `null` plugin or state, and `IllegalArgumentException` for a blank reason.
 
@@ -280,7 +279,7 @@ The constructor throws `NullPointerException` for a `null` plugin or state, and 
 
 Every status is read when asked. An integration bound to its plugin reads `NOT_ENABLED` (no version) while that plugin is disabled, and the status found at detection again once it is enabled. `provider()` stays set after the plugin disables; its calls then give their empty answers. The Vault economy is the exception: its status is fixed and changes only through a new lookup.
 
-An integration stays bound to the plugin instance found at detection. When a plugin manager unloads an integration plugin and loads it again, the server holds a new instance under the same name, and the integration keeps the old, disabled one: it stays off and its status stays `NOT_ENABLED` until the plugin detects again. From `0.3.1`, that `NOT_ENABLED` status carries a reason, which `describe()` plus `reason()` shows to the owner:
+An integration stays bound to the plugin instance found at detection. When a plugin manager unloads an integration plugin and loads it again, the server holds a new instance under the same name, and the integration keeps the old, disabled one: it stays off and its status stays `NOT_ENABLED` until the plugin detects again. From `0.3.1`, that `NOT_ENABLED` status carries a reason, which `describe()` plus `reason()` (from `0.4.10`, `line()`) shows to the owner:
 
 ```text
 ItemsAdder installed but not enabled. ItemsAdder was loaded again as a new plugin instance after this plugin detected it, and this plugin still holds the old one. Restart the server to use ItemsAdder again, or run this plugin's reload command if it detects ItemsAdder again.

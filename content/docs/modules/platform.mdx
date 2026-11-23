@@ -19,11 +19,15 @@ All classes live in one package, `so.alaz.taffy.platform`.
 | Amounts | `AmountFormat`, `Amounts`, from `0.4.6` |
 | Players | `PlayerCache`, from `0.4.5` |
 | Logging | `ThrowLog`, `Classes` |
+| Diagnostics | `DiagnosticReport`, `Redaction`, from `0.4.10` |
+| Commands | `CommandHelpers`, from `0.4.10` |
+| Update check | `UpdateCheck`, `UpdateSource`, from `0.4.10` |
 | Discord | `DiscordWebhook`, `WebhookPayload` |
 
 The module holds no static plugin, logger, executor or thread and ships no resource files. Each class takes the
 narrowest thing it uses (a `Plugin`, a `Logger`, a `Path`, an `Executor`) through its constructor or method
-arguments. `DiscordWebhook` is the one class here that owns threads: those of its HTTP client.
+arguments. `DiscordWebhook` is the one class here that owns threads: those of its HTTP client. `UpdateCheck` sends
+its request on an executor the plugin passes and owns none.
 
 ## Setup
 
@@ -1568,6 +1572,325 @@ Every distinct source is kept for the life of the instance. `warn` may be called
 caller's class loader, without initializing it. A lookup that throws for another reason, such as another plugin's
 closed jar, counts as absent and is logged as a warning; an absent class is not logged.
 
+## Diagnostics
+
+From `0.4.10`, `DiagnosticReport` builds the report a plugin's diagnostics command shows to the server owner: titled
+sections of lines, rendered as Adventure components for a command sender or as plain text for the console.
+
+```java
+import so.alaz.taffy.platform.DiagnosticReport;
+import so.alaz.taffy.platform.DiagnosticReport.Line;
+
+void doctor(CommandSender sender) {
+    DiagnosticReport report = DiagnosticReport.builder(this, scheduler.mode())
+        .section("Storage", () -> Storage.diagnostics(starting))
+        .section("Integrations", () -> hookStatuses().stream()
+            .map(status -> Line.redacted("", status.line())).toList())
+        .section("Metrics", () -> metrics.diagnostics())
+        .section("Config", () -> List.of(
+            Line.of(comfiConf.status().line()),
+            Line.pendingRestart(RestartKeys.changed(startup, current, RESTART_ONLY::contains))))
+        .build();
+    report.components().forEach(sender::sendMessage);
+}
+```
+
+```text
+Server
+  Plugin: Shop 1.4.0
+  Server: Paper 26.3
+  Java: 25.0.1
+  Scheduler: Paper
+Storage
+  Database: SQLite
+  State: open
+  Write pool: 0 active, 1 idle, 0 waiting, 1 max
+  Read pool: 0 active, 2 idle, 0 waiting, 4 max
+Integrations
+  Vault 1.7.3 has nothing registered with it. Install an economy plugin.
+Metrics
+  bStats: on
+  FastStats: bukkit 0.33.0, submitting metrics and the plugin's charts
+  FastStats error tracking: on
+Config
+  ComfiConf on
+  Waiting for a restart: storage.type
+```
+
+`DiagnosticReport.builder(Plugin plugin, Scheduler.Mode mode)` reads nothing until `build()`. Every report starts
+with the section `Server`:
+
+| Line | Value |
+|---|---|
+| `Plugin` | `Plugin.getName()` and the version of `Plugin.getPluginMeta()` |
+| `Server` | `Server.getName()` and `Server.getMinecraftVersion()` |
+| `Java` | `Runtime.version()` |
+| `Scheduler` | `Paper` or `Folia`, from the `Scheduler.Mode` passed |
+
+`taffy-platform` names no other module, so each module gives the lines of its own section:
+
+| Lines | From |
+|---|---|
+| `Storage.diagnostics()` and `Storage.diagnostics(CompletableFuture<Storage>)` | [taffy-storage](/docs/modules/storage#diagnostics) |
+| `Metrics.diagnostics()` | [taffy-metrics](/docs/modules/metrics#diagnostics) |
+| `HookStatus.line()` | [taffy-hooks](/docs/modules/hooks#hookstatus) |
+| `ComfiConfStatus.line()` | [taffy-comficonf](/docs/modules/comficonf#status-for-the-server-owner) |
+
+| Member | Behaviour |
+|---|---|
+| `Builder.section(String title, Supplier<? extends Collection<Line>> lines)` | Adds a section whose lines are read at `build()`. A blank title throws `IllegalArgumentException`. |
+| `Builder.section(String title, Collection<Line> lines)` | Adds a section of lines the plugin already holds. |
+| `Builder.build()` | Runs every supplier once, in the order added, on the calling thread. A builder can build again, which reads every section again. |
+| `sections()` | The sections, the standard one first, as `Section(String title, List<Line> lines)`. |
+| `plainText()` | A `List<String>`: each title on a line of its own, then each line of the section behind two spaces. |
+| `components()` | One `Component` for each line of `plainText()`, with the same text: titles in gold, labels in gray, values in white. A value is plain text and is never read as MiniMessage or as legacy colour codes. |
+| `new Line(String label, String value)` | Shown as `<label>: <value>`, or as the value alone when the label is empty. |
+| `Line.of(String value)` | A line without a label, for a value that names its subject, such as `ComfiConfStatus.line()`. |
+| `Line.redacted(String label, String text)` | A line whose value is `Redaction.hide(text)`, for text the plugin did not write. A `HookStatus.line()` goes through it with an empty label. |
+| `Line.pendingRestart(Collection<String> paths)` | The line `Waiting for a restart`. |
+| `Line.plain()` | The line as plain text. |
+
+`Line.pendingRestart` takes the paths [`RestartKeys.changed`](/docs/modules/config#restartkeys) returns between the
+configuration loaded at startup and the current one. It names the paths and never a value, so a changed
+`storage.password` shows as `storage.password`. It reads `none` for no path, names at most 32 paths and counts the
+rest, as in `storage.type, locale.default and 3 more`.
+
+### A section that fails
+
+A supplier that throws a `RuntimeException` or a `LinkageError`, returns `null` or returns a `null` line does not
+lose the report. Its section holds one line, and the other sections are kept:
+
+```text
+Storage
+  could not be read: java.lang.IllegalStateException
+```
+
+The failure is logged as a warning on the plugin's logger with its stack trace. Its message is not part of the
+report.
+
+### What a report may hold
+
+Server owners paste a report into public support channels. The `Server` section, the lines of `Storage.diagnostics`
+and `Metrics.diagnostics` and a `ComfiConfStatus.line()` hold no password, token, connection URL, host, address,
+file path, player name or player UUID. The message of a failed storage start is text Taffy did not write, and it is
+shown as `Redaction.hide` leaves it. The reason of a `HookStatus` in the state `FAILED` quotes the class and message
+of an exception another plugin threw, as in `The economy could not be read (<exception>).`, so a `HookStatus.line()`
+goes into a report as `Line.redacted("", status.line())`. `Redaction.hide` leaves the rest of the line as written,
+except that a plugin version of four numbers, such as `5.4.0.1`, reads as an address. Keep such values out of the lines the plugin writes itself: show a count of players or rows, not their names, and a setting's path, not its
+value. Text the plugin did not write, such as the message of an exception, goes through `Line.redacted`.
+
+A label and a value never hold a line break or a legacy colour code: each control character, line separator and
+section sign (`U+00A7`) becomes a space. A report is
+bounded, and what is left out is counted in a line of its own:
+
+| Limit | Value |
+|---|---|
+| Sections after `Server` (`MAX_SECTIONS`) | 32; a further section is counted in a last section `Not shown` and its supplier never runs |
+| Lines in a section (`MAX_LINES`) | 64, then the line `<n> more lines not shown`, or `1 more line not shown` |
+| Characters in a title or a label (`MAX_LABEL`) | 64, cut with `...` |
+| Characters in a value (`MAX_VALUE`) | 512, cut with `...` |
+| Paths in `Line.pendingRestart` (`MAX_PATHS`) | 32, each up to 128 characters |
+
+### Threads
+
+`build()` runs on the thread that calls it and so does every supplier. A supplier must not block or wait for a
+future, and reads only what that thread may read. On Folia a command runs on the region thread of its sender, or
+on the global region thread for the console, and neither owns another region's worlds or entities. The `Server`
+section, `Storage.diagnostics`, `Metrics.diagnostics` and a status `line()` read cached state without blocking, so
+a report of those builds on any thread. A built report is immutable. Send `components()` on the thread that owns
+the sender.
+
+The texts of a report are written for the server owner and can change in any release.
+
+### Redaction
+
+From `0.4.10`, `Redaction.hide(String text)` hides secrets and personal data in free text before it is shown where
+others can read it. It applies the 19 rules listed under
+[Anonymizing](/docs/modules/metrics#anonymizing), in their order, then hides what is left of a path behind
+`[path hidden]`, and replaces each IPv4 and IPv6 address with `[address hidden]`.
+
+```java
+Redaction.hide("Access denied for user 'mc_prod'@'10.0.0.5' (using password: YES)");
+// Access denied for user [user hidden]@[host hidden] (using password: YES)
+
+Redaction.hide("Could not connect to jdbc:mysql://db.example.net:3306/shop");
+// Could not connect to jdbc:[redacted]
+```
+
+The Unix path rule reads only letters, digits, `_`, `.` and `-` in a folder name, so it ends at the `+` of
+`/home/john+smith/server/data.db`. `hide` hides the text behind `[path hidden]` up to the next whitespace or quote
+when it holds a `/` or a backslash; what follows a space in such a folder name stays. Four numbers of up to three
+digits with dots between them read as an IPv4 address, also before the full stop of a sentence and as the version
+`5.4.0.1`, and not with a fifth number, as in `1.2.3.4.5`. A run of two or more groups of up to four hex digits that
+each end in a colon reads as an IPv6 address when it holds a hex digit, so a time of day such as `12:34:56` and a
+short word such as `a::b` are hidden too, and a `::` alone stays. The rules read what a JDBC driver, a connection pool or an HTTP client writes.
+They do not find a name in a sentence of its own, such as a player name, so `hide` is no reason to put one in a
+report. `Redaction.rules()` returns the 19 rules as `Redaction.Rule(String pattern, String replacement)`, without
+the address rule, for code that hands them to something that applies regular expressions itself. `hide` throws
+`NullPointerException` for a `null` text, runs in time linear in the length of the text and may be called from any
+thread.
+
+## Commands
+
+From `0.4.10`, `CommandHelpers` holds three pieces a plugin's commands repeat: the permission check of a Brigadier
+node, the candidates that start with what was typed, and the player a typed name or UUID stands for. It registers
+no command and sends no message, and it never reads typed text as MiniMessage or as a legacy colour code.
+
+| Member | Behaviour |
+|---|---|
+| `permission(String node)` | The `Predicate<CommandSourceStack>` for `requires`: whether the sender of the source holds the node. |
+| `matching(String typed, Collection<String> candidates)` | The candidates that start with the typed text, in the collection's order, as an unmodifiable `List<String>`. |
+| `suggest(SuggestionsBuilder builder, Collection<String> candidates)` | Suggests `matching(builder.getRemaining(), candidates)` and returns `builder.buildFuture()`. |
+| `target(Server server, String input)` | The `OfflinePlayer` the text stands for, or `null`. |
+
+```java
+import so.alaz.taffy.platform.CommandHelpers;
+
+LiteralArgumentBuilder<CommandSourceStack> give = Commands.literal("give")
+    .requires(CommandHelpers.permission("shop.give"))
+    .then(Commands.argument("target", StringArgumentType.word())
+        .then(Commands.argument("id", StringArgumentType.word())
+            .suggests((context, builder) -> CommandHelpers.suggest(builder, registry.ids()))
+            .executes(context -> {
+                CommandSender sender = context.getSource().getSender();
+                String name = StringArgumentType.getString(context, "target");
+                OfflinePlayer target = CommandHelpers.target(sender.getServer(), name);
+                if (target == null) {
+                    sender.sendMessage(Component.text("No player is known as " + name));
+                    return 0;
+                }
+                stash.add(target.getUniqueId(), StringArgumentType.getString(context, "id"));
+                return Command.SINGLE_SUCCESS;
+            })));
+```
+
+The typed name goes into the answer through `Component.text`, as plain text.
+
+- `permission` asks `CommandSourceStack.getSender()`, so for a command run through `/execute as` it asks the one
+  who ran the command, not the entity it runs as.
+- `matching` ignores letter case, with both sides lower-cased under `Locale.ROOT`, so the server's default locale
+  does not change the answer. An empty typed text matches every candidate, a candidate is returned as it was given,
+  and one given twice is returned twice. It takes and returns plain text, so it also fills the list a Bukkit
+  `TabCompleter` or `BasicCommand.suggest` returns.
+- `matching` and `suggest` show the candidates to whoever asked. Pass only names that sender may see: for player
+  names, the online players the sender `canSee`, not every online player. `CommandHelpers` has no method that
+  lists players.
+- `target` takes the first of these that applies: a UUID in its 36 character form with dashes, in either letter
+  case, through `Server.getOfflinePlayer(UUID)`; the exact name of an online player, ignoring letter case, through
+  `Server.getPlayerExact`; a name in the server's profile cache, through `Server.getOfflinePlayerIfCached`. A blank
+  text and a name that is neither online nor cached give `null`, so a mistyped name stands for no player.
+- `target` never asks Mojang for a name, so it does not wait on the network, unlike
+  `Server.getOfflinePlayer(String)`. The server returns a player for every UUID, also one that has never joined,
+  whose `getName()` is `null`.
+- `target` finds an online player whether or not the sender can see them. A command that must not reveal a hidden
+  player checks `Player.canSee` on the result and answers as for an unknown name.
+
+Each method throws `NullPointerException` for a `null` argument or candidate.
+
+## Update check
+
+From `0.4.10`, `UpdateCheck` asks once, at enable, whether a newer release of the plugin is published, and tells the
+server owner in the log. It downloads nothing, sends no message to a player and owns no thread.
+
+```java
+import so.alaz.taffy.platform.UpdateCheck;
+import so.alaz.taffy.platform.UpdateSource;
+
+updates = UpdateCheck.start(this, errors, getConfig().getBoolean("update-check.enabled", true),
+    UpdateSource.github("alaz", "shop"), scheduler::async);
+```
+
+```text
+[Shop] A newer release is available: 1.5.0 (running 1.4.0). https://github.com/alaz/shop/releases
+```
+
+| Member | Behaviour |
+|---|---|
+| `UpdateCheck.start(Plugin, ErrorReports, boolean enabled, UpdateSource, Executor)` | Submits the one request to the executor and returns at once. With `enabled` false it sends and logs nothing. |
+| `latest()` | The newest published version when it is above the running one, such as `1.5.0` or `1.5.0-rc.1`; otherwise `null`. |
+| `UpdateSource.github(String owner, String repository)` | The 30 newest releases of a GitHub repository. |
+| `UpdateSource.modrinth(String project)` | The versions of a Modrinth project, by id or slug. |
+
+The `enabled` argument is the plugin's own config switch, so a server owner can turn the check off. Taffy reads no
+config key itself.
+
+### What is compared
+
+The running version is `getPluginMeta().getVersion()`. Versions are read as [Semantic Versioning](https://semver.org)
+2.0.0, with a leading `v` and a missing patch number allowed and build metadata dropped.
+
+| Running version | Compared with |
+|---|---|
+| `1.4.0`, no pre-release part | the published releases only |
+| `1.5.0-rc.1` or `1.5.0-SNAPSHOT`, with a pre-release part | the published releases and pre-releases |
+| `build-17`, not a semantic version | nothing: one warning is logged and no request is sent |
+
+- A pre-release is below its own release and above the release before it: `1.5.0-SNAPSHOT` is below `1.5.0` and
+  above `1.4.9`. Pre-release identifiers compare as the specification orders them, so `1.5.0-rc.2` is above
+  `1.5.0-rc.1` and `1.5.0-rc.1` is above `1.5.0-beta.3`.
+- Whether a published version is a pre-release is what the source says about it, not the form of its text. On
+  GitHub it is a release with `prerelease` set, and a draft is left out. On Modrinth it is a version whose
+  `version_type` is not `release`, and a version whose `status` is not `listed` is left out.
+- The version of a GitHub release is its `tag_name`, and of a Modrinth version its `version_number`. A published
+  version that is not a semantic version is skipped.
+- The newest version that is left is compared. When it is not above the running version, nothing is logged and
+  `latest()` stays `null`.
+
+`latest()` holds only ASCII letters, digits, `.` and `-`, at most 66 characters. A plugin that tells its staff on
+join reads it there and chooses who sees it:
+
+```java
+@EventHandler
+void onJoin(PlayerJoinEvent event) {
+    String latest = updates.latest();
+    if (latest != null && event.getPlayer().hasPermission("shop.admin")) {
+        event.getPlayer().sendMessage(Component.text("Shop " + latest + " is available"));
+    }
+}
+```
+
+### The request
+
+- One `GET` over HTTPS, to `https://api.github.com/repos/<owner>/<repository>/releases?per_page=30` or
+  `https://api.modrinth.com/v2/project/<project>/version?include_changelog=false`, without an account or token. It
+  follows no redirect.
+- Its headers are `Host`, `Connection`, `Cache-Control: no-cache`, `Pragma: no-cache`, `Accept`, for GitHub
+  `X-GitHub-Api-Version`, and a `User-Agent` of the plugin's name and version, such as `Shop/1.4.0`. It holds no
+  player data and nothing about the server.
+- Connecting and each read wait at most 10 seconds. The read of the status line and headers is ended 30 seconds
+  after the request began, and no read of the body starts after that, so a request whose connection is made in time
+  ends within 40 seconds. How long the host name takes to resolve is the system's, and the TLS handshake is bound
+  by the 10 seconds of each read alone.
+- At most 262144 bytes of the answer are read, and of them the first 100 entries. What is complete within that is
+  compared, since both sources answer newest first.
+- The request runs on the executor passed to `start` and blocks it until the answer is read. Pass an executor that
+  runs off the server threads, such as `scheduler::async`. A task that finds itself on a server thread logs a
+  warning and sends nothing.
+- `UpdateSource.github` and `UpdateSource.modrinth` throw `IllegalArgumentException` for a name that is not a
+  GitHub owner, a repository name or a Modrinth id or slug, so a name cannot change the address.
+
+### A failed check
+
+Nothing is thrown into enable for a failed check. Each of these logs one warning on the plugin's logger and leaves
+`latest()` at `null`:
+
+| Case | Line |
+|---|---|
+| An answer other than status 200, a redirect included | `Update check failed: api.github.com answered with status 404` |
+| A failed or timed out connection | `Update check failed: could not read from api.github.com (java.net.SocketTimeoutException)` |
+| An answer that is not a list of releases | `Update check failed: the answer of api.github.com is not a list of releases` |
+| A running version that is not a semantic version | `Update check skipped: the plugin's version build-17 is not a semantic version such as 1.4.0` |
+| An executor that refuses the task | `Update check skipped: the executor refused it (java.util.concurrent.RejectedExecutionException)` |
+| An executor that runs the task on a server thread | `Update check skipped: the executor ran it on a server thread, and the request waits on the network` |
+
+An exception of another kind is logged as `Update check failed: <exception class>` and reported to the
+`ErrorReports` under `update-check`. A network failure is not reported there. An executor that drops the task
+without throwing, as `scheduler::async` does once the plugin disables, logs nothing. The wording of these lines can
+change in any release.
+
+A request that is still waiting when the plugin disables ends by its timeouts. After it was sent it touches only
+the plugin's logger and the `UpdateCheck`. `start` throws `NullPointerException` for a `null` argument.
+
 ## Discord
 
 `DiscordWebhook` posts to Discord webhooks asynchronously through one HTTP client.
@@ -1694,7 +2017,10 @@ webhook.postBody(url, body, reason -> getLogger().warning("Discord webhook faile
 
 | Class | Thread rule |
 |---|---|
-| `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog` | any thread |
+| `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog`, `Redaction` | any thread |
+| `CommandHelpers` | `permission`, `matching` and `suggest` on any thread; `target` on a thread that may read the server's player list |
+| `UpdateCheck` | `start` and `latest` on any thread; the request runs on the executor passed to `start`, never on a server thread |
+| `DiagnosticReport` | `build()` runs every section's supplier on the calling thread; a built report is read from any thread |
 | `PlayerCache` | any thread for `get`, `ready`, `refresh` and `close`; the loader runs on an async thread |
 | `Text`, `Messages` | any thread without a viewer; the player's thread with one; for the `OfflinePlayer` and `Global` methods of `Text`, a thread the asked PlaceholderAPI expansions accept |
 | `Items.giveOrDrop`, `Sounds.play` | the thread that owns the player |

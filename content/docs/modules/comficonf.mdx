@@ -238,7 +238,14 @@ Implementations are thread-safe: `ComfiConfConnection` calls every method from w
 | `FAILED` | `ComfiConf <version> could not register this plugin's settings` |
 | `ON` | `ComfiConf on` |
 
-A version that was not read shows as `unknown`. `describe()` never includes the reason; together the two are the owner's line, with `resourceId()` for the same line:
+A version that was not read shows as `unknown`. `describe()` never includes the reason; together the two are the owner's line, with `resourceId()` for the same line. From `0.4.10`, `line()` returns the owner's line: `describe()` alone when there is no reason, and otherwise `describe()`, a full stop, one space and `reason()`, as in `ComfiConf 1.2.0 installed, not registered.` followed by the reason.
+
+```java
+ComfiConfStatus status = comfiConf.status();
+sender.sendPlainMessage(status.line());
+```
+
+Before `0.4.10` a plugin sends the two itself:
 
 ```java
 ComfiConfStatus status = comfiConf.status();
@@ -247,6 +254,8 @@ if (status.reason() != null) {
     sender.sendPlainMessage(status.reason());
 }
 ```
+
+A [`DiagnosticReport`](/docs/modules/platform#diagnostics) takes the line as `DiagnosticReport.Line.of(status.line())`.
 
 A status read after a connect that reached `ON` moves to `NOT_ENABLED` while the bridge plugin is disabled, to `NOT_REGISTERED` while the bridge is enabled but no longer holds the resource (the bridge was reloaded, dropped every registration, or the connection was closed), and to `FAILED` while the link throws when asked whether it holds the resource. It reads `ON` again once the bridge is enabled and the link reports the resource registered. Every other state is fixed at connect.
 

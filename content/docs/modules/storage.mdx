@@ -827,6 +827,54 @@ public void onDisable() {
 
 `cancel(false)` returns `false` when the start already completed; `isCompletedExceptionally()` is then `false` only for a start that succeeded, whose storage `join()` returns at once.
 
+## Diagnostics
+
+From `0.4.10`, `Storage.diagnostics()` gives the lines of a storage section for a
+[`DiagnosticReport`](/docs/modules/platform#diagnostics). It reads counters without blocking, takes no connection
+and never throws, so it is safe on the command's thread.
+
+| Line | Value |
+|---|---|
+| `Database` | `SQLite`, `MySQL`, `MariaDB` or `PostgreSQL` |
+| `State` | `open`, or `closed` once `close` has begun |
+| `Write pool` and `Read pool` on SQLite, `Pool` on a server | `<active> active, <idle> idle, <waiting> waiting, <max> max`: the connections in use, the idle ones, the threads that wait for a connection and the most connections the pool opens. `closed` for a pool that was closed. |
+
+Storage from `Storage.over` built no pool and has no pool line.
+
+A plugin's diagnostics command can run before the future of `Storage.start` has completed, or after it failed, when
+there is no `Storage` to ask. `Storage.diagnostics(CompletableFuture<Storage> start)` reads the future without
+waiting for it:
+
+| The future | Lines |
+|---|---|
+| has not completed | `State: starting` |
+| was cancelled | `State: start cancelled` |
+| completed exceptionally | `State: failed to start: <message>` |
+| completed with a storage | the lines of its `diagnostics()` |
+
+```java
+DiagnosticReport report = DiagnosticReport.builder(this, scheduler.mode())
+    .section("Storage", () -> Storage.diagnostics(starting))
+    .build();
+```
+
+The message of a failed start is that of the failure beneath any `CompletionException` or `ExecutionException`,
+passed through [`Redaction.hide`](/docs/modules/platform#redaction), which hides a connection URL, a host, an
+address, a database user and name and a file path, and cut to 512 characters. A failure without a message shows its
+class name. A MySQL start with a wrong password reads:
+
+```text
+State: failed to start: Failed to initialize pool: Access denied for user [user hidden]@[host hidden] (using password: YES)
+```
+
+A plugin that retries a failed start passes the future of the whole retry, which stays uncompleted between two
+attempts, so the line reads `starting` until the last attempt has failed.
+
+The lines of a started storage hold no host, port, database name, user, password, connection URL or file path. The
+message of a failed start is the one text Taffy did not write: `Redaction.hide` hides what its rules find in it, and
+a host name of one label, such as `mysql`, a port, and what follows a space in a Unix folder name that also holds a
+character other than a letter, a digit, `_`, `.` or `-` stay as the driver wrote them.
+
 ## Testing
 
 A plugin's tests that start storage need HikariCP and the driver of each dialect they start on the test runtime classpath (`testRuntimeOnly(alaz.hikari)`, `testRuntimeOnly(alaz.sqlite.jdbc)`), because `taffy-storage` publishes no dependency on them.

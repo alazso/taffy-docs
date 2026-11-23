@@ -190,7 +190,7 @@ With the switch off, `start()` touches no metrics SDK, clears the error sink and
 
 ### FastStats token rules
 
-A token that does not match `[a-z0-9]{32}` (32 lowercase letters and digits), such as a placeholder, is refused at `start()` and logged as one warning, before FastStats reads or writes any file. A jar without `META-INF/faststats.properties` is refused the same way. A refused start leaves the server's first run to the next plugin that starts FastStats.
+A token that does not match `[a-z0-9]{32}` (32 lowercase letters and digits), such as a placeholder, is refused at `start()` and logged as one warning, before FastStats reads or writes any file. A jar without `META-INF/faststats.properties` is refused the same way, and from `0.4.10` so is a start before the plugin is enabled. A refused start leaves the server's first run to the next plugin that starts FastStats.
 
 On the first start of a server with no `plugins/faststats/config.properties`, FastStats writes the file, prints its own first-run notice of several lines through the plugin's logger, and sends nothing until the next start.
 
@@ -198,7 +198,11 @@ On the first start of a server with no `plugins/faststats/config.properties`, Fa
 
 A provider that fails to start is logged as one warning through the owner's logger (`bStats metrics failed to start: ...` or `FastStats metrics failed to start: ...`) and skipped, and enable goes on. A FastStats start that fails after its context exists shuts the context down with submission turned off, so it sends nothing. Taffy logs nothing else. FastStats with its `debug` option on logs each send through the plugin's logger.
 
-FastStats starts only for a plugin that is enabled, so `start()` runs in `onEnable` or later, not in the plugin's constructor or `onLoad`. From `0.4.10`, a FastStats context that cannot be made ready, as for a plugin that is not enabled yet, gives two lines on the owner's logger: FastStats' own error `Failed to make the FastStats context for <plugin> ready: <cause>` with its stack trace, then the warning `FastStats metrics failed to start: FastStats could not make its context ready`. Before, it was the one warning `FastStats metrics failed to start: <cause>`.
+FastStats starts only for a plugin that is enabled, so `start()` runs in `onEnable` or later, not in the plugin's constructor or `onLoad`. From `0.4.10`, a `start()` before the plugin is enabled logs the one warning `FastStats metrics failed to start: the plugin is not enabled, start metrics in or after onEnable`, before FastStats reads or writes any file. Before, the warning was `FastStats metrics failed to start: <cause>`, and on a server without `plugins/faststats/config.properties` FastStats had already written the file and printed its first-run notice.
+
+From `0.4.10`, a FastStats context that cannot be made ready for another reason, as when the server refuses its listener, gives two lines on the owner's logger: FastStats' own error `Failed to make the FastStats context for <plugin> ready: <cause>` with its stack trace, then the warning `FastStats metrics failed to start: FastStats could not make its context ready`. Before, it was the one warning `FastStats metrics failed to start: <cause>`.
+
+From `0.4.10`, a jar in which the FastStats classes cannot be loaded, as one that shades no FastStats, logs the one warning `FastStats metrics failed to start: <class>` and enable goes on. Before, `start()` threw `NoClassDefFoundError`.
 
 ## Charts
 
@@ -308,6 +312,22 @@ final class MetricsStatus {
 
 `fastStatsErrorTracking()` cannot see the Error Tracking switch in the project's settings on the FastStats dashboard, which discards reports when off. It does not see the error sink either: after the plugin installs a target of its own that does not pass reports to `report`, a report made through the sink is not sent, and the reader still reads `true`.
 
+From `0.4.10`, `diagnostics()` gives the same state as the three lines of a metrics section for a [`DiagnosticReport`](/docs/modules/platform#diagnostics). It reads the readers above, so it never blocks or throws, and its lines hold no token, service id or server id.
+
+| Line | Value |
+|---|---|
+| `bStats` | `on` while `bStatsStarted()`, otherwise `not running` |
+| `FastStats` | `not running` when `fastStatsSdk()` is `null`. Otherwise the SDK name and version, a comma and one of `opted out on this server`, `not submitting metrics`, `submitting metrics without the plugin's charts` and `submitting metrics and the plugin's charts`. |
+| `FastStats error tracking` | `on` while `fastStatsErrorTracking()`, otherwise `off` |
+
+```java
+DiagnosticReport report = DiagnosticReport.builder(this, scheduler.mode())
+    .section("Metrics", () -> metrics.diagnostics())
+    .build();
+```
+
+A provider the plugin did not configure, one the server owner turned off and every provider after `shutdown()` read `not running`. A plugin with a metrics switch of its own in its config adds a line of its own that says so.
+
 ### Shutdown
 
 `shutdown()` is the last step of disable, after the plugin's other shutdown steps, `DiscordWebhook.close()` included. In order, it clears the error sink, stops the Taffy usage chart without a final send, stops bStats, and has FastStats send its last errors and metrics and stop. A step that fails does not stop the next. It is idempotent and never throws. Because it runs last, the reports raised by the earlier shutdown steps go out in that final send.
@@ -334,7 +354,7 @@ The source key is sent unchanged as the `source` attribute of the error, and no 
 
 `ErrorReports` holds the reports raised before its first install or clear, the first of each source and at most 16. When FastStats starts with its error service, `start()` installs the handle into the sink: the held reports are delivered to FastStats error tracking on the calling thread, and every later report goes there too, each under its source. Otherwise `start()` clears the sink, which discards the held reports, and nothing receives later reports.
 
-There is no error service when the switch is off, no token is set, FastStats fails to start, the server is on its first run, the server was started with `-Dfaststats.enabled=false`, or the server owner turned off `enabled` or `submitErrors` in `plugins/faststats/config.properties`.
+There is no error service when the switch is off, no token is set, FastStats fails to start, the server is on its first run, the server was started with `-Dfaststats.enabled=false`, or the server owner turned off `enabled` or `submitErrors` in `plugins/faststats/config.properties`. FastStats `0.33.0` attaches its own error tracker on a first run and with those keys off as well, and tracks the errors Paper reports for the plugin on it. From `0.4.10`, `taffy-metrics` makes that tracker ignore every error in these cases, so none is held or sent.
 
 ### What FastStats receives
 
@@ -357,7 +377,7 @@ FastStats clears every report it holds once a scheduled error submission is acce
 
 ### Anonymizing
 
-Every FastStats error tracker of this module applies these rules to the messages of a report, in this order:
+Every FastStats error tracker of this module applies these rules to the messages of a report, in this order. From `0.4.10` the rules live in `taffy-platform` as [`Redaction`](/docs/modules/platform#redaction), which a plugin can apply to a text of its own with `Redaction.hide`; what FastStats receives is unchanged.
 
 | | Hidden | Sent as |
 |---|---|---|
