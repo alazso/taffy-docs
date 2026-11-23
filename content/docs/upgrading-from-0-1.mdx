@@ -1718,3 +1718,20 @@ on Taffy `0.4.9` stays on FastStats `0.32.2`.
 the owner's line of a status, `Storage.diagnostics()` and `Metrics.diagnostics()` give the lines of a report
 section, and `ApiRules` in [`taffy-test`](/docs/modules/test) also accepts Brigadier types. A server owner
 changes nothing for `0.4.10`.
+
+## 0.4.11
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.11"
+}
+```
+
+Every signature of `0.4.10` is still there, and a plugin changes nothing to move to `0.4.11`.
+
+`0.4.11` adds, in [`taffy-hooks`](/docs/modules/hooks): `HologramProvider.displays`, which gives a
+`DisplayHolograms` provider that shows holograms as display entities with no hologram plugin installed, with an
+optional item above the lines. `HologramProvider.detect` answers as before, so a plugin gets display holograms
+only where it asks for them. A server owner changes nothing for `0.4.11`.
