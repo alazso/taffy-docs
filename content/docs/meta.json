@@ -1,4 +1,4 @@
 {
   "title": "Taffy",
-  "pages": ["index", "getting-started", "gradle-plugins", "consuming-by-coordinates", "modules", "versioning", "upgrading-from-0-1"]
+  "pages": ["index", "getting-started", "gradle-plugins", "consuming-by-coordinates", "modules", "porting-a-jdbc-store", "versioning", "upgrading-from-0-1"]
 }

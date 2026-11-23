@@ -1,0 +1,328 @@
+---
+title: Porting a JDBC store
+description: Move a store that opens its own connections, commits by hand and answers on the calling thread onto Storage and Tx, with the store of ProVouchers as the worked example.
+---
+
+A plugin that kept its data through plain JDBC usually has one class that opens a `Connection`, prepares statements, commits or rolls back by hand and returns the result to the caller. [taffy-storage](/docs/modules/storage) has no `Connection` to hand out: every piece of work is a `TxWork` that runs in one transaction on a database thread and answers through a `CompletableFuture`. This guide lists what differs and shows the port of each pattern, with the `VoucherStorage` of ProVouchers `1.6.0` as the example. Every Java sample on this page is a method of a store that Taffy's own tests compile and run on SQLite, MySQL, MariaDB and PostgreSQL.
+
+The guide needs `0.4.9` for `Params.intValue` and `Row.intValue`; everything else is in `0.4.0`.
+
+## What differs
+
+| A synchronous JDBC store | On `Storage` and `Tx` |
+|---|---|
+| Opens a connection for each call and chooses autocommit or a transaction. | Each `TxWork` runs on a connection of its own with autocommit off. There is no statement outside a transaction. |
+| Commits with `commit()` and rolls back with `rollback()`, for example when a method returns `false`. | The transaction commits when the work returns, whatever it returns, and rolls back only when the work throws. |
+| Runs a failed statement's fallback on the same connection, or on a new one. | A statement that fails throws out of the work. On PostgreSQL the transaction is over at that point, so the fallback is a statement that cannot fail, not a `catch`. |
+| Retries in a loop on one connection. | One piece of work is one transaction with one snapshot. A retry is another piece of work, or a locking read. |
+| Returns the result on the calling thread. | Returns a future that completes on a database thread. |
+| Reads the row count of every `UPDATE` the same way on every database. | MySQL and MariaDB count only the rows an `UPDATE` changed. |
+| Sets savepoints or an isolation level. | Neither is offered. Each pattern below works without them. |
+
+`Tx` has `update`, `batch`, `query`, `queryOne` and `execute` for statements and `afterCommit` for effects outside the database. There is no way to reach the `Connection`, and this guide stands in for one: each thing a raw connection was used for has a port below.
+
+## Keep the tables as they are
+
+The port changes how statements run, not what is stored. ProVouchers keeps a player's UUID as 36 characters of text in `VARCHAR(36)` columns. `Params.uuid` and `Row.uuid` store 16 bytes, or a native `uuid` on PostgreSQL, which would not match the rows the old store wrote, so a text column keeps being bound and read as text:
+
+```java
+/** The cooldowns of a player that end after {@code now}, by voucher id. */
+CompletableFuture<Map<String, Long>> activeCooldowns(UUID player, long now) {
+    return storage.read(tx -> {
+        Map<String, Long> cooldowns = new HashMap<>();
+        tx.query("SELECT voucher_id, expires_at FROM provouchers_cooldowns"
+                + " WHERE player_uuid = ? AND expires_at > ?",
+            params -> params.text(player.toString()).integer(now),
+            row -> cooldowns.put(row.text("voucher_id"), row.integer("expires_at")));
+        return cooldowns;
+    });
+}
+```
+
+- `setString` becomes `Params.text`, `setLong` becomes `Params.integer`, and `setInt` becomes `Params.intValue`. A value read back with `UUID.fromString(row.text("player_uuid"))` is the UUID the old store wrote.
+- ProVouchers' tables carry the literal `provouchers_` in their names and no table prefix, so the samples name them directly. A store whose tables follow the prefix setting writes `tx.table("cooldowns")` instead.
+- The old schema is taken over, not rebuilt: the store's migrations become scripts, and [`Baseline`](/docs/modules/storage#taking-over-another-runners-version-table) records the versions the old runner applied. ProVouchers' own version table has the name storage gives its version table on a server, which [`takeOverSameName()`](/docs/modules/storage#an-old-table-named-as-the-version-table) covers.
+- Work that only reads goes through `storage.read`. On SQLite it then runs beside the writer instead of queueing behind it.
+
+## A claim: insert, then read
+
+The old store claimed a unique voucher id by inserting it and, when the insert failed on the primary key, reading the row back to see whose claim it was. It read on a fresh autocommit connection, because PostgreSQL refuses every statement of a transaction after one has failed:
+
+```java title="Before"
+try (Connection connection = connection();
+     PreparedStatement statement = connection.prepareStatement(
+         "INSERT INTO provouchers_used_vouchers (uid, player_uuid, redeemed_at) VALUES (?, ?, ?)")) {
+    statement.setString(1, uid);
+    statement.setString(2, player.toString());
+    statement.setLong(3, redeemedAt);
+    statement.executeUpdate();
+    return true;
+} catch (SQLException ex) {
+    UsedClaim stored = usedClaim(uid);
+    if (stored == null) {
+        throw ex;
+    }
+    return stored.player().equals(player.toString()) && stored.redeemedAt() == redeemedAt;
+}
+```
+
+Inside a `TxWork` there is no second connection, and a caught `SQLException` leaves a PostgreSQL transaction unusable. The port makes the insert unable to fail on the key: `Dialect.insertOrIgnore` builds an insert that does nothing when the row exists. The read that follows in the same transaction then tells whose claim is stored:
+
+```java
+/** Whether the stored claim of the unique id is this one, after claiming it when it was free. */
+CompletableFuture<Boolean> recordUse(String uid, UUID player, long redeemedAt) {
+    return storage.async(tx -> {
+        tx.update(tx.dialect().insertOrIgnore("provouchers_used_vouchers",
+                List.of("uid", "player_uuid", "redeemed_at"), List.of("uid")),
+            params -> params.text(uid).text(player.toString()).integer(redeemedAt));
+        return tx.queryOne("SELECT player_uuid, redeemed_at FROM provouchers_used_vouchers WHERE uid = ?",
+            params -> params.text(uid),
+            row -> player.equals(UUID.fromString(row.text("player_uuid")))
+                && Long.valueOf(redeemedAt).equals(row.integer("redeemed_at"))).orElse(false);
+    });
+}
+```
+
+- The result comes from the row that is stored, not from the insert's count, so a claim that is sent twice still answers `true` and a claim another player holds answers `false`.
+- On MySQL and MariaDB `insertOrIgnore` skips a conflict on any unique key, so the key given must be the table's only unique key, as it is here.
+- When two servers claim the same id at once, the second insert waits for the first transaction to end and then does nothing, and its read sees the committed row.
+
+## UPDATE then INSERT becomes an upsert
+
+The old store set a cooldown by updating the row and inserting it when the update counted no row:
+
+```java title="Before"
+statement.setLong(1, expiresAt);
+statement.setString(2, player.toString());
+statement.setString(3, voucherId);
+updated = statement.executeUpdate();
+// ...
+if (updated == 0) {
+    // INSERT INTO provouchers_cooldowns (player_uuid, voucher_id, expires_at) VALUES (?, ?, ?)
+}
+```
+
+That reads the count as "no such row". Storage opens MySQL and MariaDB connections with `useAffectedRows=true`, where an `UPDATE` counts only the rows whose values it changed. Setting a cooldown to the expiry it already has counts 0 there, the insert runs, and it fails on the primary key. `Dialect.upsert` writes the row in one statement on every database:
+
+```java
+/** Stores or replaces the expiry of a player's cooldown. */
+CompletableFuture<Void> setCooldown(UUID player, String voucherId, long expiresAt) {
+    return storage.async(tx -> {
+        tx.update(tx.dialect().upsert("provouchers_cooldowns",
+                List.of("player_uuid", "voucher_id", "expires_at"),
+                List.of("player_uuid", "voucher_id"),
+                List.of("expires_at")),
+            params -> params.text(player.toString()).text(voucherId).integer(expiresAt));
+        return null;
+    });
+}
+```
+
+The count of an upsert differs too (1, 2 or 0 on MySQL and MariaDB, 1 on SQLite and PostgreSQL), so the port does not read it.
+
+## Update counts under useAffectedRows
+
+Every place the old store compares a row count with 0 needs one look. Two cases are safe on every database, and one is not:
+
+| The `UPDATE` | Count on MySQL and MariaDB | Safe to read as "matched"? |
+|---|---|---|
+| Always changes a value, such as `SET uses = uses + ?` with an amount of 1 or more, or one that also sets a timestamp to `tx.now()`. | 1 for a matched row. | Yes. |
+| May write the values the row already has, such as `SET expires_at = ?`. | 0 for a matched row that already had them. | No. Use an upsert, or add a column that always changes. |
+| Matches no row. | 0. | |
+
+[Row counts](/docs/modules/storage#row-counts-differ-per-dialect) has the rule. SQLite and PostgreSQL count every matched row.
+
+## Returning false no longer rolls back
+
+The old store wrapped two guarded updates in a helper that committed when its body returned `true` and rolled back when it returned `false`. A `TxWork` commits whenever it returns, so the port must not return `false` after its first update has run. Work that has written and must undo it throws:
+
+```java
+/** Thrown inside work to roll its transaction back when a cap no longer fits. */
+static final class CapReached extends SQLException {
+
+    CapReached(String key) {
+        super("the cap of " + key + " no longer fits");
+    }
+}
+
+/**
+ * Adds uses to the player's count and the key's total, each guarded by its cap. Completes with {@code false},
+ * with no count changed, when either cap no longer fits.
+ */
+CompletableFuture<Boolean> addUses(String key, UUID player, int amount, int perPlayerCap, int globalCap) {
+    return storage.asyncRetrying(tx -> {
+        ensureCounters(tx, key, player);
+        int mine = tx.update("UPDATE provouchers_code_uses SET uses = uses + ?, updated_at = ?"
+                + " WHERE code = ? AND player_uuid = ? AND uses + ? <= ?",
+            params -> params.intValue(amount).time(tx.now()).text(key).text(player.toString())
+                .intValue(amount).intValue(perPlayerCap));
+        if (mine == 0) {
+            return false;
+        }
+        int total = tx.update("UPDATE provouchers_use_totals SET uses = uses + ? WHERE code = ? AND uses + ? <= ?",
+            params -> params.intValue(amount).text(key).intValue(amount).intValue(globalCap));
+        if (total == 0) {
+            throw new CapReached(key);
+        }
+        return true;
+    }).exceptionally(failure -> {
+        Throwable cause = failure instanceof CompletionException wrapped ? wrapped.getCause() : failure;
+        if (cause instanceof CapReached) {
+            return false;
+        }
+        throw failure instanceof CompletionException wrapped ? wrapped : new CompletionException(failure);
+    });
+}
+
+private static void ensureCounters(Tx tx, String key, UUID player) throws SQLException {
+    tx.update(tx.dialect().insertOrIgnore("provouchers_use_totals", List.of("code", "uses"), List.of("code")),
+        params -> params.text(key).intValue(0));
+    tx.update(tx.dialect().insertOrIgnore("provouchers_code_uses",
+            List.of("code", "player_uuid", "uses", "updated_at"), List.of("code", "player_uuid")),
+        params -> params.text(key).text(player.toString()).intValue(0).time(tx.now()));
+}
+```
+
+- The first `return false` is fine: the guarded update matched no row, so only the two counter rows `ensureCounters` made sure of are committed, each at 0 when it is new.
+- After the first update has counted a row, the second cap failing must undo it. `throw new CapReached(key)` rolls the transaction back, and `exceptionally` turns that one failure into the `false` the old method returned. Any other failure passes through.
+- An exception thrown by the work is not retried by `asyncRetrying` unless the database rolled the transaction back (a deadlock or a serialization failure), so `CapReached` ends the work at once.
+- Both updates add an amount of 1 or more, so their counts are safe on MySQL and MariaDB. An amount of 0 would count 0 there.
+- An effect outside the database, such as a message to the player or a cache update, goes into `tx.afterCommit`, which never runs for a transaction that rolled back.
+
+## Read, compute, write
+
+The old store reserved uses by reading the two counters on an autocommit connection, computing how many fit under the caps, and adding them with the guarded updates. When a guard failed because another server had written in between, it read again, up to 32 times, on the same connection.
+
+That loop does not survive inside one `TxWork`. On MySQL and MariaDB a transaction reads from the snapshot its first select took, so a second read in the same work returns the same counters however often it runs, and the loop spins through its attempts without ever seeing the other server's write. [Threads](/docs/modules/storage#threads) states the rule. There are two ports.
+
+### One transaction with a locking read
+
+`Dialect.forUpdate()` appends `FOR UPDATE` on the servers, which holds the selected rows until the transaction ends and, on MySQL and MariaDB, reads the newest committed row instead of the snapshot. No guard and no retry are needed, because no other transaction can change the counters between the read and the write:
+
+```java
+/**
+ * Grants up to {@code requested} uses within both caps in one transaction that locks the two counters, and
+ * completes with the number granted.
+ */
+CompletableFuture<Integer> reserveUses(String key, UUID player, int requested, int perPlayerCap, int globalCap) {
+    return storage.asyncRetrying(tx -> {
+        String locked = tx.dialect().forUpdate();
+        ensureCounters(tx, key, player);
+        long total = tx.queryOne("SELECT uses FROM provouchers_use_totals WHERE code = ?" + locked,
+            params -> params.text(key), row -> row.integer("uses")).orElseThrow();
+        int mine = tx.queryOne("SELECT uses FROM provouchers_code_uses WHERE code = ? AND player_uuid = ?" + locked,
+            params -> params.text(key).text(player.toString()), row -> row.intValue("uses")).orElseThrow();
+        int grant = (int) Math.max(0, Math.min(requested, Math.min(perPlayerCap - mine, globalCap - total)));
+        if (grant == 0) {
+            return 0;
+        }
+        tx.update("UPDATE provouchers_code_uses SET uses = uses + ?, updated_at = ?"
+                + " WHERE code = ? AND player_uuid = ?",
+            params -> params.intValue(grant).time(tx.now()).text(key).text(player.toString()));
+        tx.update("UPDATE provouchers_use_totals SET uses = uses + ? WHERE code = ?",
+            params -> params.intValue(grant).text(key));
+        return grant;
+    });
+}
+```
+
+- Every transaction locks the total of the key first and the player's row second. Transactions that lock the same rows in one order wait for each other and never deadlock. Where the order can differ, the database rolls one transaction back and `asyncRetrying` runs it again.
+- On SQLite `forUpdate()` is empty and writes run one at a time, so the same code is correct there.
+- A lock is held while the work runs, so the work does nothing slow: no Bukkit call, no wait for other work.
+
+### One piece of work for each attempt
+
+The optimistic loop stays optimistic when each attempt is its own work: one transaction reads, the next adds with the guards, and a guard that fails starts another read in a new transaction with a new snapshot.
+
+```java
+/**
+ * Grants up to {@code requested} uses within both caps without a lock: each attempt reads the counters in one
+ * transaction and adds to them in the next, and an attempt whose caps no longer fit reads again.
+ */
+CompletableFuture<Integer> reserveUsesOptimistically(String key, UUID player, int requested, int perPlayerCap,
+                                                     int globalCap) {
+    return attempt(key, player, requested, perPlayerCap, globalCap, ATTEMPTS);
+}
+
+private CompletableFuture<Integer> attempt(String key, UUID player, int requested, int perPlayerCap,
+                                           int globalCap, int attemptsLeft) {
+    return storage.read(tx -> {
+        long total = tx.queryOne("SELECT uses FROM provouchers_use_totals WHERE code = ?",
+            params -> params.text(key), row -> row.integer("uses")).orElse(0L);
+        int mine = tx.queryOne("SELECT uses FROM provouchers_code_uses WHERE code = ? AND player_uuid = ?",
+            params -> params.text(key).text(player.toString()), row -> row.intValue("uses")).orElse(0);
+        return (int) Math.max(0, Math.min(requested, Math.min(perPlayerCap - mine, globalCap - total)));
+    }).thenCompose(grant -> {
+        if (grant == 0) {
+            return CompletableFuture.completedFuture(0);
+        }
+        return addUses(key, player, grant, perPlayerCap, globalCap).thenCompose(added -> {
+            if (added) {
+                return CompletableFuture.completedFuture(grant);
+            }
+            if (attemptsLeft == 1) {
+                return CompletableFuture.<Integer>failedFuture(new SQLException("Could not reserve uses of '" + key
+                    + "': " + ATTEMPTS + " attempts in a row conflicted with concurrent writes"));
+            }
+            return attempt(key, player, requested, perPlayerCap, globalCap, attemptsLeft - 1);
+        });
+    });
+}
+```
+
+`ATTEMPTS` is the 32 of the old loop. The attempts are chained with `thenCompose`, which hands the next piece of work to storage and returns: no stage waits for a future, so the chain may run on the database threads.
+
+## Answering the caller
+
+Every method of the ported store returns a future. The caller that needs the server thread hops there with the [Scheduler](/docs/modules/platform), as [where stages run](/docs/modules/storage#where-stages-run) shows.
+
+A caller that was written against the synchronous store, and already runs off the server thread, can wait for the result. It must not be a database thread: a thread named `<name>-db-N` or `<name>-db-writer` that waits for database work holds the thread that work may need, and with one database thread, or for a write on SQLite, the wait never ends.
+
+```java
+/**
+ * The synchronous form of {@link #recordUse} for a caller that is not on a database thread, such as a command
+ * that already runs off the server thread.
+ */
+boolean recordUseAndWait(String uid, UUID player, long redeemedAt) {
+    if (Thread.currentThread().getName().contains("-db-")) {
+        throw new IllegalStateException("a database thread must not wait for database work");
+    }
+    return recordUse(uid, player, redeemedAt).join();
+}
+```
+
+- `join()` belongs on a thread the plugin owns for blocking work, never on the server thread, a region thread or a database thread.
+- A stage chained onto a storage future without an executor runs on a database thread. Such a stage composes more work, as `attempt` does, or hands off to the scheduler. It does not call `join()` or `get()`.
+- At disable, pending writes are covered by the drain of `Storage.close`, so no code waits for them one by one.
+
+## Checklist
+
+<Steps>
+<Step>
+Turn the old migrations into scripts and take the old version table over with a `Baseline`, so the port starts on the data owners already have.
+</Step>
+<Step>
+Keep every column's type: bind text UUIDs with `Params.text`, numbers with `Params.integer` or `Params.intValue`.
+</Step>
+<Step>
+Give each method one `TxWork`, through `read` when it only reads and `async` or `asyncRetrying` when it writes.
+</Step>
+<Step>
+Replace each insert whose failure was caught with `Dialect.insertOrIgnore` and a read, and each `UPDATE` followed by `INSERT` with `Dialect.upsert`.
+</Step>
+<Step>
+Check every row count that is compared with 0 against `useAffectedRows`.
+</Step>
+<Step>
+Replace each `rollback()`, and each `return false` that used to mean one, with a thrown exception once the work has written.
+</Step>
+<Step>
+Replace each read, compute, write loop with a `forUpdate()` read in one transaction, or with one piece of work for each attempt.
+</Step>
+<Step>
+Return futures, and find every place that waited for the old store: none of them may run on a `<name>-db` thread.
+</Step>
+<Step>
+Run the ported store's tests against each database the plugin offers. [Testing](/docs/modules/storage#testing) covers `Storage.over` and `FaultyDataSource` for the failure paths.
+</Step>
+</Steps>
