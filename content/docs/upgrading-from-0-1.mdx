@@ -1696,3 +1696,25 @@ uses.
 [`taffy-config`](/docs/modules/config): `AtomicWriter`, `ConfigUpgrade` steps that move and remove keys,
 `ConfigLoader.refuseNewer`, and file versions and a recursive scan in `YamlFolder`. A server owner changes
 nothing for `0.4.9`.
+
+## 0.4.10
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.10"
+}
+```
+
+Every signature of `0.4.9` is still there. One thing changes for a plugin that uses
+[`taffy-metrics`](/docs/modules/metrics): `0.4.10` is built for FastStats `0.33.0`, so the plugin jar must
+shade FastStats `0.33.0` or newer. The convention plugin and the catalog of `0.4.10` do that without a change
+in the build. A plugin that pins its own FastStats version raises it with this release, and a plugin that stays
+on Taffy `0.4.9` stays on FastStats `0.32.2`.
+
+`0.4.10` adds, in [`taffy-platform`](/docs/modules/platform): `DiagnosticReport`, `Redaction`,
+`CommandHelpers`, and `UpdateCheck` with `UpdateSource`. `HookStatus.line()` and `ComfiConfStatus.line()` give
+the owner's line of a status, `Storage.diagnostics()` and `Metrics.diagnostics()` give the lines of a report
+section, and `ApiRules` in [`taffy-test`](/docs/modules/test) also accepts Brigadier types. A server owner
+changes nothing for `0.4.10`.

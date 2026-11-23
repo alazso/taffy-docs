@@ -46,7 +46,7 @@ const snippet = `pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.4.9"
+    id("so.alaz.taffy.settings") version "0.4.10"
 }`;
 
 export default function HomePage() {
