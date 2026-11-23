@@ -1655,3 +1655,23 @@ an `OfflinePlayer` overload. A call with arguments compiles as before.
 `CustomItems.detect` callback for a custom item plugin that loads or reloads its items. In
 [`taffy-platform`](/docs/modules/platform), `Text` renders for an `OfflinePlayer` and, with `renderGlobal`, for no
 player. A server owner changes nothing for `0.4.7`.
+
+## 0.4.8
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.8"
+}
+```
+
+Every signature of `0.4.7` is still there, and a plugin changes nothing to move to `0.4.8`. Each addition is
+switched on by the plugin: with none of them used, every message and every config line is the one `0.4.7` gave.
+
+`0.4.8` adds, in [`taffy-platform`](/docs/modules/platform): a `Messages` load that names its folder, a load with
+bundled languages, `addMissingKeys`, `send`, `sendActionBar` and `showTitle` by key, `withChatPrefix`, and
+`withBracedNamesIgnoringCase` on `Text` and `Messages`. In [`taffy-config`](/docs/modules/config):
+`ConfigReader.sections`, `choiceWithHyphens`, problems as `ConfigProblem` records, `YamlFolder.loadReport` and
+`ConfigLoadException.withProblems`. A Kotlin plugin beside `so.alaz.taffy.paper-plugin` is now tested, and
+[Gradle plugins](/docs/gradle-plugins) has its recipe. A server owner changes nothing for `0.4.8`.
