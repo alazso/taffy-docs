@@ -631,6 +631,12 @@ meta.displayName(ownerText.render("%luckperms_prefix% <white>voucher", player));
 
 - A value is written as `<name>`, or as `{name}`, which reads as `<name>` for every name the call supplies. A
   `{name}` nothing supplies stays as written. Only names of lower-case letters, digits, `_` and `-` are rewritten.
+- From `0.4.8`, `text.withBracedNamesIgnoringCase()` returns a `Text` that also reads a `{name}` written with
+  upper-case letters. The name is matched against the supplied values in lower case, so `{crateName}` reads as
+  `<cratename>` when a value named `cratename` is supplied; a value's own name is always lower case, as a
+  MiniMessage tag name is. A `{name}` nothing supplies still stays as written. The instance it is called on is
+  not changed and renders as before. A supplied value is inserted as it is with either instance: a `{name}` or a
+  tag inside `Placeholder.unparsed` text is not read again.
 - The order is: `{name}` rewrite, PlaceholderAPI on the template, then MiniMessage with the values. PlaceholderAPI
   never sees a supplied value; a value with placeholders of its own goes through `resolve` first, and is then
   supplied as `Placeholder.unparsed` unless the tags its placeholders return are meant to be parsed. A supplied
@@ -721,6 +727,83 @@ lang/de.yml is not saved as UTF-8, so each byte that is not UTF-8 is read as the
 A file that is not valid YAML once it is read that way is still skipped, and the bundled file is still read
 strictly. Strict reading stays the default: `load` skips such a file.
 
+### Another folder
+
+From `0.4.8`, `load(Path dataFolder, String folder, Supplier<InputStream> bundled, Logger logger, String
+defaultLocale, boolean perPlayer)` reads the files from `dataFolder/<folder>` in place of `dataFolder/lang`, for a
+plugin whose owners already keep their files in a folder such as `locales` or `messages`:
+
+```java
+Messages messages = Messages.load(
+    getDataFolder().toPath(), "locales", () -> getResource("locales/en.yml"), getLogger(), "en", true);
+```
+
+The bundled English file is written to `<folder>/en.yml` when that file is absent, and every warning names
+`<folder>`. The folder is one path segment: a blank one, `.`, or one that holds `/`, `\` or `..` throws
+`IllegalArgumentException`. The other loads keep `lang`.
+
+### Bundled languages
+
+From `0.4.8`, a plugin that bundles more languages than English names them at the load:
+
+```java
+Messages messages = Messages.load(
+    getDataFolder().toPath(), "lang", List.of("de", "pt_BR"),
+    code -> getResource("lang/" + code + ".yml"), getLogger(), language, true);
+```
+
+`bundled` opens the bundled file of a code, a new stream on each call. It is asked for `en` and for each code as
+the list writes it; a code that reads as `en` is ignored. This load differs from the others in three ways:
+
+- The load and each `reload()` write every bundled file whose `<folder>/<code>.yml` is absent.
+- At each step of the [lookup](#lookup), a key the owner's file of that locale lacks is taken from the bundled file
+  of the same code, before the next step. For `pt_br` the order is the owner's `pt_br.yml`, the bundled `pt_br`,
+  the owner's `pt.yml`, the bundled `pt`, the default locale's file, its bundled file, then the bundled English
+  text. So a `de.yml` an owner kept from an older release of the plugin serves a key added since in German. A
+  bundled language is served when its file is gone as well, and `loadedLanguages()` lists it.
+- The warning about the keys a file lacks lists only the keys that are then shown in another language, and is
+  logged once for each file and list of keys while the server runs, not on each reload:
+
+```text
+lang/fr.yml lacks shop.sold, shop.help; those messages are shown in another language.
+```
+
+A bundled file that is missing, is not valid UTF-8 or is not valid YAML throws `IllegalStateException`. Two codes
+that read as one locale, such as `pt_BR` and `pt-br`, and a code that is not one path segment throw
+`IllegalArgumentException`.
+
+### New keys in an owner's file
+
+Loading never changes a file an owner has: a key added by a newer release of the plugin is served from the bundled
+text. From `0.4.8`, `addMissingKeys()` writes those keys into the owner's `en.yml`, when the plugin calls it:
+
+```java
+if (getConfig().getBoolean("add-new-messages", true)) {
+    List<String> added = messages.addMissingKeys();
+}
+```
+
+- Each key of the bundled English file that `en.yml` lacks is appended at the end of the file, with its bundled
+  text, in the order of the bundled file. The returned list holds the keys that were added.
+- The owner's bytes stay as they are: lines, comments, order, encoding and byte order mark are kept, and the added
+  lines end as the file's lines do (`\r\n` in a file that has one). A key is added in its dotted form, such as
+  `shop.sold: "..."`, and a list as a YAML list.
+- The new content is written to `en.yml.tmp` beside the file and moved over it in one step. The file is then read
+  again; no other file is read and no load warning is repeated.
+- `addMissingKeys(String locale)` does the same for the file of one language, from that language's own bundled
+  file, after a load that names [bundled languages](#bundled-languages). It adds nothing for a language the plugin
+  bundles no file of, so a file is never given English text.
+- Nothing is written when the file lacks no key or is absent. A file that is not valid YAML or is not saved as
+  UTF-8 is left as it is, also after `loadLenient`, with a warning:
+
+```text
+lang/en.yml is not valid YAML saved as UTF-8, so no key was added to it.
+```
+
+- A key that cannot stand at the end of the file, as when the file holds text under a key the bundled file uses as
+  a section, leaves the file as it is with the warning `lang/en.yml was not changed, because <keys> cannot be added
+  at its end.` A file that cannot be written is reported as `Could not add keys to lang/en.yml: <reason>.`
+
 ### Lookup
 
 A key resolves through, in order: the exact locale's file (`pt_br`), its language's file (`pt`), the default
@@ -737,6 +820,13 @@ A key no file has renders as the visible marker `<red>missing:key` and never thr
 | `render(Locale, String key, TagResolver...)` | Renders without PlaceholderAPI or MiniPlaceholders. |
 | `render(Text, Player viewer, String key, TagResolver...)` | Renders in the viewer's language through `Text`, so PlaceholderAPI and MiniPlaceholders apply. |
 | `renderTemplate(Text, Player viewer, String template, TagResolver...)` | Renders a template that is not a key, with the viewer's prefix. |
+| `send(Text, CommandSender, String key, TagResolver...)` | From `0.4.8`. Renders as `render(Text, Player, ...)` does and sends one chat message. |
+| `sendActionBar(Text, Player, String key, TagResolver...)` | From `0.4.8`. Renders the same way and shows an action bar. |
+| `showTitle(Text, Player, String titleKey, String subtitleKey, Title.Times, TagResolver...)` | From `0.4.8`. Shows a title from two keys with the given times. |
+| `showTitle(Text, Player, String key, TagResolver...)` | From `0.4.8`. Shows a title written as one lang entry, times included. |
+| `withChatPrefix(Supplier<String>)` | From `0.4.8`. A `Messages` over the same files whose `send` puts a prefix from the plugin in front. |
+| `withBracedNamesIgnoringCase()` | From `0.4.8`. A `Messages` over the same files that also fills `{crateName}` from a value named `cratename`. |
+| `addMissingKeys()`, `addMissingKeys(String locale)` | From `0.4.8`. Appends the bundled keys an owner's file lacks, as [New keys in an owner's file](#new-keys-in-an-owners-file) describes. |
 | `lines(Locale, String key, TagResolver...)` | One component per line; a tag opened on one line does not carry into the next. |
 | `template(Locale, String key)` | The raw template, lines joined by a newline. |
 | `has(Locale, String key)` | Whether the key resolves for that locale. |
@@ -744,8 +834,8 @@ A key no file has renders as the visible marker `<red>missing:key` and never thr
 | `loadedLanguages()` | The loaded locale codes. |
 | `defaultLocale()`, `perPlayer()` | The values given at load. |
 
-A `null` locale or viewer is for the console and other output without a viewer. `Messages.FOLDER` is `lang` and
-`Messages.FALLBACK` is `en`.
+A `null` locale or viewer is for the console and other output without a viewer. `Messages.FOLDER` is `lang`, the
+folder of every load that names no other one, and `Messages.FALLBACK` is `en`.
 
 - A YAML list is kept as its lines; a message of several lines renders joined by a newline, or one component per
   line through `lines`.
@@ -758,6 +848,93 @@ A `null` locale or viewer is for the console and other output without a viewer. 
 
 Methods without a viewer may be called from any thread; those with one follow the thread rule of `Text`. A render
 during `reload()` sees either all the old files or all the new ones.
+
+### Sending
+
+From `0.4.8`, `Messages` sends a message by its key. Each send renders as `render(Text, Player, String key,
+TagResolver...)` does, so PlaceholderAPI and MiniPlaceholders apply for a player, and belongs on the thread that
+owns the player.
+
+```java
+messages.send(text, sender, "shop.bought", Placeholder.unparsed("price", "250"));
+messages.sendActionBar(text, player, "voucher.soulbound");
+messages.showTitle(text, player, "crate.won.title", "crate.won.subtitle",
+    Title.Times.times(Ticks.duration(10), Ticks.duration(60), Ticks.duration(10)),
+    Placeholder.component("prize", prize.displayName()));
+```
+
+- `send` takes any `CommandSender`. A player is the viewer; the console and every other sender get the render
+  without a viewer. A message of several lines is sent as one chat message, its lines joined by a newline.
+- An empty message, one whose template is an empty text (`""`) or a list of no lines (`[]`), is not sent, so an
+  owner can switch a message off. An action bar of an empty message is not shown either, and the bar the player
+  sees stays. A title is not shown when its title and subtitle are both empty.
+- A key no file has sends the `<red>missing:key` marker.
+- A `null` `subtitleKey` gives an empty subtitle.
+
+`showTitle(Text, Player, String key, TagResolver...)` shows a title an owner writes as one entry, with its times as
+whole numbers of ticks:
+
+```yaml
+crate:
+  won:
+    title: "<gold>You won"
+    subtitle: "<gray>{prize}"
+    fadeIn: 10
+    stay: 60
+    fadeOut: 10
+```
+
+```java
+messages.showTitle(text, player, "crate.won", Placeholder.component("prize", prize.displayName()));
+```
+
+A time that no file has, or that is not a whole number of at least 0, is the one of Adventure's
+`Title.DEFAULT_TIMES` (10, 70 and 20 ticks). A `subtitle` no file has gives an empty subtitle, and a `title` no file
+has shows the missing-key marker.
+
+### A prefix from the plugin
+
+The `prefix` key of the lang files appears only where a template writes it. From `0.4.8`,
+`withChatPrefix(Supplier<String>)` returns a `Messages` whose `send` also puts a prefix the plugin supplies, such
+as a `config.yml` setting, in front of each chat message:
+
+```java
+Messages messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger())
+    .withChatPrefix(() -> getConfig().getString("prefix"));
+```
+
+- The prefix is a MiniMessage template, read on each send, so a config reload applies at once. `null` or an empty
+  text means no prefix.
+- It is written in front of the message's template and rendered with it: its PlaceholderAPI placeholders are filled
+  in for a player, and a tag it leaves open, such as `<gray>`, applies to the message.
+- Only `send` adds it. `render`, `lines`, `sendActionBar` and `showTitle` do not.
+- A message of several lines gets it once, in front of its first line. An empty message, which is not sent, gets
+  none.
+- A template can still write `<prefix>` for the lang file's prefix; the two are independent.
+- The instance it is called on is not changed, and `Messages.load` alone adds no prefix. Both instances share their
+  files: `reload()` and `addMissingKeys()` through either apply to both.
+
+### Names with upper-case letters
+
+A `{name}` is rewritten only when its name holds lower-case letters, digits, `_` and `-`, so `{crateName}` stays as
+written. From `0.4.8`, `withBracedNamesIgnoringCase()` returns a `Messages` over the same files that matches a
+`{name}` against the supplied values in lower case, in a template, in the prefix and in the prefix of
+`withChatPrefix`:
+
+```java
+Messages messages = Messages.load(getDataFolder().toPath(), () -> getResource("lang/en.yml"), getLogger())
+    .withBracedNamesIgnoringCase();
+
+// crate.opened: "{playerName} opened {crateName}"
+messages.send(text, player, "crate.opened",
+    Placeholder.unparsed("playername", player.getName()), Placeholder.unparsed("cratename", crate.name()));
+```
+
+The value's name is written in lower case, as a MiniMessage tag name is. A `{name}` nothing supplies stays as
+written, and a supplied value is inserted as it is: a `{name}` or a tag inside `Placeholder.unparsed` text is not
+read again. The instance it is called on is not changed, so every render of a plugin that does not call it is the
+same as in `0.4.7`. `Text.withBracedNamesIgnoringCase()` is the same setting for templates rendered through `Text`
+alone.
 
 ## LegacyText
 
