@@ -776,6 +776,60 @@ ItemStack voucher = new ItemBuilder(Material.PAPER)
 
 `ItemBuilder.applyGlow(ItemMeta)` gives any item meta the enchantment glint without adding an enchantment.
 
+From `0.4.6`, `new ItemBuilder(ItemStack base)` starts from a stack the plugin did not build, such as a stored
+voucher or a listing preview. `build()` copies the stack with `ItemStack.clone()` as it is at that call and never
+changes `base`. The copy keeps the amount, name, lore, glint and every other property that no setter was called
+for, so a builder that only sets a name replaces only the name:
+
+```java
+ItemStack preview = new ItemBuilder(listing.item())
+    .name(text.render("<gold>Listing preview"))
+    .build();
+```
+
+An empty lore and `glow(false)` count as not called: they keep the lore and the glint of the stack.
+`new ItemBuilder(Material)` builds what it built before, with an amount of 1 unless `amount` sets it.
+
+From `0.4.6` the builder also has these setters, each applied in `build()`:
+
+| Setter | Paper API it uses | Notes |
+|---|---|---|
+| `itemModel(NamespacedKey)` | `ItemMeta.setItemModel` | |
+| `customModelData(List<Float>, Logger)` | the `CUSTOM_MODEL_DATA` data component, through `ItemStack.setData` | replaces the custom model data of a base stack; an empty list sets nothing |
+| `enchant(Enchantment, int level)` | `ItemMeta.addEnchant` | no limit on the level; a second call for the same enchantment replaces its level |
+| `unbreakable(boolean)` | `ItemMeta.setUnbreakable` | |
+| `damage(int)` | `Damageable.setDamage` | ignored by an item that cannot be damaged |
+| `trim(ArmorTrim)` | `ArmorMeta.setTrim` | ignored by an item that is not armour |
+| `hideTooltip(boolean)` | `ItemMeta.setHideTooltip` | |
+| `color(Color)` | `setColor` of `LeatherArmorMeta`, `PotionMeta` or `MapMeta` | ignored by any other item; from Paper 26.3 a map has no colour and `MapMeta.setColor` does nothing |
+| `tag(PdcKey<P, C>, C)` | the persistent data container of the item meta | written in call order, so a later call for the same key wins |
+| `glowStyle(GlowStyle)` | see below | |
+
+```java
+ItemStack voucher = new ItemBuilder(Material.PAPER)
+    .name(text.render("<gold>Shop voucher"))
+    .itemModel(new NamespacedKey("shop", "voucher"))
+    .customModelData(List.of(3f), getLogger())
+    .enchant(Enchantment.UNBREAKING, 1)
+    .tag(ownerKey, player.getUniqueId().toString())
+    .build();
+```
+
+`customModelData` takes the plugin's logger for one case: when the data component API of the server cannot be
+linked, as after Paper changed it, a list of one whole number is set through `ItemMeta.setCustomModelData` and any
+other list is left out. The logger gets one warning for the first such build and none for a later one.
+
+`glowStyle` chooses how `glow(true)` makes the item glint:
+
+| `ItemBuilder.GlowStyle` | What `glow(true)` sets |
+|---|---|
+| `GLINT_OVERRIDE` (the default) | the enchantment glint override, with no enchantment and no item flag |
+| `HIDDEN_ENCHANTMENT` | `UNBREAKING` 1 with `ItemFlag.HIDE_ENCHANTS`; an item that already has an enchantment glints through it and is left as it is |
+
+An item built in one style does not stack with the same item built in the other. A plugin whose glowing items in
+players' hands carry the hidden enchantment keeps them stacking with new ones by choosing `HIDDEN_ENCHANTMENT`.
+`ItemBuilder.applyGlow(ItemMeta, GlowStyle)` does the same for any item meta.
+
 The static methods handle a full-fidelity item reference, `serialized:<base64>`, which carries the entire item and
 round-trips exactly:
 
@@ -786,6 +840,7 @@ round-trips exactly:
 | `serialize(ItemStack)` | the item as a `serialized:<base64>` reference |
 | `deserialize(String)` | the exact item, or `null` when the reference is malformed or from an incompatible server version |
 | `deserializeOrThrow(String)` | the exact item, or an `IllegalArgumentException` that says why there is none (from `0.3.1`) |
+| `deserializeAnyOrThrow(String)` | the exact item of a `serialized:<base64>` reference or of bare base64 with no prefix, or an `IllegalArgumentException` that says why there is none (from `0.4.6`) |
 
 `deserialize` skips the prefix by length without checking it, so check the reference with `isSerialized` first.
 It returns `null` for every failure, a `null` reference included, and logs nothing.
@@ -810,6 +865,22 @@ try {
     getLogger().log(Level.WARNING, "Listing " + id + " holds an item that cannot be read", ex);
 }
 ```
+
+From `0.4.6`, `deserializeAnyOrThrow` also reads an item stored as the bare base64 of
+`ItemStack.serializeAsBytes()`, with no prefix. A reference that starts with `serialized:` is read as
+`deserializeOrThrow` reads it and fails with the same messages and causes. A reference without the prefix fails in
+one of three ways:
+
+| Failure | Message starts with | Cause |
+|---|---|---|
+| `Material.matchMaterial` finds the reference, so it is a material name | `Item reference does not start with 'serialized:' and is the material name` | none |
+| the reference is not base64 | `Item reference does not start with 'serialized:' and is not base64` | the decoder's `IllegalArgumentException` |
+| the server refused the bytes, which are corrupt or were written by a newer data version | `The server refused the bytes of the item reference` | the exception the server threw |
+
+A material name is never decoded, so a name that is also valid base64, such as `DIRT` or `DIAMOND`, gives no item
+and a plugin whose setting holds either a stored item or a material still reads it as a material. A `null`
+reference throws `NullPointerException`. `deserialize` and `deserializeOrThrow` read only the prefixed form, as
+before.
 
 `serialize` hands the item to `ItemStack.serializeAsBytes()` as it is and catches nothing that call throws. An
 empty stack (air, or an amount of 0) has no reference: the server throws for it, and a `null` item throws
