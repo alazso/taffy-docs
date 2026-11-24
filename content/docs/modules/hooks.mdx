@@ -1,6 +1,6 @@
 ---
 title: taffy-hooks
-description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard, Bedrock players, placeholders, holograms and NPCs behind Taffy interfaces, detected safely at enable.
+description: Custom items, a Vault economy, PlayerPoints, VaultUnlocked and ExcellentEconomy currencies, LuckPerms, WorldGuard, Bedrock players, placeholders, holograms and NPCs behind Taffy interfaces, detected safely at enable.
 ---
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
@@ -8,6 +8,7 @@ description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard,
 - `CustomItems` builds and reads items of ItemsAdder, Nexo, Oraxen and HeadDatabase, and from `0.4.12` of CraftEngine and MMOItems.
 - `EconomyProvider.vault` gives a Vault economy in `BigDecimal` and `UUID`.
 - `EconomyProvider.playerPoints` gives PlayerPoints points behind the same interface (from `0.4.7`).
+- `EconomyProvider.vaultUnlocked` and `EconomyProvider.coinsEngine` give one named currency of a VaultUnlocked economy and of ExcellentEconomy, the renamed CoinsEngine (from `0.4.13`).
 - `PermissionProvider.luckPerms` gives LuckPerms groups and permission writes.
 - `RegionProvider.worldGuard` gives the WorldGuard region ids at a location and, from `0.4.12`, whether WorldGuard lets a player build there.
 - `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
@@ -49,6 +50,8 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | MMOItems (from `0.4.12`) | `net.Indyuce:MMOItems-API`, `io.lumine:MythicLib-dist` | `alaz.mmoitems.api`, `alaz.mythiclib` |
 | Vault | `com.github.MilkBowl:VaultAPI` | `alaz.vault.api` |
 | PlayerPoints (from `0.4.7`) | `org.black_ixx:playerpoints` | `alaz.playerpoints` |
+| VaultUnlocked (from `0.4.13`) | `net.milkbowl.vault:VaultUnlockedAPI` | `alaz.vaultunlocked.api` |
+| ExcellentEconomy (from `0.4.13`) | `su.nightexpress.excellenteconomy:ExcellentEconomy`, `su.nightexpress.nightcore:main` | `alaz.excellenteconomy`, `alaz.nightcore.main` |
 | LuckPerms | `net.luckperms:api` | `alaz.luckperms.api` |
 | WorldGuard | `com.sk89q.worldguard:worldguard-core`, `com.sk89q.worldguard:worldguard-bukkit` (from `0.4.12`), `com.sk89q.worldedit:worldedit-core`, `com.sk89q.worldedit:worldedit-bukkit` | `alaz.worldguard.core`, `alaz.worldguard.bukkit`, `alaz.worldedit.core`, `alaz.worldedit.bukkit` |
 | PlaceholderAPI | `me.clip:placeholderapi` | `alaz.placeholderapi` |
@@ -68,6 +71,8 @@ The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, w
 `0.4.12` is built against WorldGuard `7.0.20` and WorldEdit `7.4.4`, the WorldEdit version that WorldGuard release is built against. From `0.4.12` Taffy also compiles against `worldguard-bukkit`, which holds `WorldGuardPlugin.wrapPlayer` for the [build check](#whether-a-player-may-build).
 
 `0.4.12` is built against the Citizens API `2.0.44-SNAPSHOT`, FancyNpcs `2.12.1` and the ZNPCsPlus API `2.0.0`. Citizens publishes only snapshots of its API, so that catalog version is a snapshot version. The ZNPCsPlus alias is the JitPack build of ZNPCsPlus' tag `2.0.0`, which holds the classes ZNPCsPlus publishes as `lol.pyr:znpcsplus-api`.
+
+`0.4.13` is built against VaultUnlockedAPI `2.20`, ExcellentEconomy `2.8.0` and nightcore `2.16.7`. nightcore is in the catalog because the ExcellentEconomy API extends and names types of it: a plugin that calls ExcellentEconomy itself adds both aliases with `compileOnly`. `alaz.nightcore.bridge` holds more of those types and is what Taffy's own tests add. The `alaz.vaultunlocked.api` alias is older than the integration, and from `0.4.13` the `so.alaz.taffy.repositories` settings plugin adds `https://repo.nightexpressdev.com/releases` for the groups `su.nightexpress.excellenteconomy` and `su.nightexpress.nightcore`.
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -145,7 +150,7 @@ dependencies:
       required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `CraftEngine` and `MMOItems` (both from `0.4.12`), `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`, and from `0.4.12` `Citizens`, `FancyNpcs` and `ZNPCsPlus`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `CraftEngine` and `MMOItems` (both from `0.4.12`), `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`, from `0.4.12` `Citizens`, `FancyNpcs` and `ZNPCsPlus`, and from `0.4.13` `ExcellentEconomy` with `nightcore`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it, and it covers `EconomyProvider.vaultUnlocked` too.
 
 A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
@@ -527,7 +532,7 @@ An economy plugin that enables after the caller registers with Vault only then, 
 2. registers `new EconomyWatcher(Runnable resolve, BooleanSupplier stopping)` as a listener, where `resolve` looks the economy up again and stores the result;
 3. looks the economy up once more on the first tick, with `scheduler.global(...)`.
 
-`EconomyWatcher` runs `resolve` on `ServiceRegisterEvent` and `ServiceUnregisterEvent` for the Vault `Economy` service, matched by class name so the listener loads no Vault class. An unregistration while `stopping` returns `true` is ignored. `resolve` runs on the thread that fires the event.
+`EconomyWatcher` runs `resolve` on `ServiceRegisterEvent` and `ServiceUnregisterEvent` for the Vault `Economy` service, matched by class name so the listener loads no Vault class. A watcher made by this constructor does not hear an economy that registers with the VaultUnlocked economy API: from `0.4.13` [`EconomyWatcher.vaultUnlocked`](#vaultunlocked-currencies) gives the watcher for that one. An unregistration while `stopping` returns `true` is ignored. `resolve` runs on the thread that fires the event.
 
 Each lookup is a new detection: a Vault that stays `NOT_VISIBLE`, `API_MISSING` or `FAILED` is warned about (and a `FAILED` lookup reported) once per lookup, so at least twice at startup.
 
@@ -593,7 +598,7 @@ A withdraw reads the balance a second time once the economy confirmed it, to tel
 
 ### Setting a balance, currency names and receipts
 
-From `0.4.13`, `EconomyProvider` has seven more methods. Each is a default method, so a plugin's or a test's own `EconomyProvider` compiles unchanged and answers that it cannot. They were built against the Vault API `1.7.1` and PlayerPoints `3.3.5`.
+From `0.4.13`, `EconomyProvider` has seven more methods. Each is a default method, so a plugin's or a test's own `EconomyProvider` compiles unchanged and answers that it cannot. The one exception is an implementation that already declares a method of one of these names and parameters with another return type, such as `void setBalance(UUID, BigDecimal)` or `Component format(BigDecimal)`: it no longer compiles until that method is renamed or takes the return type in the table. A plugin jar built against `0.4.12` keeps running. The methods were built against the Vault API `1.7.1` and PlayerPoints `3.3.5`.
 
 | Method | An economy that cannot answer | Vault provider | [PlayerPoints provider](#playerpoints) |
 |---|---|---|---|
@@ -619,13 +624,16 @@ The Vault provider gives `UNSUPPORTED` for every amount, after the `null` checks
 
 The PlayerPoints provider sets the points in turn with its own withdraws for that player. An amount with a fraction of a point, a negative one or one above `Integer.MAX_VALUE` throws `IllegalArgumentException` before PlayerPoints is called. A set that PlayerPoints refuses, which it does when a listener cancelled its `PlayerPointsChangeEvent`, gives `FAILED` with the message `PlayerPoints refused it`, and one made while PlayerPoints is disabled gives `FAILED` with `the economy plugin PlayerPoints is disabled`, before the amount is checked. An installed PlayerPoints that lacks `set(UUID, int)` is still detected, and `setBalance` then gives `UNSUPPORTED`.
 
-The two names, the symbol and `format` name no player and are not checked against a thread, as `scale()` is not. A name or a text that is `null` or blank reads as `null`, and so does a call that throws an exception or a `LinkageError`, which is logged with a warning. `format` accepts any amount, a negative one too. The Vault provider rounds it half-even to `scale()` and sends the nearest `double` to `Economy.format(double)`, so beyond 15 significant digits the text can differ from the amount in its last digits, and an amount beyond the range of a `double` throws `IllegalArgumentException`. An installed PlayerPoints that lacks the two name methods gives `null` for both names.
+The two names, the symbol and `format` name no player and are not checked against a thread, as `scale()` is not. A name or a text that is `null` or blank reads as `null`, and so does a call that throws an exception or a `LinkageError`, which is logged with a warning; for `format` that covers the economy's call that gives the decimal places when `scale()` is not worked out yet. `format` accepts any amount, a negative one too. The Vault provider rounds it half-even to `scale()` and sends the nearest `double` to `Economy.format(double)`, so beyond 15 significant digits the text can differ from the amount in its last digits, and an amount beyond the range of a `double` throws `IllegalArgumentException`. An installed PlayerPoints that lacks the two name methods gives `null` for both names.
+
+**The text is the economy's own.** A name, a symbol and a formatted amount are returned as the economy gave them: Taffy parses nothing and takes nothing out. The text can hold legacy colour codes, which start with a section sign, or the tags of the economy plugin's own format, as an ExcellentEconomy currency format does. Neither is MiniMessage. A plugin puts the text into a component as literal text, with `Component.text`, and never passes it to `MiniMessage.deserialize` or into a MiniMessage string, unless it converts the text on purpose. The same holds for the name and the symbol of an [`EconomyCurrency`](#listing-currencies).
 
 ```java
 String shown = money.format(price);
 if (shown == null) {
     shown = price.setScale(money.scale(), RoundingMode.HALF_EVEN).toPlainString();
 }
+player.sendMessage(Component.text("Price: ").append(Component.text(shown)));
 ```
 
 `EconomyReceipt` is a record of `EconomyResult result()` and `@Nullable String transactionId()`. The id is the one the economy gave the transaction, and it is `null` when the economy gave none or no money moved; the record refuses a blank id and an id on a result whose `moved()` is `false`. `EconomyReceipt.of(EconomyResult)` gives a receipt with no id. `withdrawReceipt` and `depositReceipt` check their arguments, the thread and the amount as `withdraw` and `deposit` do. Neither the Vault API nor PlayerPoints gives a transaction an id, so every receipt of these two providers has `transactionId() == null`, and a plugin that needs an id for its own log makes one.
@@ -714,6 +722,122 @@ if (money != null) {
 **Refusals.** PlayerPoints moves the whole amount or nothing. A take or a give it refuses gives `FAILED` with the message `PlayerPoints refused it` and moves no points: a listener cancelled its `PlayerPointsChangeEvent`, the balance no longer covers the amount, or a deposit would pass `Integer.MAX_VALUE`. A balance that cannot be read at the start of a withdraw gives `FAILED` too. While PlayerPoints is disabled, `withdraw` and `deposit` give `FAILED` with `the economy plugin PlayerPoints is disabled`, before the amount is checked. A withdraw never gives `OVERDRAWN` or `UNSUPPORTED`.
 
 Two things are outside the provider's sight. A listener that changes the amount of a `PlayerPointsChangeEvent` changes how many points move, and the result is still `OK`. PlayerPoints answers a balance it could not load from its database as 0, so such a player reads as having no points.
+
+### VaultUnlocked currencies
+
+From `0.4.13`, `EconomyProvider.vaultUnlocked(Plugin owner, ErrorReports errors, boolean switchedOn, boolean folia, String currency, @Nullable Integer scale)` looks up one currency of the economy registered with the VaultUnlocked economy API, `net.milkbowl.vault2.economy.Economy`. That API carries amounts as `BigDecimal`, names an account by `UUID` and has several currencies. Taffy compiles against VaultUnlockedAPI `2.20`. An installed VaultUnlocked whose `Economy` lacks `set(String, UUID, String, String, BigDecimal)` or `fractionalDigits(String, String)`, the two methods of those the provider calls that VaultUnlocked added in 2025, is still read: without the first `setBalance` gives `UNSUPPORTED`, and without the second the decimal places are those `Economy.fractionalDigits(String)` gives for the economy. One that lacks any other method the provider calls is `FAILED`.
+
+```java
+Detected<EconomyProvider> gems = EconomyProvider.vaultUnlocked(
+    this, errors, true, scheduler.mode() == Scheduler.Mode.FOLIA, "gems", null);
+```
+
+`EconomyProvider.vault` is unchanged by this entry point. It keeps reading the Vault API, `net.milkbowl.vault.economy.Economy`, which VaultUnlocked serves as well, and never reads the VaultUnlocked one. A plugin picks one of the two for a currency: `vault` for the single currency every Vault economy has, `vaultUnlocked` for a named currency of an economy that supports VaultUnlocked.
+
+- The VaultUnlocked plugin is named `Vault`, so the plugin lists `Vault` under `dependencies.server`, as for the Vault economy. An entry named `VaultUnlocked` matches no plugin.
+- `currency` is the id of the currency, as [`vaultUnlockedCurrencies`](#listing-currencies) lists it. A blank id throws `IllegalArgumentException`.
+- `folia` and `scale` mean what they mean for `EconomyProvider.vault`. With `scale` `null` the scale is `Economy.fractionalDigits(String, String)` for the currency, capped at 4, or 2 when it reports none.
+
+The status's plugin is always `VaultUnlocked`, with the version of the installed `Vault` plugin, and each state but `SWITCHED_OFF` and `ON` carries a reason:
+
+| State | When |
+|---|---|
+| `SWITCHED_OFF` | `switchedOn` is `false`; nothing is read. |
+| `NOT_INSTALLED` | No plugin named `Vault` is installed. |
+| `NOT_VISIBLE` | The installed plugin holds the API, but the plugin does not list `Vault`. Logged as a warning. |
+| `API_MISSING` | The installed `Vault` is not VaultUnlocked. Logged as a warning. |
+| `NOT_REGISTERED` | No economy has registered with the VaultUnlocked economy API, or the registered economy has no currency of that id. The reason then names the ids it has, such as `TNE has no currency named tokens. It has dollars, gems.` `describe()` has no text of its own for an unknown currency and still reads `VaultUnlocked <version> has nothing registered with it`, so `line()` is `VaultUnlocked 2.20.3 has nothing registered with it. TNE has no currency named tokens. It has dollars, gems.` Show `line()` or `reason()` to the owner, not `describe()` alone. |
+| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vaultunlocked`. |
+| `ON` | The provider is set. |
+
+Unlike the Vault lookup, this one calls the economy: it asks `Economy.hasCurrency(String)`, and reads `Economy.currencies()` for the reason when the currency is unknown. It reads no balance and moves no money. The status is fixed, as the Vault economy's is, and every lookup logs its own warning.
+
+**A late economy.** An economy plugin registers with the VaultUnlocked economy API apart from the Vault API, so `new EconomyWatcher(...)` does not hear it. `EconomyWatcher.vaultUnlocked(Runnable resolve, BooleanSupplier stopping)` gives the watcher that does: it runs `resolve` when an economy registers with or leaves the VaultUnlocked economy API, matched by class name, and ignores an economy that leaves while the server stops. The plugin registers it as a listener and looks the currency up once more on the first tick, as for the [Vault economy](#late-economies-and-economywatcher). `VaultWatch` watches the Vault economy only.
+
+```java
+getServer().getPluginManager().registerEvents(
+    EconomyWatcher.vaultUnlocked(() -> gems = lookUpGems(), getServer()::isStopping), this);
+```
+
+| Call | The VaultUnlocked provider |
+|---|---|
+| `scale()` | The `scale` argument, or the currency's fractional digits capped at 4, or 2 when the economy reports none. Read on first use. |
+| `thread(UUID)` | `ThreadTag.GLOBAL` for every player. The asynchronous API of VaultUnlocked is not used. |
+| `balance`, `has` | `Economy.balance(String, UUID, String, String)`. `has` compares the balance as the economy holds it, not rounded. |
+| `withdraw` | Reads the balance, gives `INSUFFICIENT` when it is short, runs `start`, calls `Economy.withdraw` and reads the balance again to tell `OVERDRAWN`. |
+| `deposit` | `Economy.deposit`. |
+| `setBalance` | `Economy.set`, which in VaultUnlockedAPI `2.20` reads the balance and withdraws or deposits the difference unless the economy overrides it. After a set the economy answered as a success the provider reads the balance again: when it is not the amount, as after a fee or a change another plugin made in between, the call throws `IllegalStateException` with a message that names the balance and the amount, and when that read throws, the result is `OK` and a warning is logged. `UNSUPPORTED` where the installed VaultUnlocked has no `Economy.set`. |
+| `currencyNameSingular()`, `currencyNamePlural()` | `Economy.defaultCurrencyNameSingular` and `defaultCurrencyNamePlural` when the currency is the one `Economy.getDefaultCurrency` names, and `null` for every other currency: the API names only its default currency. |
+| `currencySymbol()` | `null`. The API has no symbol. |
+| `format(BigDecimal)` | `Economy.format(String, BigDecimal, String)` for the amount rounded half-even to `scale()`. |
+| `withdrawReceipt`, `depositReceipt` | No transaction id: a VaultUnlocked response carries none. |
+| `probe()` | `<economy> through VaultUnlocked, currency <id>, <n> decimal places`. |
+
+**What every call names.** A VaultUnlocked call names the calling plugin, the account, a world and the currency. The provider passes the owner's plugin name, the player's `UUID`, the name of the first world of `Server.getWorlds()` and the currency id. The calls that name a currency always name a world too, so the provider names the server's default world for every player. While no world is loaded, `balance` and `has` throw `IllegalStateException`, and `withdraw`, `deposit` and `setBalance` give `FAILED` with `no world is loaded yet`.
+
+**Amounts.** An amount reaches the economy as a `BigDecimal`, rounded half-even to `scale()`, and never as a `double`. No amount is refused for its size. A negative amount and one that rounds to zero throw `IllegalArgumentException`, as for every provider.
+
+**The thread.** `balance`, `has`, `withdraw`, `deposit` and `setBalance` throw `IllegalStateException` on a thread `Server.isGlobalTickThread()` is `false` on, with a message that names `thread(player)` and `Scheduler.dispatch`, before anything in the economy is called. `scale()`, `thread(UUID)`, `probe()`, the names, `format` and the lookup are not checked.
+
+**A currency that goes away.** Before a withdraw, a deposit or a balance set reaches the economy, the provider asks `Economy.hasCurrency(String)` again. When the economy no longer has the currency, the result is `FAILED` with `the economy <name> has no currency named <id>`, so no money moves in another currency. `balance` and `has` do not ask. While the plugin that registered the economy is disabled, the three moves give `FAILED` with a message that names it, with no call into the economy. A response of the type `NOT_IMPLEMENTED` gives `UNSUPPORTED`, and any other response that is not a success gives `FAILED` with the economy's message.
+
+### ExcellentEconomy (CoinsEngine)
+
+From `0.4.13`, `EconomyProvider.coinsEngine(Plugin owner, ErrorReports errors, boolean switchedOn, String currency)` detects ExcellentEconomy, the plugin CoinsEngine was renamed to, and gives an `EconomyProvider` on one of its currencies. Taffy compiles against ExcellentEconomy `2.8.0` and nightcore `2.16.7`.
+
+```java
+Detected<EconomyProvider> gems = EconomyProvider.coinsEngine(this, errors, true, "gems");
+```
+
+The plugin lists `ExcellentEconomy` and `nightcore` under `dependencies.server` with `load: BEFORE` and `required: false`. The ExcellentEconomy API is read through nightcore: its currency type extends a nightcore type. A plugin named `CoinsEngine`, the name of the releases before the rename, is not read. With it installed and no `ExcellentEconomy`, the status is `NOT_INSTALLED` with a reason that asks the owner to install ExcellentEconomy. The artifact `su.nightexpress.coinsengine:CoinsEngine` is no longer in the plugin's Maven repository, so Taffy has no API of the old name to compile against.
+
+Detection follows the [states](#detection-and-status) of every other integration but Vault. ExcellentEconomy is read only when it is switched on, installed, enabled, and its API and nightcore are visible. It is `NOT_VISIBLE`, with a reason that names nightcore, when the plugin lists `ExcellentEconomy` and not `nightcore`. It is `FAILED`, logged and reported under `hook.excellenteconomy`, when a method the provider calls is missing or ExcellentEconomy has registered no API with the services manager. It is `NOT_REGISTERED`, with a reason that names the ids it has, when it has no currency of that id. `describe()` has no text of its own for that case, so `line()` reads `ExcellentEconomy 2.8.0 has nothing registered with it. ExcellentEconomy has no currency named gems. It has coins.`, and a plugin shows `line()` or `reason()` to the owner, not `describe()` alone. Detection asks for the currency and reads whether it holds decimals; it reads no balance and moves no money. The result is bound to the ExcellentEconomy plugin, as the PlayerPoints one is, so its status reads `NOT_ENABLED` while ExcellentEconomy is disabled. No watcher is needed, and `EconomyWatcher` does not hear ExcellentEconomy.
+
+| Call | The ExcellentEconomy provider |
+|---|---|
+| `scale()` | 2 for a currency that holds decimals and 0 for one that holds whole units, as detection found it. The entry point has no scale argument. |
+| `thread(UUID)` | `ThreadTag.ASYNC` for every player. |
+| `balance`, `has` | `ExcellentEconomyAPI.getBalanceAsync(UUID, String)`, waited for. |
+| `withdraw` | Reads the balance, gives `INSUFFICIENT` when it is short, runs `start`, calls `withdrawAsync(UUID, String, double)` and reads what it did from the `ChangeBalanceEvent` heard while it ran. |
+| `deposit` | `depositAsync(UUID, String, double)`, read from the `ChangeBalanceEvent` heard while it ran. No balance is read. |
+| `setBalance` | `setBalanceAsync(UUID, String, double)`, read from the `ChangeBalanceEvent` heard while it ran. No balance is read. |
+| `currencyNameSingular()`, `currencyNamePlural()` | Both `ExcellentCurrency.getName()`: a currency has one name. |
+| `currencySymbol()` | `ExcellentCurrency.getSymbol()`. |
+| `format(BigDecimal)` | `ExcellentCurrency.format(double)` for the amount rounded half-even to `scale()`, with the tags the owner wrote into the format of the currency. |
+| `withdrawReceipt`, `depositReceipt` | No transaction id: ExcellentEconomy gives none. |
+| `probe()` | `ExcellentEconomy <version>, currency <id>, <n> decimal places`. Throws `IllegalStateException` while ExcellentEconomy is disabled. |
+
+**Async only, and players who are not online.** The `ExcellentEconomyAPI` methods that take a `Player` reach online players only. The provider calls the ones that take a `UUID`: for a player who is not online, ExcellentEconomy loads the data from its database on another thread and completes a future, and the provider waits for that future. So `balance`, `has`, `withdraw`, `deposit` and `setBalance` throw `IllegalStateException` on a thread `Server.isPrimaryThread()` is `true` on, which is the main thread on Paper, with a message that names `thread(player)` and `Scheduler.dispatch`, before anything in ExcellentEconomy is called. A player ExcellentEconomy has no data for has a balance of 0, and a move for that player gives `FAILED`. ExcellentEconomy does not declare Folia support.
+
+**Amounts are `double`.** ExcellentEconomy holds a balance as a `double`. A withdraw, a deposit and a balance set round the amount half-even to `scale()` and throw `IllegalArgumentException` when the rounded amount does not convert to a `double` and back unchanged. Every whole amount up to 2^53, which is 9007199254740992, is exact, and so is every amount of up to 15 significant digits. A balance read is rounded as the [Vault provider](#economyprovider) rounds a `double`.
+
+**A change is heard, not read back.** ExcellentEconomy answers a change it applied and a change a listener of its `ChangeBalanceEvent` cancelled alike, as a success, and a removal from a balance that does not cover it stops at zero. So the provider registers a listener of that event for the owner, at `EventPriority.MONITOR`, with its first withdraw, deposit or balance set, and reads what each move did from the change heard for the player and the currency while it ran. It never decides from a second balance read.
+
+| What the move's change shows | Result |
+|---|---|
+| The amount moved, or the balance is the amount set | `OK` |
+| A listener cancelled it, so ExcellentEconomy put the old balance back | `FAILED` with `ExcellentEconomy left the balance unchanged` |
+| A withdraw took less than the amount, because another plugin lowered the balance after the check | The provider gives back what it took and the result is `INSUFFICIENT`. `start` has run by then. |
+| No change of the move's size was heard, two were heard and only one of them was cancelled, or what a short withdraw took could not be given back | `IllegalStateException`: the outcome is unknown, as for any call that throws |
+
+An operation ExcellentEconomy refuses, which it does while its operations are switched off and for a player it has no data for, gives `FAILED` with `ExcellentEconomy refused it`. A balance that cannot be read at the start of a withdraw gives `FAILED` before `start` runs.
+
+The server registers a listener only for a plugin that is enabled, and keeps it through that plugin's `onDisable`. A provider that has moved money before therefore still works in `onDisable`. One that makes its first move while the owner is not enabled gives `FAILED` with `the balance changes of ExcellentEconomy cannot be heard while <plugin> is not enabled`, before anything moves.
+
+**One move at a time per player.** The withdraws, deposits and balance sets of the provider for one player run one after the other, and `start` runs while the others for that player wait. A change another plugin makes to the same account is not held back, and it does not change the result of a move: the provider tells it from its own change by its size. A deposit of 10 that another plugin's take of 10 follows is `OK`, and so is a balance set to 50 that another plugin's gift of 5 follows, with the balance then at 55.
+
+**Limits.** ExcellentEconomy holds no balance below zero, so a withdraw never gives `OVERDRAWN` or `UNSUPPORTED`. `setBalance` gives `FAILED` for an amount above the limit of the currency, which ExcellentEconomy would lower to that limit. A currency ExcellentEconomy no longer has gives `FAILED` with `ExcellentEconomy has no currency named <id>`, and a disabled ExcellentEconomy `FAILED` with `the economy plugin ExcellentEconomy is disabled`, before anything moves.
+
+### Listing currencies
+
+From `0.4.13`, `EconomyCurrency` is a record of `String id()`, `@Nullable String name()` and `@Nullable String symbol()`, with no type of another plugin in it. The id is what `vaultUnlocked` and `coinsEngine` take as their currency. A blank name or symbol is kept as `null`. The name and the symbol are the economy's own text, unchanged, and are shown as [literal text](#setting-a-balance-currency-names-and-receipts).
+
+| Call | Gives |
+|---|---|
+| `EconomyProvider.vaultUnlockedCurrencies(Plugin owner, ErrorReports errors)` | The ids of `Economy.currencies()`, in its order. Only the default currency has a name, from `Economy.defaultCurrencyNameSingular`, and no currency has a symbol. |
+| `EconomyProvider.coinsEngineCurrencies(Plugin owner, ErrorReports errors)` | Each ExcellentEconomy currency with `getId()`, `getName()` and `getSymbol()`. |
+
+Each list cannot be changed. It is empty when the backend is not there: no VaultUnlocked economy API visible or no economy registered, or ExcellentEconomy not installed, not enabled or not visible. It is also empty when the backend throws, which is logged with a warning and reported under `hook.vaultunlocked` or `hook.excellenteconomy`. Neither call is checked against a thread.
 
 ### EconomyResult
 
@@ -1297,7 +1421,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `CustomItems` calls | The thread that owns the item. |
 | `CustomItems.close` | The server thread, before the plugin detects again. |
 | The items-loaded callback of `CustomItems.detect` | From `0.4.7`. Called by Taffy on the thread the item plugin fires its event on: the server thread on Paper, a ticking thread on Folia. |
-| `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. From `0.4.7` the PlayerPoints provider names `ThreadTag.ASYNC` for every player and throws `IllegalStateException` on the main thread on Paper and on every region thread and the global region thread on Folia. |
+| `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. From `0.4.7` the PlayerPoints provider names `ThreadTag.ASYNC` for every player and throws `IllegalStateException` on the main thread on Paper and on every region thread and the global region thread on Folia. From `0.4.13` the VaultUnlocked provider names `ThreadTag.GLOBAL` and the ExcellentEconomy provider `ThreadTag.ASYNC`, and each throws `IllegalStateException` on any other kind of thread. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
 | `RegionProvider.canBuild` | From `0.4.12`. The thread that owns the player: the main thread on Paper, the player's region thread on Folia. |

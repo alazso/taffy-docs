@@ -1798,10 +1798,55 @@ neither behaves as on `0.4.11`. A server owner changes nothing for `0.4.12`.
 
 ## 0.4.13
 
-Every signature of `0.4.12` is still there, and a plugin changes nothing to move to `0.4.13`.
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.13"
+}
+```
+
+Every signature of `0.4.12` is still there, and a plugin changes nothing to move to `0.4.13`, with one exception
+for a plugin that has its own `EconomyProvider`, named below.
 
 `0.4.13` adds, in [`taffy-hooks`](/docs/modules/hooks#setting-a-balance-currency-names-and-receipts), seven default
 methods on `EconomyProvider`: `setBalance`, `currencyNameSingular`, `currencyNamePlural`, `currencySymbol`, `format`,
 `withdrawReceipt` and `depositReceipt`, with the record `EconomyReceipt`. A plugin's or a test's own
 `EconomyProvider` compiles unchanged and answers `UNSUPPORTED`, `null` and a receipt with no transaction id. A
 plugin that calls none of them behaves as on `0.4.12`. A server owner changes nothing for `0.4.13`.
+
+The exception: an `EconomyProvider` implementation that already declares `setBalance(UUID, BigDecimal)`,
+`currencyNameSingular()`, `currencyNamePlural()`, `currencySymbol()`, `format(BigDecimal)`,
+`withdrawReceipt(UUID, BigDecimal, BooleanSupplier)` or `depositReceipt(UUID, BigDecimal)` with another return type
+than the new method has, such as `void setBalance(UUID, BigDecimal)`, no longer compiles against `0.4.13`. Rename
+that method or give it the new return type: `EconomyResult` for `setBalance`, `String` for the names, the symbol and
+`format`, and `EconomyReceipt` for the two receipts. A method with the same return type overrides the default and
+needs no change, and a plugin jar built against `0.4.12` keeps running on `0.4.13`.
+
+The names, the symbol and `format` return the economy's own text, unchanged. It can hold legacy colour codes or the
+economy plugin's own tags, which are not MiniMessage, so show it with `Component.text`.
+
+`0.4.13` also adds two economy backends, each for one named currency:
+[`EconomyProvider.vaultUnlocked`](/docs/modules/hooks#vaultunlocked-currencies) over the VaultUnlocked economy API
+and [`EconomyProvider.coinsEngine`](/docs/modules/hooks#excellenteconomy-coinsengine) over ExcellentEconomy, the
+plugin CoinsEngine was renamed to, with `EconomyWatcher.vaultUnlocked`, the record `EconomyCurrency` and the two
+calls that [list a backend's currencies](/docs/modules/hooks#listing-currencies). `EconomyProvider.vault` and a
+watcher made by `new EconomyWatcher(...)` read the Vault API only, exactly as on `0.4.12`.
+
+A plugin that adds one of the two backends lists its plugin under `dependencies.server`: `Vault` for VaultUnlocked,
+whose plugin has that name, and `ExcellentEconomy` with `nightcore` for ExcellentEconomy. An entry named
+`VaultUnlocked` or `CoinsEngine` matches neither plugin.
+
+```yaml title="src/main/resources/paper-plugin.yml"
+dependencies:
+  server:
+    Vault:
+      load: BEFORE
+      required: false
+    ExcellentEconomy:
+      load: BEFORE
+      required: false
+    nightcore:
+      load: BEFORE
+      required: false
+```

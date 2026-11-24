@@ -27,7 +27,7 @@ myplugin/
   src/test/java/com/example/myplugin/SettingsTest.java
 ```
 
-The examples use the Gradle wrapper at 9.9.1, the version Taffy itself builds with. The Taffy Gradle plugins need Gradle 9.2.0 or newer, and [Gradle plugins](/docs/gradle-plugins#applying-the-plugins) says where that minimum comes from.
+The examples use the Gradle wrapper at 9.9.2, the version Taffy itself builds with. The Taffy Gradle plugins need Gradle 9.2.0 or newer, and [Gradle plugins](/docs/gradle-plugins#applying-the-plugins) says where that minimum comes from.
 
 ## Set up the plugin
 
@@ -39,10 +39,10 @@ The examples use the Gradle wrapper at 9.9.1, the version Taffy itself builds wi
 The wrapper is the `gradlew` script, `gradlew.bat` and the `gradle/wrapper` directory, and it downloads the Gradle version the build names. In the empty directory, create an empty `settings.gradle.kts`, then run a Gradle installed on the machine once:
 
 ```bash
-gradle wrapper --gradle-version 9.9.1
+gradle wrapper --gradle-version 9.9.2
 ```
 
-Gradle 9.9.1 does not run in a directory without a settings file, hence the empty one, which the next step fills. Run the command while the file is still empty: the installed Gradle then loads no Taffy plugin, so it may be older than 9.2.0 and run on a Java older than 25. Every later command on this page goes through `./gradlew`.
+Gradle 9.9.2 does not run in a directory without a settings file, hence the empty one, which the next step fills. Run the command while the file is still empty: the installed Gradle then loads no Taffy plugin, so it may be older than 9.2.0 and run on a Java older than 25. Every later command on this page goes through `./gradlew`.
 
 Without an installed Gradle, copy `gradlew`, `gradlew.bat` and `gradle/wrapper` from another project, set the version in `distributionUrl` in `gradle/wrapper/gradle-wrapper.properties`, and remove a `distributionSha256Sum` line there, which holds the checksum of the other version.
 
@@ -65,7 +65,7 @@ pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.4.12"
+    id("so.alaz.taffy.settings") version "0.4.13"
 }
 
 rootProject.name = "myplugin"

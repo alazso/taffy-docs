@@ -33,7 +33,7 @@ pluginManagement {
 }
 
 plugins {
-    id("so.alaz.taffy.settings") version "0.4.12"
+    id("so.alaz.taffy.settings") version "0.4.13"
 }
 
 rootProject.name = "myplugin"
@@ -59,7 +59,7 @@ version=1.0.0
 
 The plugins are Java 25 class files loaded into Gradle's own JVM, so Gradle itself runs on Java 25. A file `gradle/gradle-daemon-jvm.properties` holding `toolchainVersion=25` makes Gradle pick a Java 25 JVM whatever `JAVA_HOME` points to.
 
-The plugins need Gradle 9.2.0 or newer. Gradle 9.1.0 is the first release that runs on Java 25, and on 9.1.0 the Shadow plugin that `so.alaz.taffy.paper-plugin` applies fails with a `NoSuchMethodError` for `AdhocComponentWithVariants.addVariantsFromConfiguration`. Taffy's own build and the examples use 9.9.1, and Taffy's tests build a plugin on 9.2.0. From `0.4.1`, `so.alaz.taffy.settings` stops a build on an older Gradle before it applies anything:
+The plugins need Gradle 9.2.0 or newer. Gradle 9.1.0 is the first release that runs on Java 25, and on 9.1.0 the Shadow plugin that `so.alaz.taffy.paper-plugin` applies fails with a `NoSuchMethodError` for `AdhocComponentWithVariants.addVariantsFromConfiguration`. Taffy's own build and the examples use 9.9.2, and Taffy's tests build a plugin on 9.2.0. From `0.4.1`, `so.alaz.taffy.settings` stops a build on an older Gradle before it applies anything:
 
 ```text
 so.alaz.taffy.settings needs Gradle 9.2.0 or newer, and this build runs on Gradle 9.1.0. Set a newer version in distributionUrl in gradle/wrapper/gradle-wrapper.properties.
@@ -71,7 +71,7 @@ Every push to Taffy's `main` branch publishes the next version as a `-SNAPSHOT` 
 
 ## so.alaz.taffy.settings
 
-Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.4.12` gives catalog `0.4.12`, which in turn pins every Taffy module to `0.4.12`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
+Applies `so.alaz.taffy.repositories` and creates the version catalog `alaz` from `so.alaz.taffy:taffy-catalog` at the same version as the plugin. Applying `so.alaz.taffy.settings` version `0.4.13` gives catalog `0.4.13`, which in turn pins every Taffy module to `0.4.13`. The plugins, the catalog and the runtime modules share one version, as [Versioning](/docs/versioning) describes. The catalog's aliases are listed at the end of this page.
 
 From `0.4.1`, it first checks the Gradle version and fails on a Gradle older than 9.2.0 with the message shown under [Applying the plugins](#applying-the-plugins). A release candidate or milestone of 9.2.0 passes.
 
@@ -89,6 +89,7 @@ Applies `org.gradle.toolchains.foojay-resolver-convention`, so Gradle downloads 
 | `faststats` | `https://repo.faststats.dev/releases` | `dev.faststats.metrics` |
 | `vaultunlocked` | `https://repo.codemc.io/repository/creatorfromhell/` | `net.milkbowl.vault` |
 | `playerpoints` | `https://repo.rosewooddev.io/repository/public/` | `org.black_ixx` |
+| `nightexpress` (from `0.4.13`) | `https://repo.nightexpressdev.com/releases` | `su.nightexpress.excellenteconomy`, `su.nightexpress.nightcore` |
 | `oraxen` | `https://repo.oraxen.com/releases` | `io.th0rgal`, `md.thomas.hopper` |
 | `nexo` | `https://repo.nexomc.com/releases` | `com.nexomc`, `com.tcoded`, `me.gabytm.util`, `team.unnamed` |
 | `enginehub` | `https://maven.enginehub.org/repo/` | `com.sk89q`, `org.enginehub` and their subgroups |
@@ -164,8 +165,8 @@ From `0.4.1`, the shadow jar of `so.alaz.taffy.paper-plugin` keeps that copy whe
 
 ```text
 META-INF/LICENSE
-META-INF/licenses/taffy-platform-0.4.12/LICENSE
-META-INF/licenses/taffy-config-0.4.12/LICENSE
+META-INF/licenses/taffy-platform-0.4.13/LICENSE
+META-INF/licenses/taffy-config-0.4.13/LICENSE
 ```
 
 Two shaded jars with one file name, compared without case, get `META-INF/licenses/<name>/` and `META-INF/licenses/<name>-2/`, in runtime classpath order, and a third gets `-3`. A second license file of one jar whose name differs only in case, such as `license` beside `LICENSE`, gets the same suffix. A `META-INF/LICENSE*` file the build adds to `shadowJar` by hand, such as `from("LICENSE.md") { into("META-INF") }`, still ships: only the copies from the shaded jars move.
@@ -495,7 +496,7 @@ bStats and FastStats come as runtime dependencies of `taffy-metrics` and are sha
 
 ### Kotlin plugins
 
-From `0.4.8`, a plugin written in Kotlin is a supported build: Taffy's own tests build one with `org.jetbrains.kotlin.jvm` `2.4.21` applied beside `so.alaz.taffy.paper-plugin`, on Gradle 9.9.1. The Kotlin Gradle plugin comes from the Gradle Plugin Portal, which the `pluginManagement` block under [Applying the plugins](#applying-the-plugins) already names, and its version is the build's own choice: the `alaz` catalog has no Kotlin entry.
+From `0.4.8`, a plugin written in Kotlin is a supported build: Taffy's own tests build one with `org.jetbrains.kotlin.jvm` `2.4.21` applied beside `so.alaz.taffy.paper-plugin`, on Gradle 9.9.2. The Kotlin Gradle plugin comes from the Gradle Plugin Portal, which the `pluginManagement` block under [Applying the plugins](#applying-the-plugins) already names, and its version is the build's own choice: the `alaz` catalog has no Kotlin entry.
 
 ```kotlin title="build.gradle.kts"
 plugins {
@@ -651,7 +652,7 @@ Each module has an entry at the catalog's own version, the version key `taffy`.
 
 ### Integration APIs
 
-No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, CraftEngine and MMOItems with MythicLib (the three from `0.4.12`), Vault, PlayerPoints (from `0.4.7`), LuckPerms, `worldguard-core`, `worldguard-bukkit` (from `0.4.12`), `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI, MiniPlaceholders, DecentHolograms, FancyHolograms, Holograms, HologramLib and, from `0.4.12`, the Citizens API, FancyNpcs and the ZNPCsPlus API, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. Floodgate and Geyser have no entry: from `0.4.3` `taffy-hooks` reads them through method handles and compiles against neither, so [`BedrockProvider`](/docs/modules/hooks#bedrock-players) needs no dependency. `taffy-hooks` uses `alaz.packetevents.api` in its tests only, because HologramLib's classes link only with PacketEvents present. `alaz.vaultunlocked.api` is in the catalog for a plugin's own code, as `alaz.worldguard.bukkit` was before `0.4.12` and `alaz.playerpoints` before `0.4.7`. A plugin declares one `compileOnly` only when its own code calls that API directly.
+No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, Nexo, Oraxen, HeadDatabase, CraftEngine and MMOItems with MythicLib (the three from `0.4.12`), Vault, PlayerPoints (from `0.4.7`), LuckPerms, `worldguard-core`, `worldguard-bukkit` (from `0.4.12`), `worldedit-core`, `worldedit-bukkit`, PlaceholderAPI, MiniPlaceholders, DecentHolograms, FancyHolograms, Holograms, HologramLib, from `0.4.12` the Citizens API, FancyNpcs and the ZNPCsPlus API, and from `0.4.13` VaultUnlockedAPI, ExcellentEconomy and nightcore `main`, and `taffy-platform` against PlaceholderAPI and MiniPlaceholders. Floodgate and Geyser have no entry: from `0.4.3` `taffy-hooks` reads them through method handles and compiles against neither, so [`BedrockProvider`](/docs/modules/hooks#bedrock-players) needs no dependency. `taffy-hooks` uses `alaz.packetevents.api` in its tests only, because HologramLib's classes link only with PacketEvents present. `alaz.vaultunlocked.api` was in the catalog for a plugin's own code before `0.4.13`, as `alaz.worldguard.bukkit` was before `0.4.12` and `alaz.playerpoints` before `0.4.7`. `taffy-hooks` uses `alaz.nightcore.bridge` in its tests only. A plugin declares one `compileOnly` only when its own code calls that API directly.
 
 | Accessor | Coordinates | Version key |
 |---|---|---|
@@ -661,6 +662,9 @@ No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, N
 | `alaz.vault.api` | `com.github.MilkBowl:VaultAPI` | `vault` |
 | `alaz.vaultunlocked.api` | `net.milkbowl.vault:VaultUnlockedAPI` | `vaultunlocked` |
 | `alaz.playerpoints` | `org.black_ixx:playerpoints` | `playerpoints` |
+| `alaz.excellenteconomy` | `su.nightexpress.excellenteconomy:ExcellentEconomy` | `excellenteconomy` |
+| `alaz.nightcore.main` | `su.nightexpress.nightcore:main` | `nightcore` |
+| `alaz.nightcore.bridge` | `su.nightexpress.nightcore:bridge` | `nightcore` |
 | `alaz.itemsadder.api` | `beer.devs:itemsadder-api` | `itemsadder` |
 | `alaz.oraxen` | `io.th0rgal:oraxen` | `oraxen` |
 | `alaz.nexo` | `com.nexomc:nexo` | `nexo` |
@@ -682,7 +686,7 @@ No Taffy module ships any of these. `taffy-hooks` compiles against ItemsAdder, N
 | `alaz.znpcsplus.api` | `com.github.Pyrbu:ZNPCsPlus` | `znpcsplus` |
 | `alaz.packetevents.api` | `com.github.retrooper:packetevents-api` | `packetevents` |
 
-The hologram rows, `alaz.decentholograms`, `alaz.fancyholograms`, `alaz.holograms`, `alaz.hologramlib` and `alaz.packetevents.api`, are available from `0.1.2`. The CraftEngine and MMOItems rows, `alaz.craftengine.bukkit`, `alaz.craftengine.core`, `alaz.mmoitems.api` and `alaz.mythiclib`, are available from `0.4.12`. MMOItems and MythicLib publish only snapshots, so `mmoitems` and `mythiclib` are snapshot versions. The NPC rows, `alaz.citizens.api`, `alaz.fancynpcs` and `alaz.znpcsplus.api`, are available from `0.4.12`. Citizens publishes only snapshots of its API, so `citizens` is a snapshot version, and `alaz.znpcsplus.api` is the JitPack build of ZNPCsPlus' tag `2.0.0`, which holds the classes of `lol.pyr:znpcsplus-api`.
+The hologram rows, `alaz.decentholograms`, `alaz.fancyholograms`, `alaz.holograms`, `alaz.hologramlib` and `alaz.packetevents.api`, are available from `0.1.2`. The CraftEngine and MMOItems rows, `alaz.craftengine.bukkit`, `alaz.craftengine.core`, `alaz.mmoitems.api` and `alaz.mythiclib`, are available from `0.4.12`. MMOItems and MythicLib publish only snapshots, so `mmoitems` and `mythiclib` are snapshot versions. The NPC rows, `alaz.citizens.api`, `alaz.fancynpcs` and `alaz.znpcsplus.api`, are available from `0.4.12`. Citizens publishes only snapshots of its API, so `citizens` is a snapshot version, and `alaz.znpcsplus.api` is the JitPack build of ZNPCsPlus' tag `2.0.0`, which holds the classes of `lol.pyr:znpcsplus-api`. The ExcellentEconomy rows, `alaz.excellenteconomy`, `alaz.nightcore.main` and `alaz.nightcore.bridge`, are available from `0.4.13`. ExcellentEconomy is the plugin CoinsEngine was renamed to, and its API extends and names types of nightcore `main`, so a plugin that calls ExcellentEconomy itself adds both.
 
 `taffy-hooks` and `taffy-platform` declare each API they compile against with `{ isTransitive = false }`, which keeps that API's own dependencies off the compile classpath. A plugin can do the same:
 
