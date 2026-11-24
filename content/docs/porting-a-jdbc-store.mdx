@@ -19,7 +19,7 @@ The guide needs `0.4.9` for `Params.intValue` and `Row.intValue`; everything els
 | Reads the row count of every `UPDATE` the same way on every database. | MySQL and MariaDB count only the rows an `UPDATE` changed. |
 | Sets savepoints or an isolation level. | Neither is offered. Each pattern below works without them. |
 
-`Tx` has `update`, `batch`, `query`, `queryOne` and `execute` for statements and `afterCommit` for effects outside the database. There is no way to reach the `Connection`, and this guide stands in for one: each thing a raw connection was used for has a port below.
+`Tx` has `update`, `batch`, `query`, `queryOne`, `execute` and, from `0.4.15`, `insert` (which stands in for `getGeneratedKeys`) for statements and `afterCommit` for effects outside the database. There is no way to reach the `Connection`, and this guide stands in for one: each thing a raw connection was used for has a port below.
 
 ## Keep the tables as they are
 

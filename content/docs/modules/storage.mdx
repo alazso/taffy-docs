@@ -267,6 +267,7 @@ Each piece of work is a `TxWork<T>`, a function from an open `Tx` to a result th
 |---|---|
 | `int update(String sql, Tx.Binder binder)` | Runs an `INSERT`, `UPDATE` or `DELETE` and returns the row count. |
 | `int[] batch(String sql, List<Tx.Binder> binders)` | From `0.4.9`: runs one `INSERT`, `UPDATE` or `DELETE` once for each binder as a JDBC batch and returns one count for each. [Batches](#batches) gives the rules. |
+| `long insert(String sql, String keyColumn, Tx.Binder binder)` | From `0.4.15`: runs an `INSERT` of one row and returns the key the database generated for it. [Generated keys](#generated-keys) gives the rules. |
 | `<T> List<T> query(String sql, Tx.Binder binder, Tx.Mapper<T> mapper)` | Maps every row of the result, in order. |
 | `<T> Optional<T> queryOne(String sql, Tx.Binder binder, Tx.Mapper<T> mapper)` | At most one row. More than one throws `SQLException`; a mapper returning `null` gives an empty `Optional`. |
 | `void execute(String sql)` | A statement without values, such as DDL. |
@@ -429,7 +430,51 @@ public CompletableFuture<int[]> saveCurrencies(List<Currency> currencies) {
   | SQLite | The runs before the failing one. |
   | MySQL, MariaDB | No run of an `INSERT` batch. Of an `UPDATE` or `DELETE` batch, the runs before the failing one and the ones after it, which the driver still runs. |
   | PostgreSQL | Nothing: the failed statement ends the transaction, and every later statement of the work fails. |
-- Generated keys are not returned: a row that needs its key is inserted with a key the plugin makes, such as a UUID.
+- A batch returns no generated keys: a row that needs its key is inserted with a key the plugin makes, such as a UUID, or, from `0.4.15`, one row at a time with [`Tx.insert`](#generated-keys).
+
+### Generated keys
+
+From `0.4.15`, `Tx.insert(String sql, String keyColumn, Tx.Binder binder)` runs an `INSERT` of one row and returns the key the database generated for it, such as the value of an `AUTO_INCREMENT`, `BIGSERIAL` or `INTEGER PRIMARY KEY` column. It runs inside the transaction like every other statement, on the database thread that runs the work, on Folia too.
+
+```java
+public CompletableFuture<Long> record(UUID player, BigDecimal amount) {
+    return storage.async(tx -> {
+        long id = tx.insert(
+            "INSERT INTO " + tx.table("ledger") + " (player, amount, created_at) VALUES (?, ?, ?)",
+            "id",
+            params -> params.uuid(player).money(amount).time(tx.now()));
+        tx.afterCommit(() -> getLogger().info("Recorded ledger entry " + id));
+        return id;
+    });
+}
+```
+
+The statement is prepared with `keyColumn` named as the column of the generated key, and each database uses the name differently:
+
+| Database | What `keyColumn` does | The key returned |
+|---|---|---|
+| PostgreSQL | Names the column to return, wherever the table declares it. The name is matched exactly as the catalog holds it: lower case for a column created without quotes (`id`, not `ID`), and the letter case of the quoted name, written without the quotes, for a column created with them. A name the table does not have fails the statement. | The value of that column. |
+| MySQL, MariaDB | Ignored. | The value of the table's `AUTO_INCREMENT` column. |
+| SQLite | Ignored. | The rowid of the row, which is the value of an `INTEGER PRIMARY KEY` column. A table without such a column has a rowid too, so an insert into it returns a number. |
+
+Pass the real column name, in lower case, so the same call works on every database.
+
+`insert` throws `SQLException`, with the statement at the end of the message, in these cases:
+
+| Case | Message starts with |
+|---|---|
+| The statement does not begin with `INSERT`, such as an `UPDATE`, a `DELETE` or a `REPLACE`. Nothing is sent to the database. | `insert runs a statement that begins with INSERT` |
+| The statement counts another number of rows than 1: an `INSERT IGNORE` or `ON CONFLICT DO NOTHING` that wrote no row, an insert of several rows, and on MySQL and MariaDB an `ON DUPLICATE KEY UPDATE` that found the row (it counts 2, or 0 when it changed nothing). | `the statement counted <n> rows, and insert returns the key of exactly one inserted row` |
+| The database returns no key: on MySQL and MariaDB a table without an `AUTO_INCREMENT` column, on PostgreSQL a key column that holds `NULL`. | `the statement generated no key` |
+| The key is not a whole number that fits a `long`, such as a text or `UUID` column named on PostgreSQL. | `the generated key is a <type> that is not a whole number that fits a long` |
+
+In the last three cases the statement has run and what it wrote is in the open transaction. Work lets the exception through, so the transaction rolls back and nothing is written. A `null` `keyColumn` throws `NullPointerException` and a blank one `IllegalArgumentException`, both before anything is sent.
+
+- **One row for each call.** Several rows that each need their key are inserted with one `insert` each. `batch` returns no keys.
+- **An upsert is not an insert.** `insert` cannot tell an upsert that updated the existing row from an insert on every database: on SQLite an `ON CONFLICT DO UPDATE` that updated the row returns the rowid of an earlier insert of the connection, and on PostgreSQL it returns the key of the row it updated. Work that upserts reads the key with a query in the same transaction.
+- **A SQLite table declared `WITHOUT ROWID` has no key to return**, and `insert` into it returns the rowid of an earlier insert of the connection.
+- **A key above `Long.MAX_VALUE`**, which only a `BIGINT UNSIGNED` column reaches, throws on MySQL and comes back negative on MariaDB. Declare the key column `BIGINT`.
+- **A rollback takes the row and leaves a gap.** When the transaction rolls back, no row has the key. MySQL, MariaDB and PostgreSQL do not give that key to a later insert, so keys are not consecutive; SQLite gives it again. Hand a key to anything outside the database in `afterCommit` or after the future completes.
 
 ### Dialect SQL
 
@@ -497,7 +542,7 @@ MySQL and MariaDB connections are opened with `useAffectedRows=true`. An `UPDATE
 | An `SQLTransactionRollbackException`, or an `SQLException` whose SQLState or that of a cause starts with `40`, from the commit | From `0.4.0`: the database rolled the transaction back at its commit; nothing was written. `asyncRetrying` and `readRetrying` run the work again. |
 | `CommitUnknownException` | The commit statement itself failed for any other reason, or with SQLState `40003` (statement completion unknown), so whether the transaction was written is unknown. It extends `SQLException` and keeps the SQLState and vendor code. Read the state back to find out. |
 | `RejectedExecutionException` | Storage is closed, or closed before this work ran. |
-| `IllegalStateException` from `update`, `batch`, `query`, `queryOne`, `execute` or `afterCommit` | The `Tx` was used from another thread or after the work returned. |
+| `IllegalStateException` from `update`, `batch`, `insert`, `query`, `queryOne`, `execute` or `afterCommit` | The `Tx` was used from another thread or after the work returned. |
 
 ## Threads
 
