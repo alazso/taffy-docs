@@ -525,7 +525,7 @@ item:
 ItemSpec spec = reader.item("item");
 ```
 
-`ItemSpec` is a record of what the file says. Nothing in it is resolved against the server except the material, which `Material.getMaterial` resolves without one.
+`ItemSpec` holds what the file says. It is a final class with one accessor for each part and no public constructor, so a later release can add a part. Nothing in it is resolved against the server except the material, which `Material.getMaterial` resolves without one.
 
 | Component | Holds |
 |---|---|

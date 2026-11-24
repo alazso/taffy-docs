@@ -1436,7 +1436,7 @@ A new registry holds four types. The type name is matched without regard to case
 
 There is no economy type. A plugin registers its own and runs it on the thread `EconomyProvider.thread` names for the player. A provider whose thread is the player's entity thread can be asked inside `Condition.test`. A provider that answers on the global thread or on an asynchronous one cannot: ask for the balance on that thread first and test the conditions once the answer is back. A check made for an event the plugin wants to cancel then finishes on a later tick, after the event.
 
-The `papi` type fills the placeholder in as `Text.resolve(String, Player)` does and uses `value` as written. `operator` is read without regard to case and is `equals` when left out:
+The `papi` type fills the placeholder in as `Text.resolve(String, Player)` does and compares the result with the text of `value` as the YAML parser read it. A value YAML reads as a boolean or a number is compared as Java writes it: `yes`, `on` and `true` as `true`, `010` as `8`, `0x10` as `16`, `1_000` as `1000` and `10000000.0` as `1.0E7`. Put such a value in quotes (`value: "yes"`) to compare it as typed. A date without quotes and without a time (`2026-12-31`) is read as it is written. `operator` is read without regard to case and is `equals` when left out:
 
 | Operator | Passes when |
 |---|---|
@@ -1475,7 +1475,7 @@ A key no lang file holds shows as the marker `missing:<key>`, as every `Messages
 
 `Condition build(@Nullable Object value, String path, ConditionProblems problems)` takes the list as the file's parser gave it (`ConfigReader.value("conditions")` or `ConfigurationSection.getList("conditions")`), with each entry a `Map` or a `ConfigurationSection`. An absent key and an empty list give a condition that always passes.
 
-No value in the list throws. Each mistake is passed to `problems` as an error with its path, and the entry it is in is left out of the returned condition, so refuse the file when `problems` received an error: a condition the owner wrote would otherwise not be checked. `ConditionProblems` has one method, `error(String path, String message, @Nullable String fix)`, with the arguments of `ConfigReader.error`, so `reader::error` puts every error into the reader's `errors()` and `problems()`.
+No value in the list throws. Each mistake is passed to `problems` as an error with its path, and the entry it is in denies every player in the returned condition, at its place in the file order: with its `deny` text when the entry has a usable one, and with the message `condition.requirement-not-met` otherwise. A value that is not a list gives a condition that denies every player. A plugin that only logs the errors therefore keeps the gate closed, and one that refuses the file when `problems` received an error never tests such a condition. `ConditionProblems` has one method, `error(String path, String message, @Nullable String fix)`, with the arguments of `ConfigReader.error`, so `reader::error` puts every error into the reader's `errors()` and `problems()`.
 
 | Mistake | Error |
 |---|---|
@@ -1527,13 +1527,13 @@ conditions.register("exp", config -> {
 |---|---|
 | `String type()`, `String path()` | The type name in lower case, and the path of the entry, such as `conditions[1]`. |
 | `@Nullable Object value(String key)` | The raw value of a key, or `null` when the entry has none. |
-| `@Nullable String text(String key)` | The text of a key that may be left out. A number and a boolean are given as text. A list or a group of keys is an error and gives `null`. |
+| `@Nullable String text(String key)` | The text of a key that may be left out. A number and a boolean are given as text, and a date without quotes and without a time as it is written. A list, a group of keys or an unquoted date with a time is an error and gives `null`. |
 | `@Nullable String requiredText(String key)` | The same, with an absent key and a blank text as the error `is missing`. |
 | `List<String> texts(String key)` | The texts of a list, empty when the key is absent. A value that is not a list is an error. |
 | `void error(String key, String message, @Nullable String fix)` | Passes an error at `<entry>.<key>` to the `ConditionProblems`. |
 | `ConditionDenial denial(String key)` | The entry's denial: its `deny` text when it has one, and otherwise the message of `key`. |
 
-`ConditionDenial.result(Player player, TagResolver... values)` gives the denied result, with each value written in the text as `<name>` or `{name}`. An entry with an error is left out whatever the type returns, and a type that returns `null` without an error is an error of the entry.
+`ConditionDenial.result(Player player, TagResolver... values)` gives the denied result, with each value written in the text as `<name>` or `{name}`. An entry with an error denies every player whatever the type returns, and a type that returns `null` without an error is an error of the entry.
 
 ## Failures and threads
 

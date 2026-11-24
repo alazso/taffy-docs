@@ -1853,10 +1853,18 @@ dependencies:
 
 ## 0.4.14
 
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.14"
+}
+```
+
 Every signature of `0.4.13` is still there, and a plugin changes nothing to move to `0.4.14`.
 
 `0.4.14` adds, in [`taffy-config`](/docs/modules/config#items), `ConfigReader.item(String)` and
-`item(String, ItemKeys)`, which read an item definition out of a group of keys into the record `ItemSpec` without a
+`item(String, ItemKeys)`, which read an item definition out of a group of keys into the class `ItemSpec` without a
 running server, and `ItemSpec.overMaterial` and `overStack`, which give an `ItemBuilder` with the spec applied.
 `ItemKeys` names the keys to read, so a plugin that adopts the reader passes the key names its files already have
 and no owner file changes. A plugin that does not call `item` reads its files as on `0.4.13`.
@@ -1868,3 +1876,18 @@ one `Condition` and tests them for a player in file order, stopping at the first
 the list is an error with its path, passed to the `ConditionProblems` the plugin gives, and never an exception. The
 keys are read only through `ConditionRegistry.build`, so a plugin that does not call it reads its files as on
 `0.4.13`.
+
+`0.4.14` lets a lang entry name where `Messages.send` shows it, in
+[`taffy-platform`](/docs/modules/platform#delivery-in-the-lang-file): a message written as a section named
+`delivery` under its key, with any of `chat`, `actionbar`, `title`, `subtitle`, `times` and `sound`, is shown to a
+player as those entries say, and a sender that is not a player gets one chat message. The call is the `send` a
+plugin already makes, so an owner moves a message to the action bar in the lang file alone. A message written as a
+value is sent as chat as on `0.4.13`, and `render`, `lines`, `has`, `template`, `sendActionBar` and `showTitle`
+read every file as on `0.4.13`. A `delivery` section with any other entry, such as a menu item named `delivery`
+with a `name`, stays a plain section, as does a key named `delivery` at the top of a file. The load and `reload()`
+log nothing new: a warning about a bad `times`, a bad `sound` or a section with another entry is logged by the
+first `send` that reads the section. The warning about the keys a file lacks and `addMissingKeys` treat each entry
+of a bundled delivery section as the key it is, as on `0.4.13`, so a section a file has in part is listed and
+completed key by key. They leave out two shapes: the entries of a bundled delivery section whose message the file
+has as a value, and a message the bundled file has as a value and the file has as a delivery section. On `0.4.13`
+a file of either shape got the warning at each load and made `addMissingKeys` change nothing.

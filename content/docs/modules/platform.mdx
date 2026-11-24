@@ -45,7 +45,7 @@ dependencies {
 }
 ```
 
-The published coordinates are `so.alaz.taffy:taffy-platform:0.4.13`.
+The published coordinates are `so.alaz.taffy:taffy-platform:0.4.14`.
 
 `Text` uses PlaceholderAPI and MiniPlaceholders when they are installed. Neither is bundled, and the plugin needs
 no compile dependency on them. A plugin described by `paper-plugin.yml` sees another plugin's classes only when it
@@ -706,7 +706,10 @@ both. Loading:
 
 1. writes the bundled file to `lang/en.yml` when that file is absent,
 2. reads every `.yml` file in `lang`, skipping an unreadable file with a warning and listing the keys each file
-   lacks in one warning per file. From `0.2.0`, two files whose names read as one locale, such as `pt-BR.yml` and
+   lacks in one warning per file. From `0.4.14`, the warning leaves out two shapes of a
+   [delivery section](#delivery-in-the-lang-file): a message the bundled file has as a value and the file has as a
+   delivery section, and the entries of a bundled delivery section whose message the file has as a value. Every
+   other entry of a bundled delivery section is a key like any other and is listed when the file lacks it. From `0.2.0`, two files whose names read as one locale, such as `pt-BR.yml` and
    `pt_br.yml`, give a warning that names both and the one used (the one the folder listing gives last); in `0.1`
    one replaced the other without a warning. A file with bytes that are not UTF-8 is skipped as a whole; from
    `0.4.0` its warning names the line, `lang/<name> is not saved as UTF-8 (the first byte that is not UTF-8 is on
@@ -808,6 +811,23 @@ if (getConfig().getBoolean("add-new-messages", true)) {
 lang/en.yml is not valid YAML saved as UTF-8, so no key was added to it.
 ```
 
+- From `0.4.14`, two shapes add nothing: the entries of a bundled [delivery section](#delivery-in-the-lang-file) whose message the file has as a
+  plain value, and a message the bundled file has as a value and the file has as a delivery section. On `0.4.13`
+  a file of either shape made `addMissingKeys` change nothing, with the warning below about keys that cannot be
+  added at its end.
+- From `0.4.14`, each entry of a bundled delivery section is a key like any other:
+  the entries the file lacks are added, and each is in the returned list as `pay.sent.delivery.actionbar`. A
+  section the file has in part is completed key by key in the dotted form, as on `0.4.13`. A section that has a
+  `chat`, `actionbar`, `times` or `sound` entry, in a file that writes no key at or under that `delivery` section,
+  is written as one nested section under the dotted key, shown below. An owner who wants an entry gone leaves it
+  empty (`sound: ""`) and does not remove the line, which would be added again.
+
+```yaml
+pay.sent.delivery:
+  actionbar: "<green>Sent <amount> to <target>"
+  sound: "entity.experience_orb.pickup 1 1.4"
+```
+
 - A file whose end does not take the keys is left as it is with the warning `lang/en.yml was not changed, because
   <keys> cannot be added at its end.`, which lists every key the file lacks and is logged on each call. That is a
   file that holds text under a key the bundled file uses as a section, one that ends inside a block scalar (`|` or
@@ -831,7 +851,7 @@ A key no file has renders as the visible marker `<red>missing:key` and never thr
 | `render(Locale, String key, TagResolver...)` | Renders without PlaceholderAPI or MiniPlaceholders. |
 | `render(Text, Player viewer, String key, TagResolver...)` | Renders in the viewer's language through `Text`, so PlaceholderAPI and MiniPlaceholders apply. |
 | `renderTemplate(Text, Player viewer, String template, TagResolver...)` | Renders a template that is not a key, with the viewer's prefix. |
-| `send(Text, CommandSender, String key, TagResolver...)` | From `0.4.8`. Renders as `render(Text, Player, ...)` does and sends one chat message. |
+| `send(Text, CommandSender, String key, TagResolver...)` | From `0.4.8`. Renders as `render(Text, Player, ...)` does and sends one chat message. From `0.4.14`, a key written as a delivery section is shown as [Delivery in the lang file](#delivery-in-the-lang-file) describes. |
 | `sendActionBar(Text, Player, String key, TagResolver...)` | From `0.4.8`. Renders the same way and shows an action bar. |
 | `showTitle(Text, Player, String titleKey, String subtitleKey, Title.Times, TagResolver...)` | From `0.4.8`. Shows a title from two keys with the given times. |
 | `showTitle(Text, Player, String key, TagResolver...)` | From `0.4.8`. Shows a title written as one lang entry, times included. |
@@ -902,6 +922,91 @@ messages.showTitle(text, player, "crate.won", Placeholder.component("prize", pri
 A time that no file has, that is not a whole number of at least 0, or that is too long to count in milliseconds,
 is the one of Adventure's `Title.DEFAULT_TIMES` (10, 70 and 20 ticks). A `subtitle` no file has gives an empty subtitle, and a `title` no file
 has shows the missing-key marker.
+
+### Delivery in the lang file
+
+From `0.4.14`, an owner chooses in the lang file where `send` shows a message. A message is written either as a
+value, which is a chat message as before, or as a section named `delivery` under its key:
+
+```yaml title="lang/en.yml"
+pay:
+  sent:
+    delivery:
+      actionbar: "<green>Sent <amount> to <target>"
+      sound: "entity.experience_orb.pickup 1 1.4"
+  received:
+    delivery:
+      chat: "{prefix}<green>You received <amount>."
+      title: "<gold>+<amount>"
+      subtitle: "<gray>from <sender>"
+      times: "5 40 15"
+```
+
+```java
+messages.send(text, sender, "pay.sent",
+    Placeholder.unparsed("amount", "250"), Placeholder.unparsed("target", target.getName()));
+```
+
+The plugin's call is the one it already makes, so moving a message from chat to the action bar needs no code change
+and no new release of the plugin.
+
+| Entry | Value | A player gets |
+|---|---|---|
+| `chat` | A template, or a list of lines | One chat message, with the prefix of [`withChatPrefix`](#a-prefix-from-the-plugin). |
+| `actionbar` | A template | An action bar. |
+| `title`, `subtitle` | A template each | One title. It is shown when either text is not empty. |
+| `times` | Three whole numbers of ticks: fade in, stay and fade out, as `"10 70 20"` or as a list | The times of the title. Absent, they are Adventure's `Title.DEFAULT_TIMES`. |
+| `sound` | A sound in the form [`Sounds`](#colors-and-sounds) reads, `key [volume] [pitch]` | The sound, through `Sounds.play`. |
+
+- Each text is rendered as `send` renders a message, with the values of the call, PlaceholderAPI and
+  MiniPlaceholders. An entry that is absent or an empty message is left out, so `chat: ""` beside an `actionbar`
+  sends no chat message.
+- A sender that is not a player, such as the console, gets one chat message and nothing else: the `chat` entry, or
+  in a section without one the `actionbar` entry, or without that one the `title` and `subtitle` joined by a
+  newline. A section with only a `sound` sends such a sender nothing.
+- The [lookup](#lookup) picks the first file that has the message in either form. An owner's `en.yml` with
+  `pay.sent` as a delivery section is used before the bundled value, and an owner's value is used before a bundled
+  delivery section. After a load that names [bundled languages](#bundled-languages), the owner's form of a message
+  replaces the bundled one of that language as a whole: no entry of the bundled section is mixed in.
+- `send` belongs on the thread that owns the player, on Folia the thread of the player's region. For a sender that
+  is not a player it may be called from any thread.
+
+Only `send` reads a delivery section. For `render`, `lines`, `has`, `template`, `sendActionBar` and `showTitle` the
+file is read as on `0.4.13`: the entries are the keys `pay.sent.delivery.actionbar` and so on, and the key
+`pay.sent` is one that file does not have, so those methods take it from the next file of the lookup or give the
+missing-key marker. A plugin that also renders a key itself keeps that key a value in its bundled file.
+
+What is a delivery section and what is not:
+
+- A section named `delivery` under a key, in which every entry is one of the six names and has a value, is one.
+- A `delivery` section with any other entry, with an entry that has no value (`title:`), or with a section inside
+  it, is not: a menu item named `delivery`
+  with a `name` and a `lore` (`gui.confirm.delivery.name`) stays a plain section, as does a `gui.<id>` section
+  with a `title` child, which has no `delivery` section at all.
+- A key named `delivery` at the top of a file, with or without children, is not, and neither is a `delivery` key
+  that holds a value (`gui.confirm.listing.delivery: "..."`).
+- A lang file of `0.4.13` or earlier that holds a `delivery` section made only of those six names, such as a title
+  a plugin shows with `showTitle(text, player, "mail.delivery")`, reads as a delivery section of the key above it
+  for `send` alone, and `send` of that parent key showed the missing-key marker until now. Every other method
+  reads it as before, the load and `reload()` log what they logged on `0.4.13`, with each entry the file lacks in
+  the warning about missing keys, and `addMissingKeys` adds each missing entry as its own dotted key.
+
+A bad entry never throws at a send, and the load and `reload()` log nothing about a delivery section. The first
+`send` that reads the section after the load or a `reload()` logs a warning that names the file and the key:
+
+```text
+lang/en.yml has the times '5 forty 15' at pay.received.delivery.times, which is not three whole numbers of ticks (fade in, stay and fade out, such as 10 70 20), so the title of pay.received has the default times.
+lang/en.yml has the sound 'level!up' at pay.sent.delivery.sound, whose key is not a valid sound key, so pay.sent plays no sound.
+lang/en.yml has a list of 2 entries at pay.sent.delivery.sound, which takes one sound, so pay.sent plays no sound.
+lang/en.yml has pay.sent.delivery.actionbr in the delivery section of pay.sent, which holds only chat, actionbar, title, subtitle, times and sound, so pay.sent is not read from this file.
+lang/en.yml has pay.sent.delivery.title (no value) in the delivery section of pay.sent, which holds only chat, actionbar, title, subtitle, times and sound, so pay.sent is not read from this file.
+```
+
+The last two are logged by a `send` of the key, once after the load or a `reload()` for each file of the lookup
+the send passes, and the message is then taken from the next file of the lookup. A warning about the bundled text
+names it as `The bundled en.yml` and is logged once after the load. A lang file whose `delivery` sections no
+`send` reads logs none of these. A sound key that parses and names no sound plays nothing and is not reported:
+`Sounds.isKnown` needs a running server.
 
 ### A prefix from the plugin
 
