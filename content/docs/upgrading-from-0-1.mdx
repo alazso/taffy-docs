@@ -1795,3 +1795,13 @@ dependencies:
 answers `true` and that the WorldGuard provider answers from the `build` flag, and `NpcProvider` with `NpcPlugin`,
 which give the location of an NPC and its clicks for Citizens, FancyNpcs and ZNPCsPlus. A plugin that calls
 neither behaves as on `0.4.11`. A server owner changes nothing for `0.4.12`.
+
+## 0.4.13
+
+Every signature of `0.4.12` is still there, and a plugin changes nothing to move to `0.4.13`.
+
+`0.4.13` adds, in [`taffy-hooks`](/docs/modules/hooks#setting-a-balance-currency-names-and-receipts), seven default
+methods on `EconomyProvider`: `setBalance`, `currencyNameSingular`, `currencyNamePlural`, `currencySymbol`, `format`,
+`withdrawReceipt` and `depositReceipt`, with the record `EconomyReceipt`. A plugin's or a test's own
+`EconomyProvider` compiles unchanged and answers `UNSUPPORTED`, `null` and a receipt with no transaction id. A
+plugin that calls none of them behaves as on `0.4.12`. A server owner changes nothing for `0.4.13`.

@@ -591,6 +591,45 @@ From `0.3.2`, the Vault provider keeps the plugin that registered the economy, a
 
 A withdraw reads the balance a second time once the economy confirmed it, to tell `OVERDRAWN`. From `0.3.2`, when that read throws an exception or a `LinkageError`, the result is `OK`, the overdraft check is skipped and a warning is logged. Before `0.3.2` the throwable left `withdraw`.
 
+### Setting a balance, currency names and receipts
+
+From `0.4.13`, `EconomyProvider` has seven more methods. Each is a default method, so a plugin's or a test's own `EconomyProvider` compiles unchanged and answers that it cannot. They were built against the Vault API `1.7.1` and PlayerPoints `3.3.5`.
+
+| Method | An economy that cannot answer | Vault provider | [PlayerPoints provider](#playerpoints) |
+|---|---|---|---|
+| `EconomyResult setBalance(UUID player, BigDecimal amount)` | `UNSUPPORTED` | `UNSUPPORTED`: the Vault API has no call that sets a balance. | Sets whole points through `PlayerPointsAPI.set(UUID, int)`. |
+| `@Nullable String currencyNameSingular()` | `null` | `Economy.currencyNameSingular()` | `PlayerPointsAPI.getCurrencyNameSingular()` |
+| `@Nullable String currencyNamePlural()` | `null` | `Economy.currencyNamePlural()` | `PlayerPointsAPI.getCurrencyNamePlural()` |
+| `@Nullable String currencySymbol()` | `null` | `null`: the Vault API has no symbol. | `null` |
+| `@Nullable String format(BigDecimal amount)` | `null` | `Economy.format(double)` | `null` |
+| `EconomyReceipt withdrawReceipt(UUID player, BigDecimal amount, BooleanSupplier start)` | The result of `withdraw`, no transaction id. | No transaction id. | No transaction id. |
+| `EconomyReceipt depositReceipt(UUID player, BigDecimal amount)` | The result of `deposit`, no transaction id. | No transaction id. | No transaction id. |
+
+`setBalance` takes an amount of zero or more, rounds it half-even to `scale()`, and runs on the thread `thread(player)` names, checked as a withdraw is. Its result tells three outcomes apart:
+
+| `EconomyResult.Status` | Meaning for `setBalance` |
+|---|---|
+| `OK` | The economy set the balance. `moved()` is `true`, also when the balance already was the amount. |
+| `UNSUPPORTED` | This economy cannot set a balance. The balance is unchanged, and no later call will do better. |
+| `FAILED` | The economy can set a balance and refused this call, with its reason in `message()`. The balance is unchanged. |
+
+A call that throws has an unknown outcome, as for a withdraw. `EconomyResult.Status` has no new constant.
+
+The Vault provider gives `UNSUPPORTED` for every amount, after the `null` checks and the thread check, and calls nothing in the economy. It does not withdraw or deposit the difference: another plugin can change the balance between the read and the move, so the result would not be the amount asked for. A plugin that accepts that reads `balance` and calls `withdraw` or `deposit` itself.
+
+The PlayerPoints provider sets the points in turn with its own withdraws for that player. An amount with a fraction of a point, a negative one or one above `Integer.MAX_VALUE` throws `IllegalArgumentException` before PlayerPoints is called. A set that PlayerPoints refuses, which it does when a listener cancelled its `PlayerPointsChangeEvent`, gives `FAILED` with the message `PlayerPoints refused it`, and one made while PlayerPoints is disabled gives `FAILED` with `the economy plugin PlayerPoints is disabled`, before the amount is checked. An installed PlayerPoints that lacks `set(UUID, int)` is still detected, and `setBalance` then gives `UNSUPPORTED`.
+
+The two names, the symbol and `format` name no player and are not checked against a thread, as `scale()` is not. A name or a text that is `null` or blank reads as `null`, and so does a call that throws an exception or a `LinkageError`, which is logged with a warning. `format` accepts any amount, a negative one too. The Vault provider rounds it half-even to `scale()` and sends the nearest `double` to `Economy.format(double)`, so beyond 15 significant digits the text can differ from the amount in its last digits, and an amount beyond the range of a `double` throws `IllegalArgumentException`. An installed PlayerPoints that lacks the two name methods gives `null` for both names.
+
+```java
+String shown = money.format(price);
+if (shown == null) {
+    shown = price.setScale(money.scale(), RoundingMode.HALF_EVEN).toPlainString();
+}
+```
+
+`EconomyReceipt` is a record of `EconomyResult result()` and `@Nullable String transactionId()`. The id is the one the economy gave the transaction, and it is `null` when the economy gave none or no money moved; the record refuses a blank id and an id on a result whose `moved()` is `false`. `EconomyReceipt.of(EconomyResult)` gives a receipt with no id. `withdrawReceipt` and `depositReceipt` check their arguments, the thread and the amount as `withdraw` and `deposit` do. Neither the Vault API nor PlayerPoints gives a transaction an id, so every receipt of these two providers has `transactionId() == null`, and a plugin that needs an id for its own log makes one.
+
 ### The thread rule
 
 `VaultOptions.ThreadRule` names the thread the Vault economy is called on, which is what `thread(UUID)` answers. It exists from `0.3.2`; before it, the Vault provider answered `ThreadTag.GLOBAL` for every player.
