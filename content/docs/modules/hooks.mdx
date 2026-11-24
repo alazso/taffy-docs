@@ -1,6 +1,6 @@
 ---
 title: taffy-hooks
-description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard, Bedrock players, placeholders and holograms behind Taffy interfaces, detected safely at enable.
+description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard, Bedrock players, placeholders, holograms and NPCs behind Taffy interfaces, detected safely at enable.
 ---
 
 `taffy-hooks` connects a plugin to other Paper plugins without making any of them a hard dependency:
@@ -15,6 +15,7 @@ description: Custom items, a Vault economy, PlayerPoints, LuckPerms, WorldGuard,
 - `PlaceholderCache` gives a placeholder its last known value at once and refreshes it off the asking thread (from `0.4.7`).
 - `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
 - `HologramProvider.displays` places them as display entities, with no hologram plugin (from `0.4.11`).
+- `NpcProvider.detect` gives where an NPC of Citizens, FancyNpcs or ZNPCsPlus stands and the clicks players make on its NPCs (from `0.4.12`).
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
 
 No public signature names an integration type. Each integration sits behind an interface of `so.alaz.taffy.hooks`, and the class that calls it loads only after its API classes are found visible to the plugin (and, for every integration but Vault, after its plugin is found installed and enabled). A server without an integration never loads a class that names it.
@@ -56,12 +57,17 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | FancyHolograms | `de.oliver:FancyHolograms` | `alaz.fancyholograms` |
 | Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
 | HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
+| Citizens (from `0.4.12`) | `net.citizensnpcs:citizensapi` | `alaz.citizens.api` |
+| FancyNpcs (from `0.4.12`) | `de.oliver:FancyNpcs` | `alaz.fancynpcs` |
+| ZNPCsPlus (from `0.4.12`) | `com.github.Pyrbu:ZNPCsPlus` | `alaz.znpcsplus.api` |
 
 The hologram rows, DecentHolograms, FancyHolograms, Holograms and HologramLib, with their aliases, are available from `0.1.2`.
 
 `0.4.12` is built against CraftEngine `26.10` and against MMOItems-API `6.10.1-SNAPSHOT` with MythicLib `1.7.1-SNAPSHOT`. MMOItems and MythicLib publish only snapshots of their API, so those two catalog versions are snapshot versions. MythicLib is in the catalog because the MMOItems classes extend types of it: a plugin that calls MMOItems itself adds both aliases with `compileOnly`.
 
 `0.4.12` is built against WorldGuard `7.0.20` and WorldEdit `7.4.4`, the WorldEdit version that WorldGuard release is built against. From `0.4.12` Taffy also compiles against `worldguard-bukkit`, which holds `WorldGuardPlugin.wrapPlayer` for the [build check](#whether-a-player-may-build).
+
+`0.4.12` is built against the Citizens API `2.0.44-SNAPSHOT`, FancyNpcs `2.12.1` and the ZNPCsPlus API `2.0.0`. Citizens publishes only snapshots of its API, so that catalog version is a snapshot version. The ZNPCsPlus alias is the JitPack build of ZNPCsPlus' tag `2.0.0`, which holds the classes ZNPCsPlus publishes as `lol.pyr:znpcsplus-api`.
 
 A plugin adds one of these aliases with `compileOnly` only when its own code calls that API directly. It never adds one with `implementation`. The `so.alaz.taffy.repositories` settings plugin, applied by `so.alaz.taffy.settings`, already holds the repositories these resolve from.
 
@@ -128,9 +134,18 @@ dependencies:
     HologramLib:
       load: BEFORE
       required: false
+    Citizens:
+      load: BEFORE
+      required: false
+    FancyNpcs:
+      load: BEFORE
+      required: false
+    ZNPCsPlus:
+      load: BEFORE
+      required: false
 ```
 
-Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `CraftEngine` and `MMOItems` (both from `0.4.12`), `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
+Keep only the entries for integrations the plugin uses. The names are exactly `ItemsAdder`, `Nexo`, `Oraxen`, `HeadDatabase`, `CraftEngine` and `MMOItems` (both from `0.4.12`), `Vault`, `PlayerPoints`, `LuckPerms`, `WorldGuard`, `floodgate` (in lower case), `Geyser-Spigot`, `PlaceholderAPI`, `MiniPlaceholders`, `DecentHolograms`, `FancyHolograms`, `Holograms` and `HologramLib`, and from `0.4.12` `Citizens`, `FancyNpcs` and `ZNPCsPlus`. On Folia the Vault API comes from VaultUnlocked, whose plugin is also named `Vault`, so the same entry covers it.
 
 A plugin that uses WorldGuard must also list WorldEdit: every region lookup turns the location into a WorldEdit position through WorldEdit's `BukkitAdapter`, so WorldEdit's classes have to be visible too.
 
@@ -1039,6 +1054,76 @@ What to know:
 - **A refused change.** A change the plugin's `Scheduler` refuses, which it does once the plugin is disabling, answers `false`. A refused `create` or `move` forgets the hologram, and a refused `update` keeps it.
 - **Disable.** The provider removes every hologram when the plugin's `PluginDisableEvent` fires, before `onDisable`, and `close()` does the same. On Paper both run on the main thread and the entities are gone before the call returns, those of a move or removal that still waits for its region thread included. On Folia a disabling plugin can schedule nothing, so only the entities whose location the disabling thread owns are removed. The others stay in the world until their chunk unloads or the server stops, are never saved, and are removed by the next display provider the plugin builds. Call `close()` before `Scheduler.close()`, in the order [taffy-platform](/docs/modules/platform#disable-order) gives.
 
+## NPCs
+
+<Callout type="info" title="From 0.4.12">
+`NpcProvider`, `NpcPlugin` and the NPC catalog aliases are available from Taffy `0.4.12`. Earlier versions have no NPC hooks.
+</Callout>
+
+`NpcProvider.detect(Plugin owner, ErrorReports errors, boolean switchedOn, NpcPlugin plugin)` detects one NPC plugin the same way, reporting a detection failure under `hook.<plugin key>`. The provider answers where an NPC stands and passes the clicks players make on NPCs to one listener. It makes, changes and removes no NPC. Call `detect` on the server thread while the plugin is enabled, normally in `onEnable`. To detect again, such as when the plugin reloads its settings, close the held provider, then detect again. `NpcPlugin.byKey` reads the plugin from a config value such as `fancynpcs`. A later version may add `NpcPlugin` constants, so a `switch` over `NpcPlugin` keeps a `default` branch.
+
+```java
+Detected<NpcProvider> detected = NpcProvider.detect(this, errors, true, NpcPlugin.CITIZENS);
+NpcProvider npcs = detected.provider();
+if (npcs != null) {
+    npcs.onClick((player, id) -> {
+        if (id.equals(settings.crateNpc())) {
+            crates.open(player);
+        }
+    });
+}
+```
+
+An NPC is named by its id, which is text in one form for each NPC plugin:
+
+| `NpcPlugin` | Installed as | Built against | An NPC id is |
+|---|---|---|---|
+| `CITIZENS` | `Citizens` | `citizensapi` `2.0.44-SNAPSHOT` | The number Citizens gives the NPC and shows in `/npc list`, in decimal with no sign and no leading zero, as in `12`. Only the NPCs of Citizens' default registry are read, the ones made with `/npc create`. An NPC another plugin keeps in a registry of its own is neither found nor passed on. |
+| `FANCYNPCS` | `FancyNpcs` | FancyNpcs `2.12.1` | The name given in `/npc create`, as in `shopkeeper`. FancyNpcs finds a name in any case, and a click passes the name as FancyNpcs holds it. While FancyNpcs' `player-npcs` feature is on, two players may each hold an NPC of one name: the lookup gives the first FancyNpcs finds, and a click on either passes the same name. |
+| `ZNPCSPLUS` | `ZNPCsPlus` | ZNPCsPlus API `2.0.0` | The id given in `/npc create`, as in `shopkeeper`. ZNPCsPlus keeps an id in lower case and finds it in any case, and a click passes it in lower case. |
+
+| Method | Behaviour |
+|---|---|
+| `NpcPlugin plugin()` | The NPC plugin the provider reads. |
+| `boolean available()` | The provider is not closed and its NPC plugin is enabled. |
+| `@Nullable Location location(String id)` | A copy of where the NPC stands now, or `null`. |
+| `void onClick(BiConsumer<Player, String> listener)` | Sets the listener that receives the player and the NPC id of every click, in place of the one set before. |
+| `void close()` | Unregisters the provider's listener and drops the click listener. `available()` then answers `false` and `location` answers `null`. A second call does nothing. |
+
+### Where an NPC stands
+
+`location(String id)` answers `null` when:
+
+- the provider is not available;
+- the id is not of the NPC plugin's form, or names no NPC;
+- the NPC is not spawned: a despawned Citizens NPC, a FancyNpcs NPC whose `spawnEntity` setting is off, or a ZNPCsPlus NPC that is not enabled;
+- the world the NPC stands in is not loaded;
+- the lookup failed, which is logged at most once a minute and reported under `hook.<plugin key>`.
+
+FancyNpcs loads its NPCs five seconds after it is enabled, so a lookup from `onEnable` finds none of them. Look an NPC up when it is needed, or on a later tick.
+
+Call `location` on the main thread on Paper. On Folia call it on the global region thread, and for Citizens, whose NPC is an entity, on the region thread that owns the NPC.
+
+### Clicks
+
+`detect` registers one listener of the NPC plugin's click events for the plugin, whether or not `onClick` was called. `close()` unregisters it, and the server unregisters it with the plugin's other listeners when the plugin disables, so `onDisable` needs no call. `onClick` only sets which listener receives the clicks: a second call replaces the first listener, and no listener is called after `close()`.
+
+The listener receives a click on any NPC of the NPC plugin, also one the plugin does not use, so it compares the id first. It is not told a left click from a right click.
+
+| | Citizens | FancyNpcs | ZNPCsPlus |
+|---|---|---|---|
+| Event read | `NPCRightClickEvent`, `NPCLeftClickEvent` | `NpcInteractEvent` with the trigger `LEFT_CLICK` or `RIGHT_CLICK` | `NpcInteractEvent` |
+| Right click | Passed once: Citizens fires for the main hand only. | Passed once: FancyNpcs fires for the main hand only. | Passed once: ZNPCsPlus lets one interaction of a player through in 100 milliseconds, which leaves out the off hand. |
+| Left click | Passed only for a hit that did no damage, as on a protected NPC, which a Citizens NPC is unless its owner changed that. | Passed. | Passed. |
+| Not passed | A click on an NPC outside the default registry. | A click inside the NPC's own interaction cooldown, and an interaction another plugin starts through FancyNpcs' API. | |
+| Thread of the event | The thread that owns the player. | The thread that owns the player. | A network thread. |
+
+A click another plugin cancelled in the NPC plugin's event is not passed.
+
+The listener always runs on the thread that owns the player: the main thread on Paper, and on Folia the player's region thread. For Citizens and FancyNpcs it runs inside the NPC plugin's event. ZNPCsPlus fires its event off that thread, so Taffy hands the click to the player's scheduler for the plugin and the listener runs on the player's next tick. A click of a player who left before that tick is dropped, and so is one that arrives while the plugin is disabled.
+
+A listener that throws is logged at most once a minute, reported under `hook.<plugin key>`, and goes on receiving clicks. A click event that could not be read, and a click that could not be handed to the player's thread, are logged and reported the same way.
+
 ## Placeholders
 
 `PlaceholderExpansionBuilder` collects the plugin's placeholders and registers them with PlaceholderAPI and MiniPlaceholders, each when it is installed, enabled and its API classes are visible. With the identifier `shop`, the name `balance` is `%shop_balance%` in PlaceholderAPI and `<shop_balance>` in MiniPlaceholders.
@@ -1155,6 +1240,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.floodgate`, `hook.geyser-spigot` | From `0.4.3`, a failed detection, and every failed check of a player. |
 | `hook.decentholograms`, `hook.fancyholograms`, `hook.holograms`, `hook.hologramlib` | A failed detection, and every failed hologram call. |
 | `hook.displays` | From `0.4.11`, a failed spawn, text change or removal of a display hologram, and a line MiniMessage refuses. |
+| `hook.citizens`, `hook.fancynpcs`, `hook.znpcsplus` | From `0.4.12`, a failed detection, a failed lookup of an NPC's location, a click that could not be read or handed to the player's thread, and a click listener that threw. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
 
 Reading an item's id, resolving a placeholder and, from `0.4.7`, a refresh of a `PlaceholderCache` log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
@@ -1180,6 +1266,10 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `DisplayHolograms` calls | From `0.4.11`. Any thread. The entities change on the region thread of the hologram's location. |
 | `HologramProvider.close` | The thread that disables the plugin, in `onDisable`, after `PlaceholderRegistration.unregister` and `Menus.shutdown` and before `Scheduler.close()`. On Folia that is the global region thread only when the plugin disables itself from there. Before detecting again, the server's global thread. |
+| `NpcProvider.detect` | From `0.4.12`. The server thread while the plugin is enabled, normally in `onEnable`, and again after the held provider is closed. |
+| `NpcProvider.location` | From `0.4.12`. The main thread on Paper. On Folia the global region thread, and for Citizens the region thread that owns the NPC. |
+| `NpcProvider.onClick` | From `0.4.12`. Any thread. |
+| The click listener of `NpcProvider.onClick` | From `0.4.12`. Called by Taffy on the thread that owns the player. |
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |
 | `PlaceholderCache` | Any thread. `refresh` runs on the thread that called `get`. |
