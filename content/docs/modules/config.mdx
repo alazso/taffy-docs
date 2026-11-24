@@ -12,6 +12,7 @@ description: Strict YAML loading, typed reading that reports every problem at on
 - `YamlFolder`, which reads a folder in which each `.yml` file is one entry (one kit, one menu) and reports a bad file without stopping the others.
 - `ConfigUpgrade`, the steps that rename, move and remove keys when `config.yml` or a file of a folder is brought to a newer layout version (from `0.4.9`).
 - `AtomicWriter`, which writes a file the plugin edits so that a crash never leaves half of it, and replaces it only while it still holds what the edit started from (from `0.4.9`).
+- `ItemSpec` and `ItemKeys`, an item read from a group of keys under the plugin's own key names and built through `ItemBuilder` (from `0.4.14`).
 - `StrictYaml`, the one way a file becomes a `YamlConfiguration`: a file that is missing, not UTF-8 or not valid YAML fails instead of reading as empty.
 - `ConfigLoadException`, the one checked exception of the module, whose message is written for the server owner.
 
@@ -501,6 +502,144 @@ The reader of an entry gives the readers of a list inside that entry the same wa
 
 `ConfigurationSection.getMapList` drops an entry that is not a group of keys without a word; `sections` warns about each one. The returned list is unmodifiable.
 
+### Items
+
+From `0.4.14`, `item(String path)` and `item(String path, ItemKeys keys)` read the group of keys at `path` as an item and give an `ItemSpec`, or `null`. The call needs no running server, so it runs in the `read` factory and in a plain unit test:
+
+```yaml
+item:
+  material: minecraft:diamond_sword
+  name: "<aqua>Frostbite"
+  lore: ["<gray>Cold to the touch."]
+  glow: true
+  item-model: "myserver:frostbite"
+  custom-model-data: [1, 2.5]
+  enchantments:
+    sharpness: 5
+  trim:
+    material: quartz
+    pattern: sentry
+```
+
+```java
+ItemSpec spec = reader.item("item");
+```
+
+`ItemSpec` is a record of what the file says. Nothing in it is resolved against the server except the material, which `Material.getMaterial` resolves without one.
+
+| Component | Holds |
+|---|---|
+| `@Nullable String file()`, `String path()` | The file and the path of the group the item was read from, written as the reader writes them, such as `rewards[1].item` |
+| `@Nullable Material material()` | The material, or `null` when the file names none |
+| `@Nullable String reference()` | An item reference such as `serialized:<base64>` or `nexo:ruby_sword`, kept as text |
+| `@Nullable String name()`, `List<String> lore()` | The MiniMessage texts as written |
+| `boolean glow()` | Whether the item glints |
+| `@Nullable NamespacedKey itemModel()` | The item model |
+| `List<Float> customModelData()` | The floats of the custom model data |
+| `Map<String, Integer> enchantments()` | The level of each enchantment by its key in lower case, in file order |
+| `@Nullable ItemSpec.Trim trim()` | The keys of the trim material and the trim pattern, in lower case |
+
+No value throws. What each case gives:
+
+| In the file | Result |
+|---|---|
+| The group is absent, or the key holds a blank text | `null`, nothing reported |
+| The key holds a text, a number or a list instead of a group | `null` and the error `item is "paper"; expected a group of keys.` |
+| A key inside the group is absent or blank | That part stays empty, nothing reported |
+| The material is not a material name (`papr`, a legacy name, a namespace other than `minecraft:`) or not a text | `null` and the error `item.material is "papr"; expected the name of an item such as paper or minecraft:paper.` |
+| The reference is a list or a group | `null` and an error |
+| The name is a list or a group | No name and a warning |
+| The lore is not a list | No lore and the warning of `strings` |
+| The glow is not `true` or `false` | No glow and the warning of `bool` |
+| The item model is not a key such as `minecraft:diamond_sword` | No item model and a warning |
+| The custom model data is one number | That one float |
+| A custom model data entry is not a finite number | The entry is skipped with a warning, the others are kept |
+| An enchantment level is not a whole number of 1 or more (`0`, `-2`, `2.5`, `high`) | That enchantment is skipped with the warning `item.enchantments.sharpness is -2; expected a whole number of 1 or more, so the enchantment is skipped.` |
+| The enchantments or the trim hold a value instead of a group | None, and the warning of `children` |
+| The trim lacks `material` or `pattern` | No trim and a warning |
+| A key the key names do not name, such as `damage` | Not read and not reported: it stays in `unreadKeys()` for the plugin to read or report |
+
+The material is read in any letter case, with or without `minecraft:` before it. A call that adds an error still reads every other key first, so one load reports every problem of the item, and then gives `null`. A warning leaves out only its own part. A material that exists but is not an item, such as `water`, and an enchantment or trim key the server does not have are found when the item is built, as described below, since the reader has no registry.
+
+#### The plugin's own key names
+
+`ItemKeys` names the keys, so a plugin keeps the keys its files already have and no owner file changes. `ItemKeys.defaults()` reads the names of the example above and `reference`. Each method returns a copy with one key renamed, and `null` turns a key off: its part stays empty and the key is left unread. Keys are relative to the group of the item and may be dotted.
+
+| Method | Default key | Reads |
+|---|---|---|
+| `material(key)` | `material` | The material name |
+| `reference(key)` | `reference` | A reference written as one text |
+| `referenceParts(providerKey, idKey)` | not read | A reference written as two keys, joined as `<provider>:<id>` with the provider in lower case. An id that already starts with the provider is kept as it is, an id without a provider is the reference, and a provider without an id gives none. A reference written as one text wins. |
+| `name(key)`, `lore(key)` | `name`, `lore` | The name and the lore |
+| `textBesideSection(true)` | `false` | Reads the name and the lore beside the group instead of inside it: for an item at `vouchers.gold.item`, the name key `display-name` is read at `vouchers.gold.display-name` |
+| `glow(key)` | `glow` | `true` or `false` |
+| `itemModel(key)` | `item-model` | A namespaced key |
+| `customModelData(key)` | `custom-model-data` | One number or a list of numbers |
+| `enchantments(key)` | `enchantments` | A group in which each key is an enchantment and holds its level |
+| `trim(key)` | `trim` | A group that holds `material` and `pattern`, two names that are fixed |
+
+A file with the name and the lore beside the item, and the reference under `custom`:
+
+```java
+static final ItemKeys KEYS = ItemKeys.defaults()
+    .reference("custom")
+    .name("display-name")
+    .textBesideSection(true);
+```
+
+A file with camel-case keys, a reference in two parts and no enchantments or trim:
+
+```java
+static final ItemKeys KEYS = ItemKeys.defaults()
+    .reference(null)
+    .referenceParts("provider", "providerItemId")
+    .itemModel("customItemId")
+    .customModelData("customModelData")
+    .glow("glowing")
+    .enchantments(null)
+    .trim(null);
+```
+
+With `textBesideSection(true)` an absent group still gives `null`, also when a name is there. The plugin decides what an absent item means.
+
+#### Building the item
+
+`overMaterial` and `overStack` give an [`ItemBuilder`](/docs/modules/platform) with the spec applied. The plugin adds what the spec does not hold, such as the amount, and calls `build()`:
+
+```java
+ItemStack item = spec
+    .overMaterial(Material.PAPER, line -> text.render(line, viewer), logger, problems::add)
+    .amount(3)
+    .build();
+```
+
+- `overMaterial(Material fallback, Function<String, Component> renderer, Logger logger, Consumer<ConfigProblem> problems)` starts from the material of the file, or from `fallback` when the file names none.
+- `overStack(ItemStack base, ...)` with the same three other arguments starts from a stack the plugin built and ignores the material. The stack keeps every property the file does not name.
+
+Taffy does not build an item from the reference, because `taffy-config` does not depend on `taffy-hooks`. A plugin that reads one builds the base stack itself, here through [`CustomItems`](/docs/modules/hooks), and passes it to `overStack`:
+
+```java
+String reference = spec.reference();
+ItemStack base = reference == null ? null
+    : ItemBuilder.isSerialized(reference) ? ItemBuilder.deserialize(reference)
+    : customItems.create(reference);
+ItemBuilder builder = base == null
+    ? spec.overMaterial(Material.PAPER, text::render, logger, problems::add)
+    : spec.overStack(base, text::render, logger, problems::add);
+```
+
+The name and each lore line are MiniMessage text that the plugin's `renderer` turns into a component, once per call. Taffy adds no tag resolver and no placeholder: `text::render` of a [`Text`](/docs/modules/platform) renders MiniMessage with the placeholders that class resolves, and a renderer of the plugin's own can resolve more per viewer. `ItemBuilder` takes the default italic styling off. `logger` is the one `ItemBuilder.customModelData` warns through.
+
+The enchantment and trim keys are looked up in the registries of the server at this point. Each of these reaches `problems` as a `ConfigProblem` with the severity `WARNING` and the `file()` and `path()` of the spec, and the builder is returned without that part. Neither method throws for them:
+
+| In the spec | Result |
+|---|---|
+| A material that is not an item, such as `water`, or a kind of air | `fallback` is used: `item names the material water, which is not an item, so paper is used.` |
+| An enchantment key that is not a valid key or names no enchantment of the server | Skipped: `item names the enchantment "sharpnes", which this server does not have, so it is skipped.` |
+| A trim material or pattern the server does not have | No trim: `item names the trim pattern "sentri", which this server does not have, so no trim is set.` |
+
+Both methods need a running server. They read only the registries and change nothing, so they may be called on any thread, on Folia too. `ItemBuilder.build()` keeps its own rule.
+
 ### Problems as records
 
 From `0.4.8`, `problems()` gives every warning and error of the reader as a `ConfigProblem`, for code that lists, counts or sorts them: a validate command, a doctor report, or a reload that tells warnings from errors. No line changes, and the warning consumer and `errors()` receive what they did before.
@@ -873,7 +1012,7 @@ final class SettingsTest {
 
 ## Behaviour summary
 
-- **Threads:** no class keeps a thread. File reads and writes block the calling thread. `ConfigHolder.get()`, `YamlFolder`, `ConfigUpgrade` and `AtomicWriter` are safe from any thread; `ConfigReader` and the returned `YamlConfiguration` objects are not thread-safe; calls to one `ConfigLoader.load()` must not overlap.
+- **Threads:** no class keeps a thread. File reads and writes block the calling thread. `ConfigHolder.get()`, `YamlFolder`, `ConfigUpgrade` and `AtomicWriter` are safe from any thread; `ConfigReader` and the returned `YamlConfiguration` objects are not thread-safe; an `ItemSpec` and an `ItemKeys` are immutable, and `ItemSpec.overMaterial` and `overStack` need a running server and run on any thread; calls to one `ConfigLoader.load()` must not overlap.
 - **Failure handling:** `ConfigLoadException` is the only checked exception. A bad value is a warning with a fallback or a collected error, never an exception; the plugin's loader turns errors into a `ConfigLoadException`.
 - **Reloads:** a failed reload keeps the settings in effect and reports one line; a missing `config.yml` is written again and its defaults take effect.
 - **Not bundled:** the Paper API and SnakeYAML come from the server. `taffy-platform` comes with the module.
