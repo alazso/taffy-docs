@@ -21,6 +21,7 @@ All classes live in one package, `so.alaz.taffy.platform`.
 | Logging | `ThrowLog`, `Classes` |
 | Diagnostics | `DiagnosticReport`, `Redaction`, from `0.4.10` |
 | Commands | `CommandHelpers`, from `0.4.10` |
+| Importers | `Importer`, `ImportReport`, `Importers`, from `0.4.15` |
 | Update check | `UpdateCheck`, `UpdateSource`, from `0.4.10` |
 | Discord | `DiscordWebhook`, `WebhookPayload` |
 
@@ -1892,6 +1893,236 @@ The typed name goes into the answer through `Component.text`, as plain text.
 
 Each method throws `NullPointerException` for a `null` argument or candidate.
 
+## Importers
+
+From `0.4.15`, three types give the import command of a plugin its shape: `Importer`, which a plugin implements
+once for each plugin it can import from, `ImportReport`, which says what a run did, and `Importers`, which finds an
+importer by the id an owner typed. Taffy reads no other plugin's data: how the source is read, where the result is
+written and the backup before a real run stay in the plugin.
+
+| Type | What it is |
+|---|---|
+| `Importer` | An interface with `id()`, `displayName()`, `present()` and `run(boolean dryRun)`. |
+| `ImportReport` | A final class built with `ImportReport.builder()`: the count of entries read, the counts and lines of the imported and the skipped entries, and the warnings. |
+| `Importers` | The registry: `create(Logger, ErrorReports)`, `register(Importer)`, `byId(String)`, `presentIds()` and `allIds()`. |
+
+### Writing an importer
+
+```java
+import so.alaz.taffy.platform.ImportReport;
+import so.alaz.taffy.platform.Importer;
+import so.alaz.taffy.platform.Scheduler;
+
+public final class CrazyVouchersImporter implements Importer {
+
+    private final Path source;
+    private final Scheduler scheduler;
+    private final Vouchers vouchers;
+
+    @Override
+    public String id() {
+        return "crazyvouchers";
+    }
+
+    @Override
+    public String displayName() {
+        return "CrazyVouchers";
+    }
+
+    @Override
+    public boolean present() {
+        return Files.isDirectory(source);
+    }
+
+    @Override
+    public CompletableFuture<ImportReport> run(boolean dryRun) {
+        try {
+            return CompletableFuture.supplyAsync(() -> read(dryRun), scheduler.asyncExecutor());
+        } catch (RejectedExecutionException disabling) {
+            return CompletableFuture.failedFuture(disabling);
+        }
+    }
+
+    private ImportReport read(boolean dryRun) {
+        ImportReport.Builder report = ImportReport.builder();
+        for (SourceVoucher voucher : SourceVoucher.readAll(source, report)) {
+            report.read(1);
+            if (vouchers.exists(voucher.id())) {
+                report.skipped(voucher.id() + ": a voucher of this id exists");
+                continue;
+            }
+            if (!dryRun) {
+                vouchers.write(voucher);
+            }
+            report.imported(voucher.id());
+        }
+        return report.build();
+    }
+}
+```
+
+`SourceVoucher` and `Vouchers` stand for the plugin's own reading and writing code. The four methods are the
+whole contract, and a plugin's importers keep working as later releases add to the other two types.
+
+| Method | Contract |
+|---|---|
+| `id()` | The id an owner types: 1 to 64 ASCII letters, digits, dots, underscores and hyphens, written in lower case, and the same text on every call. Ids are matched without regard to case. |
+| `displayName()` | The name of the source as its author writes it, as plain text, for the plugin's messages. |
+| `present()` | Whether the source has data on this server. It is asked each time and never cached, so it is cheap and does not block: it opens no database and parses no file. It can be called from any thread, on Folia too, so it reads only what any thread may read (whether a folder exists, whether a plugin is enabled) and no world, chunk or entity. It does not throw. |
+| `run(boolean dryRun)` | Starts the run and returns without blocking, from any thread. It never throws: a run that could not finish completes the future exceptionally, and a run that finished completes it with a report, never with `null`. |
+
+- **A dry run writes nothing.** With `dryRun` true the importer reads and checks the source as a real run does,
+  and no file, row or state of the plugin changes. Its report says what a real run would do with the data as it is
+  now. Neither kind of run changes the source's own files or tables.
+- **One entry that fails does not fail the run.** It becomes a skipped line or a warning, and the future still
+  completes with a report. The future fails only when the run as a whole could not finish.
+- **The importer chooses its thread.** `run` moves the work to the thread it needs, an async thread for files and
+  a database, and the future completes on a thread the importer chooses, usually that one. The example catches the
+  `RejectedExecutionException` that `Scheduler.asyncExecutor()` throws while the plugin is not enabled, so `run`
+  keeps its promise not to throw.
+
+### The report
+
+```java
+ImportReport report = ImportReport.builder()
+    .read(3)
+    .imported("gold")
+    .imported("silver")
+    .skipped("vip: a voucher of this id exists")
+    .warning("gold: options.glow has no equivalent")
+    .build();
+
+report.read();           // 3
+report.importedCount();  // 2
+report.imported();       // [gold, silver]
+report.skippedCount();   // 1
+report.skipped();        // [vip: a voucher of this id exists]
+report.warnings();       // [gold: options.glow has no equivalent]
+```
+
+| Builder method | Effect |
+|---|---|
+| `read(int count)` | Counts that many more entries of the source as read. |
+| `imported(String line)` | Counts one imported entry and names it. |
+| `imported(int count)` | Counts that many more imported entries without a line. |
+| `skipped(String line)` | Counts one skipped entry and names it with the reason. |
+| `skipped(int count)` | Counts that many more skipped entries without a line. |
+| `warning(String line)` | Adds a warning, which counts nothing. |
+| `build()` | The report of what was added so far. The builder can be added to and built again. |
+
+- **Counts and lines are separate.** An importer of a few files names each entry, and its counts are then the
+  numbers of its lines. An importer of many rows, such as one balance for each player, counts them with
+  `imported(1)` and `skipped(1)` and writes a line only for what the owner has to look at. `importedCount()` and
+  `skippedCount()` hold both kinds, so they are never below the sizes of `imported()` and `skipped()`.
+- **In a dry run, imported means would be imported.** The report of a dry run has the same parts, and the plugin
+  that called `run(true)` words its message accordingly.
+- **Every line is plain text.** No MiniMessage tag or colour code in a line is meant as one, since a line holds
+  text read from another plugin's files. Show it with `Component.text(line)` or as the value of
+  `Placeholder.unparsed`, never through `Text.render` as part of a template. A plugin that writes lines to a
+  public place passes them through `Redaction.hide` first.
+- **Nothing is cut or dropped.** The lines keep their order, and the report holds every line it was given.
+- **A report is immutable** and is read from any thread; its lists cannot be changed. Two reports are equal when
+  their counts and lines are. The builder is not thread-safe: the thread that runs the import builds the report.
+- `read`, `imported(int)` and `skipped(int)` throw `IllegalArgumentException` for a negative count and
+  `ArithmeticException` when a count would pass `Integer.MAX_VALUE`. A `null` line throws `NullPointerException`.
+
+`ImportReport` is a class with a builder, not a record, so a later release can add a count without changing how
+a plugin builds or reads one.
+
+### The registry and the command
+
+```java
+import so.alaz.taffy.platform.CommandHelpers;
+import so.alaz.taffy.platform.Importer;
+import so.alaz.taffy.platform.Importers;
+
+importers = Importers.create(getLogger(), errors)
+    .register(new CrazyVouchersImporter(getDataPath().resolveSibling("CrazyVouchers"), scheduler, vouchers));
+
+LiteralArgumentBuilder<CommandSourceStack> command = Commands.literal("import")
+    .requires(CommandHelpers.permission("shop.import"))
+    .then(Commands.argument("source", StringArgumentType.word())
+        .suggests((context, builder) -> CommandHelpers.suggest(builder, importers.presentIds()))
+        .executes(context -> runImport(context.getSource().getSender(),
+            StringArgumentType.getString(context, "source"), true))
+        .then(Commands.literal("confirm")
+            .executes(context -> runImport(context.getSource().getSender(),
+                StringArgumentType.getString(context, "source"), false))));
+```
+
+| Member | Behaviour |
+|---|---|
+| `Importers.create(Logger logger, ErrorReports errors)` | A registry without importers. The logger and the `ErrorReports` receive what a `present()` threw. |
+| `register(Importer importer)` | Adds the importer under its `id()`, which is read once, here, and returns the registry. |
+| `byId(String id)` | The `Optional<Importer>` registered under the id, without regard to case, whether or not its source is present. It is the object that was registered. |
+| `presentIds()` | The ids of the importers whose `present()` is true, in registration order, as an unmodifiable `List<String>`. |
+| `allIds()` | The ids of every importer, in registration order, as an unmodifiable `List<String>`. It calls no importer. |
+
+- **An id names one source.** `register` throws `IllegalArgumentException` for an id that is already registered,
+  in any letter case, and the registry keeps the importer it has. It throws the same for an id that is not 1 to 64
+  ASCII letters, digits, dots, underscores and hyphens, which is what `StringArgumentType.word()` reads.
+- **Ids keep the spelling of the importer.** `presentIds()` and `allIds()` return each id as `id()` gave it when
+  the importer was registered, and `byId` finds `CrazyVouchers`, `crazyvouchers` and `CRAZYVOUCHERS` alike.
+- **`presentIds()` asks every time.** It calls `present()` of every importer in each call, on the calling
+  thread, and caches nothing, so a source installed since the last call is seen.
+- **A `present()` that throws counts as absent.** What it threw is logged as a warning, at most once a minute for
+  each importer with the stack trace the first time, and reported to the `ErrorReports` under `importer.<id>` with
+  the id in lower case. An `Error` other than a `LinkageError` propagates. `byId(id).get().present()` is the
+  importer's own method and is not guarded, which is why the command below asks `presentIds()`.
+- **The registry runs nothing.** It never calls `run` and takes no backup.
+- **Thread-safe.** Every method can be called from any thread, on Folia too, and importers can be registered
+  while another thread reads.
+
+### Backup, then the real run
+
+The plugin takes the backup it wants before a real run and calls `run(false)` once that backup has completed. With
+`taffy-storage` that is [`Storage.backup`](/docs/modules/storage#sqlite-backups):
+
+```java
+private int runImport(CommandSender sender, String id, boolean dryRun) {
+    Importer importer = importers.byId(id).orElse(null);
+    if (importer == null || !importers.presentIds().contains(importer.id())) {
+        sender.sendMessage(Component.text("There is nothing to import from " + id));
+        return 0;
+    }
+    CompletableFuture<?> backup = dryRun
+        ? CompletableFuture.completedFuture(null)
+        : storage.backup("before-import", 5);
+    backup.thenCompose(copy -> importer.run(dryRun)).whenComplete((report, failure) -> {
+        if (!scheduler.global(() -> show(sender, importer, dryRun, report, failure))) {
+            getLogger().info("The import from " + importer.displayName() + " ended while the plugin disabled");
+        }
+    });
+    return Command.SINGLE_SUCCESS;
+}
+
+private void show(CommandSender sender, Importer importer, boolean dryRun, ImportReport report,
+                  Throwable failure) {
+    if (failure != null) {
+        getLogger().log(Level.SEVERE, "The import from " + importer.displayName() + " failed", failure);
+        sender.sendMessage(Component.text("The import failed, and the console has the reason"));
+        return;
+    }
+    sender.sendMessage(Component.text(importer.displayName() + (dryRun ? " (dry run)" : "") + ": read "
+        + report.read() + ", imported " + report.importedCount() + ", skipped " + report.skippedCount()));
+    report.skipped().forEach(line -> sender.sendMessage(Component.text("Skipped: " + line)));
+    report.warnings().forEach(line -> sender.sendMessage(Component.text("Warning: " + line)));
+}
+```
+
+- **A failed backup stops the import.** `thenCompose` does not call `run` when the backup future failed, so
+  `failure` is then the backup's. `Storage.backup` fails on MySQL, MariaDB and PostgreSQL, which have no database
+  file to copy, so a plugin that supports those asks for the backup only on SQLite.
+- **The future completes on the importer's thread.** `whenComplete` therefore hops before it touches the server:
+  `scheduler.global` for the console, as above, or `scheduler.entity(player, task, retired)` to answer a player on
+  the thread that owns them on Folia. `global` returns `false` once the plugin is disabling.
+- **A dry run takes no backup,** since it writes nothing.
+- **The module does not depend on `taffy-storage`.** A plugin with another kind of storage takes its backup its
+  own way, in the same order.
+
+`LegacyText` converts the colour codes of imported text and leaves tokens such as `{player}` as they are. An
+importer that maps another plugin's tokens to its own does that itself.
+
 ## Update check
 
 From `0.4.10`, `UpdateCheck` asks once, at enable, whether a newer release of the plugin is published, and tells the
@@ -2124,6 +2355,8 @@ webhook.postBody(url, body, reason -> getLogger().warning("Discord webhook faile
 |---|---|
 | `Scheduler`, `ErrorReports`, `TaskGate`, `PendingSettlements`, `CooldownManager`, `ThrowLog`, `Redaction` | any thread |
 | `CommandHelpers` | `permission`, `matching` and `suggest` on any thread; `target` on a thread that may read the server's player list |
+| `Importers`, `ImportReport` | any thread; `presentIds()` calls each `Importer.present()` on the calling thread; an `ImportReport.Builder` is used by one thread |
+| `Importer` | `present()` and `run` are called from any thread; the future of `run` completes on a thread the importer chooses |
 | `UpdateCheck` | `start` and `latest` on any thread; the request runs on the executor passed to `start`, never on a server thread |
 | `DiagnosticReport` | `build()` runs every section's supplier on the calling thread; a built report is read from any thread |
 | `PlayerCache` | any thread for `get`, `ready`, `refresh` and `close`; the loader runs on an async thread |

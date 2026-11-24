@@ -1900,3 +1900,12 @@ Tx.Binder binder)`, which runs an `INSERT` of one row and returns the key the da
 MySQL and MariaDB return the `AUTO_INCREMENT` value and SQLite the rowid. A statement that is not an `INSERT`, that
 counts another number of rows than 1 or that generated no key throws `SQLException`. `update` and `batch` run as
 on `0.4.14`, so a plugin that does not call `insert` changes nothing.
+
+`0.4.15` adds, in [`taffy-platform`](/docs/modules/platform#importers), the shape of an import from another
+plugin: the interface `Importer` with `id()`, `displayName()`, `present()` and `run(boolean dryRun)`, which
+returns a `CompletableFuture<ImportReport>`; the class `ImportReport`, built with `ImportReport.builder()`, which
+holds the count of entries read, the counts and lines of the imported and the skipped entries and the warnings;
+and the registry `Importers`, whose `byId` finds an importer without regard to case and whose `presentIds()` and
+`allIds()` give the ids a command suggests. The reading of the source, the writing of the result and the backup
+before a real run stay in the plugin, so a plugin with an import of its own keeps it until it moves to these types,
+and a plugin without one changes nothing.
