@@ -641,6 +641,7 @@ A menu opens, draws and handles clicks on the viewer's entity thread, the region
 | `openLater(viewer, menu, back)`, `openLater(viewer, route)` | Opens on the next tick on the viewer's entity thread. Safe from a click handler or a command. |
 | `rerender(session)` | Draws the session again in place, nothing once it closed. Viewer's entity thread. |
 | `rerenderLater(session)` | Draws again on the next tick unless the session closed by then. |
+| `animate(session, period, step)` | From `0.4.15`, runs `step` and draws again every `period` until the session closes. Viewer's entity thread. See [Animating a menu](#animating-a-menu). |
 | `closeLater(viewer)` | Closes the viewer's menu on the next tick when one is open then. |
 
 Each `open` and `openLater` throws `IllegalArgumentException` when no menu is registered under the id. From `0.3.0`, `open(viewer, route)` and `openLater(viewer, route)` also throw it, naming the menu, the expected type and the type given, when `route.state()` is no instance of the menu's `stateType()`, before anything opens or is scheduled. A menu that keeps the default `stateType()` accepts every state, and a state of the wrong type then fails inside `render` with a `ClassCastException`. A `ClickHandler` runs inside the click event, so it opens, closes and redraws only through the `*Later` methods and asks for text through `Prompts.askLater`. A command opens with `menus.openLater(player, WarpsMenu.KIND.id(), null)`.
@@ -683,6 +684,33 @@ A `MenuSession<S>` is one open menu for one viewer and is its inventory's `Inven
 - A cancelled `source` is no failure: nothing is logged, reported or told.
 - A viewer who left the server is told nothing; a failure of `source` itself is still logged and reported.
 - Once `shutdown()` ran, a load that ends without applying does nothing more.
+
+### Animating a menu
+
+From `0.4.15`, `menus.animate(session, period, step)` redraws an open menu every `period`, for a countdown or an opening animation. Each frame runs `step`, which moves the state through `MenuSession.state`, and then draws the session as `rerender` does. `step` is a `Predicate<MenuSession<S>>` that returns whether another frame follows.
+
+```java title="CountdownMenu.java"
+@Override
+public void opened(MenuSession<Integer> session, Player viewer) {
+    menus.animate(session, Duration.ofSeconds(1), counting -> {
+        int left = counting.state() - 1;
+        counting.state(left);
+        return left > 0;
+    });
+}
+```
+
+- Call it on the viewer's entity thread, such as in `opened` or a click handler. On a thread that does not own the viewer it throws `IllegalStateException` and starts nothing, as `rerender` does; code on another thread hops there first through the `EntityThread` the menus were built with. The step and the draw run on the viewer's entity thread, which on Folia is the region thread that owns the player.
+- The period is counted in server ticks of 50 ms, rounded up, and is at least one tick, so `Duration.ZERO`, a negative period and one shorter than a tick all mean every tick. The first frame comes one period after the call, not at the call. A lagging server stretches the period.
+- The call returns nothing and there is no handle to cancel. The animation ends when `step` returns `false`, and that last frame is still drawn, so a step that reads a flag of the plugin stops it from outside.
+- It also ends, with no further step or draw, when the session closes (the viewer closed the menu or quit, or another menu or a prompt opened in its place), when `shutdown()` ran, and when `animate` is called again for the session. A session has one animation: a later call replaces the running one, also when the step itself makes that call. The menu a hand-off opens is a new session and is not animated until its own `opened` calls `animate`.
+- For a session that already closed, and once `shutdown()` ran, the call does nothing. A session another `Menus` opened is refused with `IllegalArgumentException`, and a `null` argument with `NullPointerException`; neither ends a running animation.
+- A `step` that throws draws nothing and ends the animation, and so does a draw that throws. Either is logged with its stack and reported under `gui.render`.
+- It counts the ticks with one task a tick through the `tasks` of the parts, whatever the period, so `Menus.Parts` has no new value and nothing stays scheduled once the animation ended.
+
+A frame writes only the slots whose icon changed. A stack the plugin wrote into `session.getInventory()` itself, carrying the preview key of the parts, therefore stays in its slot through every frame in which the rendered icon of that slot is the same as before, and is replaced by the frame that renders another icon there.
+
+The [redraw rule of click safety](#click-safety) applies to every frame. A list row that keeps its `Frame.Entry.key` takes clicks on the tick of every frame, whatever its icon shows, and so does a layout action. A row with no key whose icon changes in a frame, and a slot that gets a row with another key, drops clicks for the click debounce window after that frame, so a row that is animated and clickable needs a key.
 
 ## Click safety
 
@@ -967,7 +995,7 @@ Every handled failure is logged with its stack through the plugin's logger and r
 |---|---|
 | `gui.click` | A button's `ClickHandler` threw. |
 | `gui.load` | A load's `source` or `apply` failed. |
-| `gui.render` | A menu failed to draw in a task `openLater` or `rerenderLater` scheduled. |
+| `gui.render` | A menu failed to draw in a task `openLater` or `rerenderLater` scheduled. From `0.4.15`, also a `step` or a draw of `animate` that threw. |
 | `gui.close` | A menu's `closed` threw. |
 | `gui.prompt` | A prompt's answer function threw or returned `null`, the future of an `Answer.Later` failed or completed with `null`, or prompt work on the player's entity thread failed. From `0.4.3`, also a refusal check of a `TextRequest` that threw or whose future failed, and an `accepted` or `ended` step that threw. |
 
@@ -1112,6 +1140,16 @@ assertTrue(testing.chat(player, "7"));
 ```
 
 To let an ask time out, call `testing.advance(Prompts.TIMEOUT)` and run the tasks the timer was given.
+
+From `0.4.15`, a menu that calls `animate` queues one task every tick while it is open, so a test of it does not run the queue until it is empty, as the loop in `buyingAddsOneToTheStack` does. It runs only the tasks that were queued when the tick began, once per tick:
+
+```java
+private void tick() {
+    for (int due = ticks.size(); due > 0; due--) {
+        ticks.remove().run();
+    }
+}
+```
 
 - A fake menu inventory answers `getHolder()`, `getHolder(boolean)`, `getSize()` and `clear()`, which empties its slots, and equals only itself. Every other method throws `UnsupportedOperationException`. `icon` returns `null` for a slot nothing was drawn into since the inventory was created or cleared.
 - A menu counts as shown only when the view `player.openInventory(inventory)` returns has that inventory as its `getTopInventory()`.

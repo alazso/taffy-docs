@@ -1909,3 +1909,11 @@ and the registry `Importers`, whose `byId` finds an importer without regard to c
 `allIds()` give the ids a command suggests. The reading of the source, the writing of the result and the backup
 before a real run stay in the plugin, so a plugin with an import of its own keeps it until it moves to these types,
 and a plugin without one changes nothing.
+
+`0.4.15` adds, in [`taffy-gui`](/docs/modules/gui#animating-a-menu), `Menus.animate(MenuSession<S> session,
+Duration period, Predicate<MenuSession<S>> step)`, which runs `step` and redraws an open menu every `period`
+(whole ticks, at least one) until `step` returns `false`, the session closes, `Menus.shutdown` runs or `animate` is
+called again for the session. It is called on the viewer's entity thread like `rerender` and counts its ticks through
+the `tasks` the menus already have, so `Menus.Parts` is built as on `0.4.14`. `rerender`, `rerenderLater` and the
+click rules run as on `0.4.14`, so a plugin that does not call `animate` changes nothing, and one that chains
+`rerenderLater` by hand keeps working.
