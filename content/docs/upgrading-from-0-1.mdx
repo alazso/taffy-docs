@@ -1894,6 +1894,14 @@ a file of either shape got the warning at each load and made `addMissingKeys` ch
 
 ## 0.4.15
 
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.15"
+}
+```
+
 `0.4.15` adds, in [`taffy-storage`](/docs/modules/storage#generated-keys), `Tx.insert(String sql, String keyColumn,
 Tx.Binder binder)`, which runs an `INSERT` of one row and returns the key the database generated for it as a
 `long`. The key column is named in the call, so PostgreSQL returns that column and not the first one of the table;
