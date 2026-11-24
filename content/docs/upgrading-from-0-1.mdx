@@ -1738,6 +1738,14 @@ only where it asks for them. A server owner changes nothing for `0.4.11`.
 
 ## 0.4.12
 
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.12"
+}
+```
+
 Every signature of `0.4.11` is still there. `0.4.12` adds `CustomItemPlugin.CRAFTENGINE` and
 `CustomItemPlugin.MMOITEMS`, which a plugin that uses [`CustomItems`](/docs/modules/hooks#custom-items) meets in
 three places.
@@ -1780,3 +1788,10 @@ dependencies:
       load: BEFORE
       required: false
 ```
+
+### Additions that change nothing
+
+`0.4.12` also adds, in [`taffy-hooks`](/docs/modules/hooks): `RegionProvider.canBuild`, a default method that
+answers `true` and that the WorldGuard provider answers from the `build` flag, and `NpcProvider` with `NpcPlugin`,
+which give the location of an NPC and its clicks for Citizens, FancyNpcs and ZNPCsPlus. A plugin that calls
+neither behaves as on `0.4.11`. A server owner changes nothing for `0.4.12`.
