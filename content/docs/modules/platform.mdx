@@ -2060,7 +2060,7 @@ LiteralArgumentBuilder<CommandSourceStack> command = Commands.literal("import")
 
 - **An id names one source.** `register` throws `IllegalArgumentException` for an id that is already registered,
   in any letter case, and the registry keeps the importer it has. It throws the same for an id that is not 1 to 64
-  ASCII letters, digits, dots, underscores and hyphens, which is what `StringArgumentType.word()` reads.
+  ASCII letters, digits, dots, underscores and hyphens, every one of which `StringArgumentType.word()` reads.
 - **Ids keep the spelling of the importer.** `presentIds()` and `allIds()` return each id as `id()` gave it when
   the importer was registered, and `byId` finds `CrazyVouchers`, `crazyvouchers` and `CRAZYVOUCHERS` alike.
 - **`presentIds()` asks every time.** It calls `present()` of every importer in each call, on the calling

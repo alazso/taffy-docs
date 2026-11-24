@@ -453,27 +453,27 @@ The statement is prepared with `keyColumn` named as the column of the generated 
 
 | Database | What `keyColumn` does | The key returned |
 |---|---|---|
-| PostgreSQL | Names the column to return, wherever the table declares it. The name is matched exactly as the catalog holds it: lower case for a column created without quotes (`id`, not `ID`), and the letter case of the quoted name, written without the quotes, for a column created with them. A name the table does not have fails the statement. | The value of that column. |
+| PostgreSQL | Names the column to return, wherever the table declares it. The name is matched exactly as the catalog holds it: lower case for a column created without quotes (`id`, not `ID`), and the letter case of the quoted name, written without the quotes, for a column created with them. A name the table does not have fails the statement. The statement holds no `RETURNING` clause of its own, since the driver adds none to a statement that has one. | The value of that column. |
 | MySQL, MariaDB | Ignored. | The value of the table's `AUTO_INCREMENT` column. |
 | SQLite | Ignored. | The rowid of the row, which is the value of an `INTEGER PRIMARY KEY` column. A table without such a column has a rowid too, so an insert into it returns a number. |
 
 Pass the real column name, in lower case, so the same call works on every database.
 
-`insert` throws `SQLException`, with the statement at the end of the message, in these cases:
+`insert` throws `SQLException` in these cases:
 
-| Case | Message starts with |
-|---|---|
-| The statement does not begin with `INSERT`, such as an `UPDATE`, a `DELETE` or a `REPLACE`. Nothing is sent to the database. | `insert runs a statement that begins with INSERT` |
-| The statement counts another number of rows than 1: an `INSERT IGNORE` or `ON CONFLICT DO NOTHING` that wrote no row, an insert of several rows, and on MySQL and MariaDB an `ON DUPLICATE KEY UPDATE` that found the row (it counts 2, or 0 when it changed nothing). | `the statement counted <n> rows, and insert returns the key of exactly one inserted row` |
-| The database returns no key: on MySQL and MariaDB a table without an `AUTO_INCREMENT` column, on PostgreSQL a key column that holds `NULL`. | `the statement generated no key` |
-| The key is not a whole number that fits a `long`, such as a text or `UUID` column named on PostgreSQL. | `the generated key is a <type> that is not a whole number that fits a long` |
+1. The statement does not begin with `INSERT`, such as an `UPDATE`, a `DELETE` or a `REPLACE`. Nothing is sent to the database.
+2. The statement counts another number of rows than 1: an `INSERT IGNORE` or `ON CONFLICT DO NOTHING` that wrote no row, an insert of several rows, and on MySQL and MariaDB an `ON DUPLICATE KEY UPDATE` that found the row (it counts 2, or 0 when it changed nothing). On SQLite an insert into a view whose `INSTEAD OF` trigger writes the row counts 0 too.
+3. On PostgreSQL the statement has a `RETURNING` clause of its own, unless that clause returns the one column `keyColumn`. On SQLite and MariaDB a statement with `RETURNING` fails in the driver, and MySQL has no such clause, so leave `RETURNING` out on every database.
+4. The database returns no key: on MySQL and MariaDB a table without an `AUTO_INCREMENT` column, on PostgreSQL a key column that holds `NULL`.
+5. The key is not a whole number that fits a `long`, such as a text or `UUID` column named on PostgreSQL.
 
-In the last three cases the statement has run and what it wrote is in the open transaction. Work lets the exception through, so the transaction rolls back and nothing is written. A `null` `keyColumn` throws `NullPointerException` and a blank one `IllegalArgumentException`, both before anything is sent.
+In every case but the first the statement has run and what it wrote is in the open transaction. Work lets the exception through, so the transaction rolls back and nothing is written. The message names the case and ends with the statement; it is text for the log, and as [Versioning](/docs/versioning) states its wording can change in any release, so code does not branch on it. A `null` argument throws `NullPointerException` and a blank `keyColumn` `IllegalArgumentException`, both before anything is sent.
 
 - **One row for each call.** Several rows that each need their key are inserted with one `insert` each. `batch` returns no keys.
 - **An upsert is not an insert.** `insert` cannot tell an upsert that updated the existing row from an insert on every database: on SQLite an `ON CONFLICT DO UPDATE` that updated the row returns the rowid of an earlier insert of the connection, and on PostgreSQL it returns the key of the row it updated. Work that upserts reads the key with a query in the same transaction.
 - **A SQLite table declared `WITHOUT ROWID` has no key to return**, and `insert` into it returns the rowid of an earlier insert of the connection.
-- **A key above `Long.MAX_VALUE`**, which only a `BIGINT UNSIGNED` column reaches, throws on MySQL and comes back negative on MariaDB. Declare the key column `BIGINT`.
+- **A key above `Long.MAX_VALUE`**, which a `BIGINT UNSIGNED` column reaches, throws on MySQL and comes back negative on MariaDB. Declare the key column `BIGINT`.
+- **A negative key written by the statement** into a signed `AUTO_INCREMENT` column throws on MySQL as a key that does not fit a `long`, since its driver returns the key as an unsigned number; MariaDB returns the negative key. Leave the key column out of the statement, so the database generates the key.
 - **A rollback takes the row and leaves a gap.** When the transaction rolls back, no row has the key. MySQL, MariaDB and PostgreSQL do not give that key to a later insert, so keys are not consecutive; SQLite gives it again. Hand a key to anything outside the database in `afterCommit` or after the future completes.
 
 ### Dialect SQL
