@@ -1860,3 +1860,11 @@ Every signature of `0.4.13` is still there, and a plugin changes nothing to move
 running server, and `ItemSpec.overMaterial` and `overStack`, which give an `ItemBuilder` with the spec applied.
 `ItemKeys` names the keys to read, so a plugin that adopts the reader passes the key names its files already have
 and no owner file changes. A plugin that does not call `item` reads its files as on `0.4.13`.
+
+`0.4.14` adds, in [`taffy-hooks`](/docs/modules/hooks#conditions), `ConditionRegistry`, which builds the conditions
+an owner lists in a config file (a `type`, the keys of that type and an optional `deny` text for each entry) into
+one `Condition` and tests them for a player in file order, stopping at the first denial. It holds the types
+`permission`, `world`, `papi` and `region`, and a plugin registers its own, an economy type included. A mistake in
+the list is an error with its path, passed to the `ConditionProblems` the plugin gives, and never an exception. The
+keys are read only through `ConditionRegistry.build`, so a plugin that does not call it reads its files as on
+`0.4.13`.

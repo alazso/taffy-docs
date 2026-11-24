@@ -17,6 +17,7 @@ description: Custom items, a Vault economy, PlayerPoints, VaultUnlocked and Exce
 - `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
 - `HologramProvider.displays` places them as display entities, with no hologram plugin (from `0.4.11`).
 - `NpcProvider.detect` gives where an NPC of Citizens, FancyNpcs or ZNPCsPlus stands and the clicks players make on its NPCs (from `0.4.12`).
+- `ConditionRegistry` builds the conditions an owner lists in a config file and tests them for a player (from `0.4.14`).
 - `HookState`, `HookStatus` and `Detected` say what detection found, worded for the server owner.
 
 No public signature names an integration type. Each integration sits behind an interface of `so.alaz.taffy.hooks`, and the class that calls it loads only after its API classes are found visible to the plugin (and, for every integration but Vault, after its plugin is found installed and enabled). A server without an integration never loads a class that names it.
@@ -1381,6 +1382,159 @@ private @Nullable String salesText(OfflinePlayer player) {
 - `statuses()` gives PlaceholderAPI's status, then MiniPlaceholders'. It may be called from any thread and is not changed by `unregister()`.
 - `unregister()` removes the placeholders from both backends, leaving an expansion that has since replaced them under the same identifier. A failure is logged as a warning, and a second call does nothing. Call it at the start of `onDisable`, on the server thread, after `ComfiConfConnection.close` when the plugin also uses taffy-comficonf: PlaceholderAPI keeps an expansion registered after the plugin that registered it disables.
 
+## Conditions
+
+From `0.4.14`, a `ConditionRegistry` turns a list an owner writes in a config file into one check on a player. Each entry of the list is a group of keys: a `type`, the keys of that type and, when the owner wants a message of their own, a `deny` text.
+
+```yaml
+conditions:
+  - type: permission
+    permission: shop.vip
+  - type: world
+    worlds: [spawn, market]
+  - type: papi
+    placeholder: "%player_level%"
+    operator: ">="
+    value: 10
+    deny: "<red>You need level 10."
+  - type: region
+    regions: [market]
+```
+
+Create the registry once at enable, build each list when its file loads, and test the result whenever the plugin needs the answer:
+
+```java
+ConditionRegistry conditions = ConditionRegistry.create(
+    getLogger(), errors, text, messages, () -> regions.provider());
+
+// While the file loads, with a ConfigReader of taffy-config:
+Condition gate = conditions.build(reader.value("conditions"), "conditions", reader::error);
+if (!reader.errors().isEmpty()) {
+    // refuse the file
+}
+
+// On the player's thread:
+ConditionResult result = gate.test(player);
+if (!result.passed()) {
+    player.sendMessage(result.reason());
+    return;
+}
+```
+
+`regions` is the `Detected<RegionProvider>` of `RegionProvider.worldGuard`. The supplier is asked each time a `region` condition is tested, so a plugin that detects again hands over the new provider without building its lists again.
+
+### Built-in types
+
+A new registry holds four types. The type name is matched without regard to case.
+
+| Type | Keys | Passes when | Default denial |
+|---|---|---|---|
+| `permission` | `permission` | `Player.hasPermission` is `true` for the node. | `condition.permission` |
+| `world` | `worlds`, a list | The name of the player's world is in the list, written exactly as the world is named. | `condition.world` |
+| `papi` | `placeholder`, `operator`, `value` | The placeholder, filled in for the player, compares to `value` as the operator says. | `condition.requirement-not-met` |
+| `region` | `regions`, a list | One of the regions at the player's location is in the list, compared with `String.equalsIgnoreCase`. | `condition.region` |
+
+There is no economy type. A plugin registers its own and runs it on the thread `EconomyProvider.thread` names for the player. A provider whose thread is the player's entity thread can be asked inside `Condition.test`. A provider that answers on the global thread or on an asynchronous one cannot: ask for the balance on that thread first and test the conditions once the answer is back. A check made for an event the plugin wants to cancel then finishes on a later tick, after the event.
+
+The `papi` type fills the placeholder in as `Text.resolve(String, Player)` does and uses `value` as written. `operator` is read without regard to case and is `equals` when left out:
+
+| Operator | Passes when |
+|---|---|
+| `equals`, `==`, `=` | The two texts are equal without regard to case. |
+| `!=`, `ne`, `not` | The two texts are not equal without regard to case. |
+| `contains` | The filled-in text holds the value, without regard to case. |
+| `>` or `gt`, `>=` or `gte`, `<` or `lt`, `<=` or `lte` | Both are numbers and compare that way. |
+
+A number is read as `Double.parseDouble` reads the text without the spaces around it, so `10`, `10.5` and `1e3` are numbers and `1,000` and `$5` are not. With one of the four number operators, a `value` that is not a number is an error when the file loads, and a filled-in text that is not a number denies. `!=` compares text, so `10` and `10.0` are not equal.
+
+While PlaceholderAPI is not installed, or its pass throws, the placeholder stays as written and is compared that way: every operator denies, except `!=`, which passes, and `contains` with a value the written placeholder holds.
+
+While the registry's supplier gives no region provider, or the provider is not available (WorldGuard switched off, not installed or disabled), a `region` condition denies with the message `condition.region-unavailable`.
+
+### Denial messages
+
+A denied result carries its reason as a component, rendered for the player who was denied:
+
+- An entry with a `deny` text renders that text as `Text.render(String, Player, TagResolver...)` does: MiniMessage, with PlaceholderAPI placeholders filled in for the player.
+- An entry without one renders the message of its type's key as `Messages.render(Text, Player, String, TagResolver...)` does, in the player's language.
+
+The plugin's bundled `lang/en.yml` therefore holds the keys of the types it lets owners use:
+
+```yaml
+condition:
+  permission: "<red>You don't have permission."
+  world: "<red>You're in the wrong world."
+  region: "<red>You're not in the right region."
+  region-unavailable: "<red>Region support is unavailable."
+  requirement-not-met: "<red>Requirement not met."
+```
+
+A key no lang file holds shows as the marker `missing:<key>`, as every `Messages` key does. The key names are constants of `ConditionRegistry`: `PERMISSION_KEY`, `WORLD_KEY`, `REGION_KEY`, `REGION_UNAVAILABLE_KEY` and `NOT_MET_KEY`.
+
+### Loading a list
+
+`Condition build(@Nullable Object value, String path, ConditionProblems problems)` takes the list as the file's parser gave it (`ConfigReader.value("conditions")` or `ConfigurationSection.getList("conditions")`), with each entry a `Map` or a `ConfigurationSection`. An absent key and an empty list give a condition that always passes.
+
+No value in the list throws. Each mistake is passed to `problems` as an error with its path, and the entry it is in is left out of the returned condition, so refuse the file when `problems` received an error: a condition the owner wrote would otherwise not be checked. `ConditionProblems` has one method, `error(String path, String message, @Nullable String fix)`, with the arguments of `ConfigReader.error`, so `reader::error` puts every error into the reader's `errors()` and `problems()`.
+
+| Mistake | Error |
+|---|---|
+| The value is not a list | `conditions is "permission"; expected a list of conditions` |
+| An entry is not a group of keys | `conditions[0] is "permission", which is not a group of keys` |
+| `type` is missing | `conditions[0].type is missing`, with the registered names as the fix |
+| `type` is not registered | `conditions[1].type is "economy", which is not a registered condition type`, with the registered names as the fix |
+| `deny` is a list or a group of keys | `conditions[0].deny is a list; expected a text` |
+| A key of the type is missing | `conditions[0].permission is missing` |
+| A list of the type is empty | `conditions[0].worlds is an empty list` |
+| An operator that does not exist | `conditions[2].operator is "at-least", which is not an operator` |
+| A type throws while it builds | `conditions[0] could not be built, since the condition type <type> failed (<exception>)`, also logged and reported under `condition.<type>` |
+
+The path is the one given to `build`, the index of the entry counted from 0, and the key inside the entry.
+
+### Testing
+
+`ConditionResult test(Player player)` tests the entries in file order and stops at the first one that denies, whose result it returns. `ConditionResult` is a record of `boolean passed()` and `@Nullable Component reason()`: the reason is `null` only for a result that passed.
+
+The built-in types read the player, so call `test` on the thread that owns the player: the main thread on Paper, the player's region thread on Folia. `register`, `isRegistered`, `types` and `build` may be called from any thread.
+
+A condition that throws while it is tested, or that returns `null`, denies. The reason is the entry's `deny` text, or the message `condition.requirement-not-met` when it has none. What was thrown is logged as a warning, at most once a minute for each type with its stack the first time, and reported to `ErrorReports` under `condition.<type>`. An `Error` other than a `LinkageError` propagates.
+
+### Your own types
+
+`register(String name, ConditionType type)` adds a type, in place of any type of that name, a built-in one included. A `ConditionType` gets the entry as a `ConditionConfig` and returns its `Condition`:
+
+```java
+conditions.register("exp", config -> {
+    String level = config.requiredText("level");
+    ConditionDenial denial = config.denial("condition.exp");
+    if (level == null) {
+        return null;
+    }
+    int needed;
+    try {
+        needed = Integer.parseInt(level);
+    } catch (NumberFormatException ex) {
+        config.error("level", "is \"" + level + "\", which is not a whole number", null);
+        return null;
+    }
+    return player -> player.getLevel() >= needed
+        ? ConditionResult.pass()
+        : denial.result(player, Placeholder.unparsed("level", level));
+});
+```
+
+| `ConditionConfig` method | Gives |
+|---|---|
+| `String type()`, `String path()` | The type name in lower case, and the path of the entry, such as `conditions[1]`. |
+| `@Nullable Object value(String key)` | The raw value of a key, or `null` when the entry has none. |
+| `@Nullable String text(String key)` | The text of a key that may be left out. A number and a boolean are given as text. A list or a group of keys is an error and gives `null`. |
+| `@Nullable String requiredText(String key)` | The same, with an absent key and a blank text as the error `is missing`. |
+| `List<String> texts(String key)` | The texts of a list, empty when the key is absent. A value that is not a list is an error. |
+| `void error(String key, String message, @Nullable String fix)` | Passes an error at `<entry>.<key>` to the `ConditionProblems`. |
+| `ConditionDenial denial(String key)` | The entry's denial: its `deny` text when it has one, and otherwise the message of `key`. |
+
+`ConditionDenial.result(Player player, TagResolver... values)` gives the denied result, with each value written in the text as `<name>` or `{name}`. An entry with an error is left out whatever the type returns, and a type that returns `null` without an error is an error of the entry.
+
 ## Failures and threads
 
 Detection follows one rule for every integration:
@@ -1405,6 +1559,7 @@ A failure inside a later call is logged at most once a minute per kind of call, 
 | `hook.displays` | From `0.4.11`, a failed spawn, text change or removal of a display hologram, and a line MiniMessage refuses. |
 | `hook.citizens`, `hook.fancynpcs`, `hook.znpcsplus` | From `0.4.12`, a failed detection, a failed lookup of an NPC's location, a click that could not be read or handed to the player's thread, and a click listener that threw. |
 | `hook.placeholderapi`, `hook.miniplaceholders` | A backend that refused the placeholders or threw while registering them. |
+| `condition.<type>` | From `0.4.14`, a condition type that threw while a `ConditionRegistry` built or tested a condition. |
 
 Reading an item's id, resolving a placeholder and, from `0.4.7`, a refresh of a `PlaceholderCache` log a failure and do not report it. Install a target on `ErrorReports` to send these reports somewhere; see [taffy-platform](/docs/modules/platform) and [taffy-metrics](/docs/modules/metrics).
 
@@ -1436,3 +1591,5 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `Detected`, `HookStatus`, `PlaceholderRegistration.statuses()` | Any thread. |
 | Placeholder handlers | Called from any thread by PlaceholderAPI. |
 | `PlaceholderCache` | Any thread. `refresh` runs on the thread that called `get`. |
+| `ConditionRegistry.register`, `isRegistered`, `types`, `build` | From `0.4.14`. Any thread. A plugin's own `ConditionType` runs on the thread that called `build`. |
+| `Condition.test`, `ConditionDenial.result` | From `0.4.14`. The thread that owns the player: the main thread on Paper, the player's region thread on Folia. |
