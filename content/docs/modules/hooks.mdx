@@ -342,7 +342,7 @@ The constants run in resolution order:
 | `CRAFTENGINE` (from `0.4.12`) | `CraftEngine` | `craftengine` | |
 | `MMOITEMS` (from `0.4.12`) | `MMOItems` | `mmoitems` | |
 
-From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `CustomItemPlugin` needs a `default` branch. `0.4.12` adds `CRAFTENGINE` and `MMOITEMS` at the end of the order. A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects an added plugin from the release that adds it. [Upgrading](/docs/upgrading-from-0-1#customitemplugin-may-gain-a-constant) shows the change to a `switch`.
+From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `CustomItemPlugin` needs a `default` branch. `0.4.12` adds `CRAFTENGINE` and `MMOITEMS` at the end of the order. A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects an added plugin from the release that adds it. For every plugin, whatever set it passes, `statuses()` and the detection log line gain an entry for each added constant, `SWITCHED_OFF` unless the set holds it: from `0.4.12` they hold six entries where they held four, so find a status by `HookStatus.plugin()` and not by its position from the end. [Upgrading](/docs/upgrading-from-0-1#customitemplugin-may-gain-a-constant) shows the change to a `switch`.
 
 `CustomItemPlugin.byKey(String hint)` finds a plugin by key or alias, ignoring case and surrounding white space, and returns `null` for `null`, blank or unknown text.
 
@@ -350,7 +350,7 @@ From `0.4.0`, the enum may gain a constant in any release, so a `switch` over `C
 
 An id is the plugin's key, a colon and the plugin's own id: `nexo:ruby`, `itemsadder:gems:ruby`, and from `0.4.12` `craftengine:default:topaz` and `mmoitems:SWORD:CUTLASS`. A reference given to `create` may use an alias for the key (`ia:gems:ruby`, `hdb:1234`) or no key at all (`ruby`, and from `0.3.1` also `gems:ruby`).
 
-From `0.4.12`, a reference that starts with `craftengine:` or `mmoitems:` names that plugin and goes only to it, and `hasKnownProvider()` is `true` for it. Before `0.4.12` neither key names a plugin, so such a reference is offered whole to each plugin, as the next paragraphs describe.
+From `0.4.12`, a reference that starts with `craftengine:` or `mmoitems:` names that plugin and goes only to it, and `hasKnownProvider()` is `true` for it. Before `0.4.12` neither key names a plugin, so such a reference is offered whole to each plugin, as the next paragraphs describe. This holds whatever set `CustomItems.detect` was given: while the named plugin has no integration on, `create` returns `null` and `build` gives `PLUGIN_OFF`, and no other plugin is asked. An id of another plugin that itself starts with `craftengine:` or `mmoitems:` is written with that plugin's key from `0.4.12`, as in `itemsadder:mmoitems:ruby` or `ia:mmoitems:ruby`. [Upgrading](/docs/upgrading-from-0-1#0412) lists what a plugin changes.
 
 `CustomItemRef.parse(String reference)` splits on the first colon into `providerHint()` and `id()`; the id may contain further colons, and a blank hint becomes `null`. It throws `IllegalArgumentException` for `null` or a blank id. The record's public constructor `CustomItemRef(@Nullable String providerHint, String id)` throws `IllegalArgumentException` for a blank hint, or a `null` or blank id. `hasKnownProvider()` is `true` when the hint is `null` or names a `CustomItemPlugin`, and `provider()` returns that plugin or `null`. Use them to check references when loading config. The second message holds from `0.3.1`; before it, `create` returns `null` for such a reference without asking any plugin:
 
@@ -817,7 +817,7 @@ The answer comes in two steps, as in WorldGuard's own listeners:
 | `player` or `location` is `null` | `NullPointerException`. |
 
 - **Only the `build` flag is read.** WorldGuard's listeners also read flags such as `block-break`, `block-place`, `use` and `chest-access` for the action at hand, and its `build-permission-nodes` setting. `canBuild` reads none of them, so a region that sets `build` to deny and `block-break` to allow answers `false`.
-- **Thread.** Call it on the thread that owns the player: the main thread on Paper. The provider asks WorldGuard on the calling thread and schedules nothing. WorldGuard does not run on Folia, so `RegionProvider.worldGuard` gives no provider there and nothing is asked.
+- **Thread.** Call it on the thread that owns the player: the main thread on Paper, the player's region thread on Folia. The provider asks WorldGuard on the calling thread and schedules nothing.
 - **Detection is unchanged.** `RegionProvider.worldGuard` does not look for the methods the build check calls, so it gives the same status as before `0.4.12`.
 - **Other providers.** `canBuild` is a default method of `RegionProvider` that answers `true`. A `RegionProvider` a plugin or a test implements itself keeps compiling and lets every player build until it overrides the method.
 
@@ -1261,7 +1261,7 @@ A `null` argument throws `NullPointerException`, except where a parameter is mar
 | `EconomyProvider` calls | The thread `thread(UUID)` names. From `0.3.2` `balance`, `has`, `withdraw` and `deposit` of the Vault provider throw `IllegalStateException` on any other thread. From `0.4.7` the PlayerPoints provider names `ThreadTag.ASYNC` for every player and throws `IllegalStateException` on the main thread on Paper and on every region thread and the global region thread on Folia. |
 | `PermissionProvider` writes | Off the server thread; they block until saved. From `0.3.2` a write on a server thread throws `IllegalStateException`, in `onDisable` too. |
 | `RegionProvider.regionsAt` | Any thread. |
-| `RegionProvider.canBuild` | From `0.4.12`. The thread that owns the player: the main thread on Paper. |
+| `RegionProvider.canBuild` | From `0.4.12`. The thread that owns the player: the main thread on Paper, the player's region thread on Folia. |
 | `BedrockProvider.bedrock` | The thread that asks. `Prompts` asks on the player's entity thread. |
 | `HologramProvider` calls | The server's global thread: the main thread on Paper, the global region thread on Folia. |
 | `DisplayHolograms` calls | From `0.4.11`. Any thread. The entities change on the region thread of the hologram's location. |

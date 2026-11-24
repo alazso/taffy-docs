@@ -1735,3 +1735,48 @@ Every signature of `0.4.10` is still there, and a plugin changes nothing to move
 `DisplayHolograms` provider that shows holograms as display entities with no hologram plugin installed, with an
 optional item above the lines. `HologramProvider.detect` answers as before, so a plugin gets display holograms
 only where it asks for them. A server owner changes nothing for `0.4.11`.
+
+## 0.4.12
+
+Every signature of `0.4.11` is still there. `0.4.12` adds `CustomItemPlugin.CRAFTENGINE` and
+`CustomItemPlugin.MMOITEMS`, which a plugin that uses [`CustomItems`](/docs/modules/hooks#custom-items) meets in
+three places.
+
+### craftengine: and mmoitems: name a plugin
+
+From `0.4.12`, a reference that starts with `craftengine:` or `mmoitems:` goes only to that plugin, whatever set
+`CustomItems.detect` was given, and `CustomItemRef.hasKnownProvider()` is `true` for it. Before `0.4.12` neither
+key names a plugin and the whole reference is offered to each plugin, so `mmoitems:ruby` builds an ItemsAdder
+item of the namespace `mmoitems`. From `0.4.12` `create` returns `null` for it and `build` gives `PLUGIN_OFF`
+while MMOItems has no integration on, where `0.4.11` builds the other plugin's item or gives `UNKNOWN_PLUGIN`.
+
+**Migration:** write an id of another plugin that itself starts with `craftengine:` or `mmoitems:` with that
+plugin's key, as in `itemsadder:mmoitems:ruby` or `ia:mmoitems:ruby`. No other reference changes.
+
+### statuses() holds six entries
+
+From `0.4.12`, `CustomItems.statuses()` holds six entries where it held four and the detection log line names six
+plugins, for every plugin: CraftEngine and MMOItems come after HeadDatabase and are `SWITCHED_OFF` unless the set
+given to `CustomItems.detect` holds them.
+
+**Migration:** find a status by `HookStatus.plugin()`, not by its position from the end. `statuses().getLast()`
+gives MMOItems' status, and HeadDatabase's is at index 3.
+
+### EnumSet.allOf detects both
+
+A plugin that passes `EnumSet.allOf(CustomItemPlugin.class)` to `CustomItems.detect` detects CraftEngine and
+MMOItems from `0.4.12`. An installed one that the plugin's `paper-plugin.yml` does not list is `NOT_VISIBLE` and
+warned about.
+
+**Migration:** list both under `dependencies.server`, or pass the set of plugins the plugin supports.
+
+```yaml title="src/main/resources/paper-plugin.yml"
+dependencies:
+  server:
+    CraftEngine:
+      load: BEFORE
+      required: false
+    MMOItems:
+      load: BEFORE
+      required: false
+```
