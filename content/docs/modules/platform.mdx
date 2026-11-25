@@ -114,7 +114,9 @@ Scheduler scheduler = new Scheduler(plugin, errors);
 
 The constructor takes the owning `Plugin` and the plugin's `ErrorReports`, and throws `NullPointerException` when
 either is `null`. `mode()` returns `Scheduler.Mode.FOLIA` when Folia's server class was loadable at construction,
-otherwise `Scheduler.Mode.PAPER`. A lookup that failed reads as Paper, with a warning in the plugin's log.
+otherwise `Scheduler.Mode.PAPER`. A lookup that failed counts as not loadable, with a warning in the plugin's log.
+From `0.4.16`, the class loader of the server's own class is asked first, and only then the plugin's. That lookup
+reaches no plugin's class loader, so a broken plugin cannot make `mode()` read Paper on Folia.
 
 ### Running work
 

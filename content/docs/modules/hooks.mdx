@@ -157,6 +157,8 @@ A plugin that uses WorldGuard must also list WorldEdit: every region lookup turn
 
 <Callout type="warn" title="An installed integration that is not listed stays off">
 An integration that is installed but missing from `dependencies.server` is `HookState.NOT_VISIBLE`. Detection logs one warning naming the missing entry, and the status's reason tells the server owner the same.
+
+From `0.4.16`, an integration whose class lookup throws is `HookState.FAILED` instead, and the owner is not told to add an entry. Paper closes the class loader of a plugin that failed to enable, and a later lookup that reaches it throws `IllegalStateException: The plugin classloader for <plugin> has thrown a zip file error.` Before `0.4.16` such an integration read `NOT_VISIBLE` or `API_MISSING`.
 </Callout>
 
 ## Wiring it up at enable
@@ -279,7 +281,7 @@ At disable, call `PlaceholderRegistration.unregister()` before `Scheduler.close(
 
 ### HookState
 
-Detection stops at the first check that fails and gives its state. The checks run in the order of the constants, except for the Vault economy, which never checks that Vault is enabled: it checks the switch, that the economy API is visible, then that an economy is registered, and gives `NOT_INSTALLED` at either of the last two when no Vault plugin is installed.
+Detection stops at the first check that fails and gives its state. The checks run in the order of the constants, except for the Vault economy, which never checks that Vault is enabled: it checks the switch, that the economy API is visible, then that an economy is registered, and gives `NOT_INSTALLED` at either of the last two when no Vault plugin is installed. From `0.4.16`, a class lookup that throws stops detection with `FAILED` at the check that made it.
 
 | State | `describe()` text | Meaning |
 |---|---|---|
@@ -289,7 +291,7 @@ Detection stops at the first check that fails and gives its state. The checks ru
 | `NOT_VISIBLE` | `<plugin> <version> not visible to this plugin` | Installed with the API, but missing from `dependencies.server`. From `0.3.1`, also WorldGuard while `WorldEdit` is missing from it. |
 | `API_MISSING` | `<plugin> <version> lacks the API that is read` | The installed version does not hold the API class that is read. |
 | `NOT_REGISTERED` | `<plugin> <version> has nothing registered with it` | Vault is there, but no economy has registered with it. A later registration can turn it on. |
-| `FAILED` | `<plugin> <version> could not be hooked` | The API is present, but building or registering the integration threw or a method it calls is missing. |
+| `FAILED` | `<plugin> <version> could not be hooked` | The API is present, but building or registering the integration threw or a method it calls is missing. From `0.4.16`, also a class lookup that threw, as it does while another plugin on the server is broken, with the reason `A class lookup failed because another plugin on this server is broken (<exception>). Fix or remove that plugin, then restart the server.` It is logged once with the stack and reported under `hook.<plugin in lower case>`. |
 | `ON` | `<plugin> on` | The integration is on. |
 | `LOADING` | `<plugin> on, waiting for its items to load` | On, and the plugin is still loading its items. |
 
@@ -301,7 +303,7 @@ A version that was not read shows as `unknown`.
 
 - `plugin()` is the integration plugin's name, such as `Vault`.
 - `version()` is `null` for `SWITCHED_OFF`, `NOT_INSTALLED` and `NOT_ENABLED`, and set (possibly to `unknown`) for every other state.
-- `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, for a placeholder backend's `FAILED`, and from `0.3.1` for a `NOT_ENABLED` read while the plugin runs as another instance than the one detected.
+- `reason()` is one or more full sentences for the owner on what is missing and what to do, or `null` when `describe()` says enough. It is set for every `NOT_VISIBLE` status, from `0.4.16` for every `FAILED` of a class lookup that threw, for the Vault economy's `NOT_INSTALLED`, `NOT_REGISTERED`, `API_MISSING` and `FAILED`, for a placeholder backend's `FAILED`, and from `0.3.1` for a `NOT_ENABLED` read while the plugin runs as another instance than the one detected.
 - `describe()` never includes the reason. `describe()` plus `reason()` is the owner's line.
 - From `0.4.10`, `line()` returns that line: `describe()` alone when there is no reason, and otherwise `describe()`, a full stop, one space and `reason()`. Before `0.4.10` a plugin joins the two itself, as `status.reason() == null ? status.describe() : status.describe() + ". " + status.reason()`. A [`DiagnosticReport`](/docs/modules/platform#diagnostics) takes it as a line without a label, `DiagnosticReport.Line.redacted("", status.line())`: the reason of a `FAILED` status quotes the class and message of an exception another plugin threw, and `Line.redacted` passes the line through [`Redaction.hide`](/docs/modules/platform#redaction).
 
@@ -522,7 +524,7 @@ Vault itself need not be enabled: only the API and the registration are read. Th
 | `NOT_VISIBLE` | Vault holds the API, but the plugin does not list `Vault` in `dependencies.server`. Logged as a warning. |
 | `API_MISSING` | The installed Vault lacks the economy API. Logged as a warning. |
 | `NOT_REGISTERED` | Vault is installed and no economy has registered with it. |
-| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vault`. |
+| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vault`. From `0.4.16`, also a lookup of the economy API class that threw while a Vault plugin is installed, with the class lookup reason of the [states](#hookstate). |
 | `ON` | The provider is set. |
 
 ### Late economies and EconomyWatcher
@@ -748,7 +750,7 @@ The status's plugin is always `VaultUnlocked`, with the version of the installed
 | `NOT_VISIBLE` | The installed plugin holds the API, but the plugin does not list `Vault`. Logged as a warning. |
 | `API_MISSING` | The installed `Vault` is not VaultUnlocked. Logged as a warning. |
 | `NOT_REGISTERED` | No economy has registered with the VaultUnlocked economy API, or the registered economy has no currency of that id. The reason then names the ids it has, such as `TNE has no currency named tokens. It has dollars, gems.` `describe()` has no text of its own for an unknown currency and still reads `VaultUnlocked <version> has nothing registered with it`, so `line()` is `VaultUnlocked 2.20.3 has nothing registered with it. TNE has no currency named tokens. It has dollars, gems.` Show `line()` or `reason()` to the owner, not `describe()` alone. |
-| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vaultunlocked`. |
+| `FAILED` | The lookup threw. Logged as a warning and reported under `hook.vaultunlocked`. From `0.4.16`, also a lookup of the economy API class that threw while a plugin named `Vault` is installed, with the class lookup reason of the [states](#hookstate). |
 | `ON` | The provider is set. |
 
 Unlike the Vault lookup, this one calls the economy: it asks `Economy.hasCurrency(String)`, and reads `Economy.currencies()` for the reason when the currency is unknown. It reads no balance and moves no money. The status is fixed, as the Vault economy's is, and every lookup logs its own warning.
