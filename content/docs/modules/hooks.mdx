@@ -158,7 +158,7 @@ A plugin that uses WorldGuard must also list WorldEdit: every region lookup turn
 <Callout type="warn" title="An installed integration that is not listed stays off">
 An integration that is installed but missing from `dependencies.server` is `HookState.NOT_VISIBLE`. Detection logs one warning naming the missing entry, and the status's reason tells the server owner the same.
 
-From `0.4.16`, an integration whose class lookup throws is `HookState.FAILED` instead, and the owner is not told to add an entry. Paper closes the class loader of a plugin that failed to enable, and a later lookup that reaches it throws `IllegalStateException: The plugin classloader for <plugin> has thrown a zip file error.` Before `0.4.16` such an integration read `NOT_VISIBLE` or `API_MISSING`.
+From `0.4.16`, an integration whose class lookup throws is `HookState.FAILED` instead, and the owner is not told to add an entry. Paper closes the class loader of a plugin that failed to enable, and a later lookup that reaches it throws `IllegalStateException: The plugin classloader for <plugin> has thrown a zip file error.` Before `0.4.16` such an integration read `NOT_VISIBLE` or `API_MISSING`, and nothing was reported.
 </Callout>
 
 ## Wiring it up at enable
@@ -520,7 +520,7 @@ Vault itself need not be enabled: only the API and the registration are read. Th
 | State | When |
 |---|---|
 | `SWITCHED_OFF` | `switchedOn` is `false`; nothing is read. |
-| `NOT_INSTALLED` | No Vault plugin is installed. |
+| `NOT_INSTALLED` | No Vault plugin is installed. A lookup of the economy API class that throws then logs `Could not look up net.milkbowl.vault.economy.Economy, so it is treated as absent.` and reports nothing. |
 | `NOT_VISIBLE` | Vault holds the API, but the plugin does not list `Vault` in `dependencies.server`. Logged as a warning. |
 | `API_MISSING` | The installed Vault lacks the economy API. Logged as a warning. |
 | `NOT_REGISTERED` | Vault is installed and no economy has registered with it. |
@@ -746,7 +746,7 @@ The status's plugin is always `VaultUnlocked`, with the version of the installed
 | State | When |
 |---|---|
 | `SWITCHED_OFF` | `switchedOn` is `false`; nothing is read. |
-| `NOT_INSTALLED` | No plugin named `Vault` is installed. |
+| `NOT_INSTALLED` | No plugin named `Vault` is installed. A lookup of the economy API class that throws then logs `Could not look up net.milkbowl.vault2.economy.Economy, so it is treated as absent.` and reports nothing. |
 | `NOT_VISIBLE` | The installed plugin holds the API, but the plugin does not list `Vault`. Logged as a warning. |
 | `API_MISSING` | The installed `Vault` is not VaultUnlocked. Logged as a warning. |
 | `NOT_REGISTERED` | No economy has registered with the VaultUnlocked economy API, or the registered economy has no currency of that id. The reason then names the ids it has, such as `TNE has no currency named tokens. It has dollars, gems.` `describe()` has no text of its own for an unknown currency and still reads `VaultUnlocked <version> has nothing registered with it`, so `line()` is `VaultUnlocked 2.20.3 has nothing registered with it. TNE has no currency named tokens. It has dollars, gems.` Show `line()` or `reason()` to the owner, not `describe()` alone. |
@@ -955,6 +955,8 @@ Before `0.3.1` the same setup is `FAILED`, with a report under `hook.worldguard`
 | `boolean canBuild(Player player, Location location)` | From `0.4.12`. Whether WorldGuard lets the player build at the location. |
 
 `regionsAt` returns an empty list when WorldGuard is not available, the location has no world or its world has unloaded, WorldGuard keeps no regions for that world, or the lookup fails. Only a failed lookup is logged (at most once a minute) and reported under `hook.worldguard`. A lookup may run on any thread, since WorldGuard's region index supports concurrent reads.
+
+From `0.4.16`, a location's world has unloaded when the server holds no world under the id of the location's `World`, also while the caller still holds that `World` object, and `regionsAt` and `canBuild` then do not ask WorldGuard. A location that holds the `World` object of a world unloaded and loaded again under the same id is looked up in the world loaded now. Before `0.4.16`, WorldGuard was asked about the `World` object the location held.
 
 WorldGuard lowers region ids in the server's default locale, which on a Turkish server turns `I` into a dotless i. Compare ids with `String.equalsIgnoreCase`, not after lowering them in a fixed locale:
 
