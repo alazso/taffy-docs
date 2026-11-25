@@ -1926,3 +1926,29 @@ called again for the session. It is called on the viewer's entity thread like `r
 the `tasks` the menus already have, so `Menus.Parts` is built as on `0.4.14`. `rerender`, `rerenderLater` and the
 click rules run as on `0.4.14`, so a plugin that does not call `animate` changes nothing, and one that chains
 `rerenderLater` by hand keeps working.
+
+## 0.4.16
+
+Change the version of the settings plugin:
+
+```kotlin title="settings.gradle.kts"
+plugins {
+    id("so.alaz.taffy.settings") version "0.4.16"
+}
+```
+
+Every signature of `0.4.15` is still there, and `0.4.16` adds none. It holds fixes only, found on Paper 26.3,
+Paper 26.2 and Folia 26.3, and a plugin changes nothing to move to it, with these differences to know about:
+
+- In [`taffy-hooks`](/docs/modules/hooks) and [`taffy-comficonf`](/docs/modules/comficonf), an integration whose
+  class lookup throws because another plugin on the server is broken reads `FAILED`, with a reason that says so, one
+  warning and a report under `hook.<plugin>`. On `0.4.15` it read `NOT_VISIBLE` or `API_MISSING` and nothing was
+  reported. A plugin that switches over `HookState` or `ComfiConfState` sees `FAILED` there now.
+- `HologramProvider.create` and `move` of the DecentHolograms, FancyHolograms and Holograms providers return
+  `false` for a `Location` whose world has unloaded, as documented, and the WorldGuard `RegionProvider` reads such
+  a location as unloaded.
+- The LuckPerms `PermissionProvider.setPermission` and `unsetPermission` refuse a key LuckPerms keeps as another
+  kind of node, such as `group.<name>`, with `false` and one warning, and report nothing. Use `addGroup`,
+  `addTempGroup` or `removeGroup` for a group.
+- The display provider of `HologramProvider.displays` removes no entity while a Folia server stops, and logs and
+  reports nothing then.
