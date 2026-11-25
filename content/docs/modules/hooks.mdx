@@ -14,7 +14,7 @@ description: Custom items, a Vault economy, PlayerPoints, VaultUnlocked and Exce
 - `BedrockProvider.detect` tells which players joined from Bedrock Edition, through Floodgate or Geyser (from `0.4.3`).
 - `PlaceholderExpansionBuilder` registers one set of placeholders with PlaceholderAPI and MiniPlaceholders.
 - `PlaceholderCache` gives a placeholder its last known value at once and refreshes it off the asking thread (from `0.4.7`).
-- `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib.
+- `HologramProvider.detect` places temporary text holograms through DecentHolograms, FancyHolograms, Holograms or HologramLib. HologramLib 1.8.5 does not enable on Paper 26.2 and 26.3, so its hook is untested there ([Holograms](#holograms)).
 - `HologramProvider.displays` places them as display entities, with no hologram plugin (from `0.4.11`).
 - `NpcProvider.detect` gives where an NPC of Citizens, FancyNpcs or ZNPCsPlus stands and the clicks players make on its NPCs (from `0.4.12`).
 - `ConditionRegistry` builds the conditions an owner lists in a config file and tests them for a player (from `0.4.14`).
@@ -60,7 +60,7 @@ Taffy compiles against each integration's API with `compileOnly` and ships none 
 | DecentHolograms | `com.github.decentsoftware-eu:decentholograms` | `alaz.decentholograms` |
 | FancyHolograms | `de.oliver:FancyHolograms` | `alaz.fancyholograms` |
 | Holograms | `net.thenextlvl:holograms` | `alaz.holograms` |
-| HologramLib | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
+| HologramLib (1.8.5 does not enable on Paper 26.2 and 26.3, see [Holograms](#holograms)) | `com.github.HologramLib:HologramLib` | `alaz.hologramlib` |
 | Citizens (from `0.4.12`) | `net.citizensnpcs:citizensapi` | `alaz.citizens.api` |
 | FancyNpcs (from `0.4.12`) | `de.oliver:FancyNpcs` | `alaz.fancynpcs` |
 | ZNPCsPlus (from `0.4.12`) | `com.github.Pyrbu:ZNPCsPlus` | `alaz.znpcsplus.api` |
@@ -1041,7 +1041,15 @@ Prompts prompts = new Prompts(menus, PromptMode.ANVIL, bedrock, scheduler::delay
 | `DECENTHOLOGRAMS` | `DecentHolograms` | 2.10 or newer; Folia from 2.10.2. Lines are converted to `&` colour codes with `&#RRGGBB` hex, so MiniMessage that colour codes cannot hold, such as hover and click, is dropped. A `&` or `#` in a line's text shows as written, so a code such as `&6` or `#ff8800` typed there gives no colour. A gradient or rainbow becomes one colour per character, so a placeholder inside one shows as written. |
 | `FANCYHOLOGRAMS` | `FancyHolograms` | FancyHolograms 2. FancyHolograms 3 has another API and reads as `API_MISSING`. A `&` in a line shows as written, so a code such as `&6` or `&#ff8800` typed there gives no colour. A hologram with a placeholder in a line is drawn again every second. Each removal rewrites `plugins/FancyHolograms/holograms.yml`, except while the server stops, and drops any saved hologram of the same name from it. |
 | `HOLOGRAMS` | `Holograms` | Holograms by TheNextLvl. A move runs on the location's region thread a little later. |
-| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text. Fills PlaceholderAPI placeholders for each viewer when a player starts seeing the hologram and when its lines are replaced, not on a timer, and only when PlaceholderAPI enabled before HologramLib. HologramLib parses the filled text as MiniMessage, so a placeholder whose value holds `§` colour codes leaves that viewer's text unfilled and PacketEvents logs the failure. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. Its Modrinth page lists no Minecraft 26 version yet. |
+| `HOLOGRAMLIB` | `HologramLib` | Needs PacketEvents installed. Draws the lines as one text. Fills PlaceholderAPI placeholders for each viewer when a player starts seeing the hologram and when its lines are replaced, not on a timer, and only when PlaceholderAPI enabled before HologramLib. HologramLib parses the filled text as MiniMessage, so a placeholder whose value holds `§` colour codes leaves that viewer's text unfilled and PacketEvents logs the failure. A hologram spawns on the next tick, so a move or removal in the tick it was placed is done again two ticks later. HologramLib 1.8.5 does not enable on Paper 26.2 and 26.3, so this hook is untested there: see the note below. |
+
+<Callout type="warn" title="HologramLib 1.8.5 does not enable on Paper 26.2 and 26.3">
+The hook is built against HologramLib 1.8.5, its newest release. On Paper 26.2 build 135, Paper 26.3 build 262 and Folia 26.3 build 28, with packetevents 2.14.0 installed, HologramLib 1.8.5 fails in its own `onEnable` with `java.lang.NoSuchMethodError: 'int org.bukkit.UnsafeValues.nextEntityId()'`. The `HOLOGRAMLIB` hook has therefore not run on a server version Taffy supports and is untested there. The newest HologramLib build is the pre-release 1.8.5.1 on GitHub, which names no Minecraft version, and its Modrinth page lists no Minecraft 26 version (its newest version there, 1.8.3, lists up to 1.21.10).
+
+With HologramLib installed but failed to enable, `HologramProvider.detect` for `HologramPlugin.HOLOGRAMLIB` gives no provider and the status `NOT_ENABLED`, which reads `HologramLib installed but not enabled`, with no version and no reason. Detection logs no warning and reports nothing for it: the error is HologramLib's own, in the server log. On these servers, place holograms through another hologram plugin or `HologramProvider.displays`.
+
+A plugin that failed to enable can also break the class lookups of other integrations; from `0.4.16` such an integration reads [`FAILED`](#hookstate).
+</Callout>
 
 | Method | Behaviour |
 |---|---|
